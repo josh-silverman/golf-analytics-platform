@@ -20,8 +20,11 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     database_url: str = Field(
-        default="postgresql+asyncpg://pga:pga@localhost:5432/pga",
-        description="SQLAlchemy async URL for Postgres (asyncpg driver).",
+        default="postgresql+asyncpg://pga:pga@localhost:5433/pga",
+        description=(
+            "SQLAlchemy async URL for Postgres (asyncpg driver). Host port is "
+            "5433 to avoid colliding with a system PostgreSQL on 5432."
+        ),
     )
     redis_url: str = Field(default="redis://localhost:6379/0")
 

@@ -10,8 +10,10 @@ services:
       POSTGRES_USER: pga
       POSTGRES_PASSWORD: pga
       POSTGRES_DB: pga
+    # Host-side 5433 avoids colliding with a system PostgreSQL on 5432.
+    # Inside the compose network the api still resolves `postgres:5432`.
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
