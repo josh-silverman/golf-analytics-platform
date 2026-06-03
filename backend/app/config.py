@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://localhost:6379/0")
 
+    # Data provider selection (doc 02 §5)
+    data_provider: Literal["mock", "datagolf"] = "mock"
+    data_provider_cache: bool = True
+    datagolf_api_key: str | None = None
+    mock_seed: int = Field(
+        default=42,
+        description="Root seed for the mock data generator — same seed → bit-identical data.",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
