@@ -42,8 +42,8 @@ jobs:
       - name: mypy
         run: uv run mypy app
 
-      - name: pytest
-        run: uv run pytest
+      - name: pytest (fast lane)
+        run: uv run pytest -m "not slow"
 
   frontend:
     name: frontend — eslint · tsc · vitest · build

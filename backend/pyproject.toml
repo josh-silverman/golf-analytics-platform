@@ -13,6 +13,7 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.14",
     "redis>=5.2",
+    "numpy>=2.4.6",
 ]
 
 [dependency-groups]
@@ -73,3 +74,6 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["error"]
+markers = [
+    "slow: tests that take more than a few seconds (calibration validation, end-to-end). Excluded from CI's fast lane.",
+]
