@@ -28,12 +28,9 @@ def get_data_provider() -> DataProvider:
     name = settings.data_provider
 
     if name == "mock":
-        # Implementation lands in a follow-up commit in this phase.
-        from app.providers.mock.mock_provider import (  # type: ignore[import-not-found]
-            MockDataProvider,
-        )
+        from app.providers.mock.mock_provider import MockDataProvider
 
-        return MockDataProvider(seed=settings.mock_seed)  # type: ignore[no-any-return]
+        return MockDataProvider(seed=settings.mock_seed)
 
     if name == "datagolf":  # pragma: no cover — lands Phase 5
         from app.providers.datagolf.datagolf_provider import (  # type: ignore[import-not-found]
