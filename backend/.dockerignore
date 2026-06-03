@@ -1,0 +1,21 @@
+# Keep the build context tight — bind-mount of source happens at runtime
+.venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.pyc
+*.pyo
+
+# Local env
+.env
+.env.local
+
+# VCS
+.git
+.gitignore
+
+# Editor
+.vscode
+.idea
+*.swp
