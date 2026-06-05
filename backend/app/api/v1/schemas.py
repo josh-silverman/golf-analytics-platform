@@ -80,3 +80,33 @@ class TournamentPredictionsPayload(BaseModel):
     model_version_id: str | None = None
     feature_set_hash: str
     outcomes: list[PlayerOutcomePayload]
+
+
+class ReliabilityBinPayload(BaseModel):
+    """One point of a reliability diagram (``mean_predicted`` vs observed)."""
+
+    lower: float
+    upper: float
+    mean_predicted: float
+    observed_frequency: float
+    count: int
+
+
+class OutcomeCalibrationPayload(BaseModel):
+    """Calibration evidence for one outcome, raw vs isotonic-calibrated."""
+
+    outcome_key: str
+    brier_raw: float
+    brier_calibrated: float
+    bins_raw: list[ReliabilityBinPayload]
+    bins_calibrated: list[ReliabilityBinPayload]
+
+
+class CalibrationReportPayload(BaseModel):
+    """Body of ``GET /analytics/calibration`` — the active model's held-out
+    reliability diagnostics, the evidence behind every probability it serves."""
+
+    model_name: str
+    model_version_id: str
+    n_calibration_examples: int
+    outcomes: list[OutcomeCalibrationPayload]
