@@ -139,3 +139,31 @@ class TournamentSimulationPayload(BaseModel):
     n_iterations: int
     score_std: float
     outcomes: list[SimulationOutcomePayload]
+
+
+class BettingLinePayload(BaseModel):
+    """One player's edge analysis for a single outcome market."""
+
+    player_id: int
+    player_name: str
+    model_prob: float = Field(ge=0.0, le=1.0)
+    implied_prob: float = Field(ge=0.0, le=1.0)
+    american_odds: int
+    edge: float
+    ev_per_dollar: float
+    kelly_fraction: float = Field(ge=0.0)
+
+
+class BettingBoardPayload(BaseModel):
+    """Body of ``GET /betting/edge/{tournament_id}``.
+
+    ``outcome_key`` identifies which market (win, top-5 …) the lines cover.
+    ``n_positive_ev`` is a quick summary of how many players show +EV so the
+    frontend can badge the nav link without parsing the full list.
+    """
+
+    tournament_id: int
+    tournament_name: str
+    outcome_key: str
+    n_positive_ev: int
+    lines: list[BettingLinePayload]

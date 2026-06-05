@@ -1,5 +1,6 @@
 import { NavLink, Route, Routes } from 'react-router'
 
+import { BettingEdge } from './routes/BettingEdge'
 import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
@@ -31,6 +32,9 @@ export default function App() {
           <NavLink to="/simulations" className={navClass}>
             Simulation
           </NavLink>
+          <NavLink to="/edge" className={navClass}>
+            Betting Edge
+          </NavLink>
           <NavLink to="/diagnostics" className={navClass}>
             Diagnostics
           </NavLink>
@@ -41,6 +45,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/leaderboard" element={<Leaderboard />} />
         <Route path="/simulations" element={<Simulations />} />
+        <Route path="/edge" element={<BettingEdge />} />
         <Route path="/players" element={<Players />} />
         <Route path="/tournaments" element={<Tournaments />} />
         <Route path="/diagnostics" element={<Diagnostics />} />
