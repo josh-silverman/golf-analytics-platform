@@ -1,5 +1,6 @@
 import { NavLink, Route, Routes } from 'react-router'
 
+import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { Players } from './routes/Players'
@@ -26,6 +27,9 @@ export default function App() {
           <NavLink to="/tournaments" className={navClass}>
             Tournaments
           </NavLink>
+          <NavLink to="/diagnostics" className={navClass}>
+            Diagnostics
+          </NavLink>
         </div>
       </nav>
 
@@ -34,6 +38,7 @@ export default function App() {
         <Route path="/leaderboard" element={<Leaderboard />} />
         <Route path="/players" element={<Players />} />
         <Route path="/tournaments" element={<Tournaments />} />
+        <Route path="/diagnostics" element={<Diagnostics />} />
       </Routes>
     </div>
   )
