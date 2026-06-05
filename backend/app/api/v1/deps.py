@@ -13,6 +13,7 @@ from fastapi import Depends
 
 from app.providers.factory import get_data_provider
 from app.services.catalog import CatalogService
+from app.services.features import FeatureExtractor
 
 if TYPE_CHECKING:
     from app.providers.base import DataProvider
@@ -26,3 +27,9 @@ def get_catalog_service(
     provider: DataProvider = Depends(_provider_dep),  # noqa: B008 — FastAPI DI
 ) -> CatalogService:
     return CatalogService(provider)
+
+
+def get_feature_extractor(
+    provider: DataProvider = Depends(_provider_dep),  # noqa: B008 — FastAPI DI
+) -> FeatureExtractor:
+    return FeatureExtractor(provider)

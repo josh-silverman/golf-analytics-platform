@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
-from app.api.v1.deps import get_catalog_service
+from app.api.v1.deps import get_catalog_service, get_feature_extractor
 from app.domain.enums import EntryStatus, TournamentStatus
 from app.domain.models import (
     DataFreshness,
@@ -27,6 +27,8 @@ from app.domain.models import (
     Tournament,
     TournamentEntry,
 )
+from app.features.feature_sets import v1_baseline
+from app.services.features import FeatureExtraction
 
 # ---------------------------------------------------------------------------
 # Fixture data — deterministic values used across all tests
@@ -136,12 +138,29 @@ class _StubCatalog:
 # ---------------------------------------------------------------------------
 
 
+class _StubExtractor:
+    """Mirrors the FeatureExtractor surface the endpoint touches."""
+
+    async def extract(self, player_id: int, as_of: date) -> FeatureExtraction:
+        fs = v1_baseline()
+        return FeatureExtraction(
+            player_id=player_id,
+            as_of=as_of,
+            feature_set_name=fs.name,
+            feature_set_hash=fs.hash,
+            n_rounds=3,
+            values={f.name: 0.5 for f in fs.features},
+        )
+
+
 @pytest.fixture
 def catalog_client(app: FastAPI) -> Iterator[TestClient]:
     app.dependency_overrides[get_catalog_service] = _StubCatalog
+    app.dependency_overrides[get_feature_extractor] = _StubExtractor
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.pop(get_catalog_service, None)
+    app.dependency_overrides.pop(get_feature_extractor, None)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +219,23 @@ def test_recent_rounds_found(catalog_client: TestClient) -> None:
 
 def test_recent_rounds_player_not_found(catalog_client: TestClient) -> None:
     r = catalog_client.get("/api/v1/players/999/recent-rounds")
+    assert r.status_code == 404
+
+
+def test_player_features_found(catalog_client: TestClient) -> None:
+    r = catalog_client.get("/api/v1/players/1/features?as_of=2026-06-01")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["player_id"] == 1
+    assert body["as_of"] == "2026-06-01"
+    assert body["feature_set"] == "v1_baseline"
+    assert body["n_rounds"] == 3
+    assert "sg_total_rating" in body["values"]
+    assert "form_index" in body["values"]
+
+
+def test_player_features_player_not_found(catalog_client: TestClient) -> None:
+    r = catalog_client.get("/api/v1/players/999/features")
     assert r.status_code == 404
 
 

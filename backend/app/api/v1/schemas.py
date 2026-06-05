@@ -7,7 +7,7 @@ generated 2 hours ago, model v3.2" line is always available.
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003
+from datetime import date, datetime  # noqa: TC003
 
 from pydantic import BaseModel, Field
 
@@ -36,3 +36,18 @@ class SingleEnvelope[T](BaseModel):
 
     data: T
     meta: ResponseMeta
+
+
+class FeatureExtractionPayload(BaseModel):
+    """Body of ``GET /players/{id}/features`` — feature values + provenance.
+
+    ``feature_set_hash`` is what model_versions records, so a prediction can
+    be marked stale when the underlying feature definitions change.
+    """
+
+    player_id: int
+    as_of: date
+    feature_set: str
+    feature_set_hash: str
+    n_rounds: int = Field(description="How many rounds were used in the computation")
+    values: dict[str, float]
