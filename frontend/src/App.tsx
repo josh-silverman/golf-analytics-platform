@@ -4,6 +4,7 @@ import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { Players } from './routes/Players'
+import { Simulations } from './routes/Simulations'
 import { Tournaments } from './routes/Tournaments'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -27,6 +28,9 @@ export default function App() {
           <NavLink to="/tournaments" className={navClass}>
             Tournaments
           </NavLink>
+          <NavLink to="/simulations" className={navClass}>
+            Simulation
+          </NavLink>
           <NavLink to="/diagnostics" className={navClass}>
             Diagnostics
           </NavLink>
@@ -36,6 +40,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/leaderboard" element={<Leaderboard />} />
+        <Route path="/simulations" element={<Simulations />} />
         <Route path="/players" element={<Players />} />
         <Route path="/tournaments" element={<Tournaments />} />
         <Route path="/diagnostics" element={<Diagnostics />} />
