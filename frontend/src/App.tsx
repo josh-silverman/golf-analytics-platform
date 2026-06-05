@@ -4,6 +4,7 @@ import { BettingEdge } from './routes/BettingEdge'
 import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
+import { PlayerDetail } from './routes/PlayerDetail'
 import { Players } from './routes/Players'
 import { Simulations } from './routes/Simulations'
 import { Tournaments } from './routes/Tournaments'
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/simulations" element={<Simulations />} />
         <Route path="/edge" element={<BettingEdge />} />
         <Route path="/players" element={<Players />} />
+        <Route path="/players/:id" element={<PlayerDetail />} />
         <Route path="/tournaments" element={<Tournaments />} />
         <Route path="/diagnostics" element={<Diagnostics />} />
       </Routes>

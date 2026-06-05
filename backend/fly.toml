@@ -1,0 +1,47 @@
+# Fly.io deployment manifest for the PGA Analytics backend.
+#
+# Deploy:
+#   fly launch --no-deploy   # first time — creates app & Postgres
+#   fly secrets set DATABASE_URL="..." DATAGOLF_API_KEY="..."
+#   fly deploy --dockerfile Dockerfile --build-target prod
+#
+# The app is region-pinned to iad (Virginia) to co-locate with the default
+# Fly Postgres cluster region. Change to lax / fra as needed.
+
+app = "pga-analytics-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  target = "prod"
+
+[env]
+  ENVIRONMENT = "production"
+  LOG_FORMAT   = "json"
+  LOG_LEVEL    = "INFO"
+  DATA_PROVIDER = "mock"
+
+# Secrets — set via `fly secrets set`:
+#   DATABASE_URL
+#   REDIS_URL
+#   DATAGOLF_API_KEY  (Phase 5 — DataGolf integration)
+
+[http_service]
+  internal_port = 8000
+  force_https   = true
+  auto_stop_machines  = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period  = "10s"
+    interval      = "30s"
+    method        = "GET"
+    path          = "/api/v1/health"
+    protocol      = "http"
+    timeout       = "5s"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

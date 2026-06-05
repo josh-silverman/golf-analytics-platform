@@ -1,3 +1,5 @@
+import { Link } from 'react-router'
+
 import { usePlayers } from '../lib/api/players'
 
 export function Players() {
@@ -10,7 +12,7 @@ export function Players() {
         {data && (
           <p className="mt-1 text-sm text-fg-tertiary">
             {data.page.total?.toLocaleString() ?? data.data.length} players · source:{' '}
-            {data.meta.source}
+            {data.meta.source} · click a row to view SG trends
           </p>
         )}
       </header>
@@ -36,12 +38,17 @@ export function Players() {
             </thead>
             <tbody className="divide-y">
               {data.data.map((player) => (
-                <tr key={player.id} className="bg-surface hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 font-medium text-fg">{player.full_name}</td>
-                  <td className="px-4 py-3 font-mono text-fg-secondary">{player.country}</td>
-                  <td className="px-4 py-3 text-fg-secondary">
-                    {player.turned_pro ?? '—'}
+                <tr key={player.id} className="bg-surface transition-colors hover:bg-surface-2">
+                  <td className="px-4 py-3 font-medium text-fg">
+                    <Link
+                      to={`/players/${player.id}`}
+                      className="hover:text-accent hover:underline"
+                    >
+                      {player.full_name}
+                    </Link>
                   </td>
+                  <td className="px-4 py-3 font-mono text-fg-secondary">{player.country}</td>
+                  <td className="px-4 py-3 text-fg-secondary">{player.turned_pro ?? '—'}</td>
                   <td className="px-4 py-3 text-right font-mono text-fg-tertiary">
                     {player.dg_id ?? '—'}
                   </td>
