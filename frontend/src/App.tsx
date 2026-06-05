@@ -1,5 +1,6 @@
 import { NavLink, Route, Routes } from 'react-router'
 
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { BettingEdge } from './routes/BettingEdge'
 import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
@@ -42,16 +43,18 @@ export default function App() {
         </div>
       </nav>
 
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/leaderboard" element={<Leaderboard />} />
-        <Route path="/simulations" element={<Simulations />} />
-        <Route path="/edge" element={<BettingEdge />} />
-        <Route path="/players" element={<Players />} />
-        <Route path="/players/:id" element={<PlayerDetail />} />
-        <Route path="/tournaments" element={<Tournaments />} />
-        <Route path="/diagnostics" element={<Diagnostics />} />
-      </Routes>
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/leaderboard" element={<ErrorBoundary><Leaderboard /></ErrorBoundary>} />
+          <Route path="/simulations" element={<ErrorBoundary><Simulations /></ErrorBoundary>} />
+          <Route path="/edge" element={<ErrorBoundary><BettingEdge /></ErrorBoundary>} />
+          <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
+          <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
+          <Route path="/tournaments" element={<ErrorBoundary><Tournaments /></ErrorBoundary>} />
+          <Route path="/diagnostics" element={<ErrorBoundary><Diagnostics /></ErrorBoundary>} />
+        </Routes>
+      </ErrorBoundary>
     </div>
   )
 }

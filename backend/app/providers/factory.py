@@ -1,8 +1,12 @@
 """Provider selection.
 
 Reads ``settings.data_provider`` and returns the appropriate concrete provider.
+When ``settings.data_provider_cache`` is True, the raw provider is wrapped in
+a ``CachingProviderWrapper`` that stores results in Redis with per-method TTLs.
+
 Lazy imports keep the import graph clean (the DataGolf provider doesn't pull in
-httpx into the mock-only test path).
+httpx into the mock-only test path; the caching wrapper doesn't pull in redis
+when cache is disabled).
 """
 
 from __future__ import annotations
@@ -16,14 +20,8 @@ if TYPE_CHECKING:
     from app.providers.base import DataProvider
 
 
-@lru_cache(maxsize=1)
-def get_data_provider() -> DataProvider:
-    """Return the configured provider, cached for the process lifetime.
-
-    The cache is keyed on nothing because settings are loaded once at process
-    start; if you need to swap providers in tests, clear it with
-    ``get_data_provider.cache_clear()``.
-    """
+def _build_raw_provider() -> DataProvider:
+    """Instantiate the raw (uncached) provider from settings."""
     settings = get_settings()
     name = settings.data_provider
 
@@ -38,3 +36,28 @@ def get_data_provider() -> DataProvider:
         return DataGolfProvider()
 
     raise ValueError(f"Unknown DATA_PROVIDER: {name!r}")
+
+
+@lru_cache(maxsize=1)
+def get_data_provider() -> DataProvider:
+    """Return the configured provider, cached for the process lifetime.
+
+    When ``DATA_PROVIDER_CACHE=true`` (the default) the raw provider is wrapped
+    with a Redis-backed ``CachingProviderWrapper``.  Set it to ``false`` in
+    tests or local dev to skip Redis entirely.
+
+    Clear the cache with ``get_data_provider.cache_clear()`` in tests that
+    need to swap providers mid-run.
+    """
+    settings = get_settings()
+    raw = _build_raw_provider()
+
+    if not settings.data_provider_cache:
+        return raw
+
+    # Wrap with Redis cache.  Import is lazy so the redis client is only
+    # created when caching is actually enabled.
+    from app.cache.redis import redis_client
+    from app.providers.caching import CachingProviderWrapper
+
+    return CachingProviderWrapper(raw, redis=redis_client)
