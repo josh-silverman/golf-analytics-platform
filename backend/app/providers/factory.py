@@ -33,10 +33,8 @@ def get_data_provider() -> DataProvider:
         return MockDataProvider(seed=settings.mock_seed)
 
     if name == "datagolf":  # pragma: no cover — lands Phase 5
-        from app.providers.datagolf.datagolf_provider import (  # type: ignore[import-not-found]
-            DataGolfProvider,
-        )
+        from app.providers.datagolf.datagolf_provider import DataGolfProvider
 
-        return DataGolfProvider()  # type: ignore[no-any-return]
+        return DataGolfProvider()
 
     raise ValueError(f"Unknown DATA_PROVIDER: {name!r}")
