@@ -51,3 +51,32 @@ class FeatureExtractionPayload(BaseModel):
     feature_set_hash: str
     n_rounds: int = Field(description="How many rounds were used in the computation")
     values: dict[str, float]
+
+
+class PlayerOutcomePayload(BaseModel):
+    """One row in the prediction leaderboard."""
+
+    player_id: int
+    player_name: str
+    win_prob: float = Field(ge=0.0, le=1.0)
+    top_5_prob: float = Field(ge=0.0, le=1.0)
+    top_10_prob: float = Field(ge=0.0, le=1.0)
+    top_20_prob: float = Field(ge=0.0, le=1.0)
+    make_cut_prob: float = Field(ge=0.0, le=1.0)
+
+
+class TournamentPredictionsPayload(BaseModel):
+    """Body of ``GET /predictions/{tournament_id}``.
+
+    ``model_version_id`` is null when the registry has no active version
+    and the fallback ConstantModel is being served — that signal is what
+    the frontend uses to surface "no trained model yet" in the UI.
+    """
+
+    tournament_id: int
+    tournament_name: str
+    as_of: date
+    model_name: str
+    model_version_id: str | None = None
+    feature_set_hash: str
+    outcomes: list[PlayerOutcomePayload]

@@ -37,6 +37,20 @@ class Settings(BaseSettings):
         description="Root seed for the mock data generator — same seed → bit-identical data.",
     )
 
+    # Model registry — doc 02 §6. Filesystem-backed until the model_versions
+    # table lands; the abstraction is identical so the swap is mechanical.
+    model_registry_path: str = Field(
+        default="./models",
+        description="Root directory for the on-disk model registry.",
+    )
+    active_model_name: str = Field(
+        default="golf_v1",
+        description=(
+            "Name of the model the predictions endpoint serves. The fallback"
+            " ConstantModel is used when no version is marked active."
+        ),
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
