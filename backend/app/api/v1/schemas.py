@@ -167,3 +167,44 @@ class BettingBoardPayload(BaseModel):
     outcome_key: str
     n_positive_ev: int
     lines: list[BettingLinePayload]
+
+
+# ---------------------------------------------------------------------------
+# Benchmark — our model vs. DataGolf's published projections
+# ---------------------------------------------------------------------------
+
+
+class BenchmarkPlayerRow(BaseModel):
+    """One player's side-by-side probability comparison."""
+
+    player_id: int
+    player_name: str
+    # Our model
+    our_win_prob: float = Field(ge=0.0, le=1.0)
+    our_top_10_prob: float = Field(ge=0.0, le=1.0)
+    our_make_cut_prob: float = Field(ge=0.0, le=1.0)
+    # DataGolf's published projections (null when not using DataGolf provider)
+    dg_win_prob: float | None = None
+    dg_top_10_prob: float | None = None
+    dg_make_cut_prob: float | None = None
+    # Difference (our – DG, positive means we are more bullish)
+    win_diff: float | None = None
+
+
+class BenchmarkPayload(BaseModel):
+    """Body of ``GET /analytics/benchmark``.
+
+    ``dg_available`` is False when the mock provider is active — the frontend
+    renders a "Connect DataGolf API" callout in that case.
+
+    Brier scores are null until a completed tournament is selected AND the
+    provider supports historical odds (i.e. real outcomes are available).
+    """
+
+    tournament_id: int
+    tournament_name: str
+    model_name: str
+    model_version_id: str | None = None
+    dg_available: bool
+    dg_last_updated: str | None = None
+    rows: list[BenchmarkPlayerRow]

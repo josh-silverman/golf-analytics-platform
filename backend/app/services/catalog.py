@@ -8,7 +8,7 @@ API routes that call into it.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from app.domain.enums import TournamentStatus
@@ -28,10 +28,10 @@ if TYPE_CHECKING:
     from app.providers.base import DataProvider
 
 
-# Reference "today" — keep in sync with the generator so /tournaments/current
-# returns the same week from the mock data. Once DataGolf lands this will be
-# replaced by datetime.now(timezone.utc).date() at call time.
-_REFERENCE_TODAY = "2026-06-03"
+# Anchor date used with the mock provider so /tournaments/current always
+# returns an "in-progress" event from the synthetic dataset.
+# For any real provider (datagolf) reference_today() returns the actual date.
+_MOCK_REFERENCE_TODAY = "2026-06-03"
 
 
 class CatalogService:
@@ -114,8 +114,13 @@ class CatalogService:
 
 
 def reference_today() -> date:
-    """Anchor date for status checks; matches the mock generator's today.
+    """Return the effective "today" for prediction and simulation endpoints.
 
-    Once DataGolf takes over, this becomes ``datetime.now(UTC).date()``.
+    - Mock provider: returns the fixed anchor date so the synthetic dataset
+      always has an in-progress tournament relative to that date.
+    - Any real provider (datagolf, …): returns the actual current UTC date.
     """
-    return datetime.fromisoformat(_REFERENCE_TODAY).date()
+    from app.config import get_settings
+    if get_settings().data_provider == "mock":
+        return datetime.fromisoformat(_MOCK_REFERENCE_TODAY).date()
+    return datetime.now(UTC).date()

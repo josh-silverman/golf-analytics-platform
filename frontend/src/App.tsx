@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { Benchmark } from './routes/Benchmark'
 import { BettingEdge } from './routes/BettingEdge'
 import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
@@ -38,6 +39,9 @@ export default function App() {
           <NavLink to="/edge" className={navClass}>
             Betting Edge
           </NavLink>
+          <NavLink to="/benchmark" className={navClass}>
+            Benchmark
+          </NavLink>
           <NavLink to="/diagnostics" className={navClass}>
             Diagnostics
           </NavLink>
@@ -54,6 +58,7 @@ export default function App() {
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
           <Route path="/tournaments" element={<ErrorBoundary><Tournaments /></ErrorBoundary>} />
           <Route path="/tournaments/:id" element={<ErrorBoundary><TournamentDetail /></ErrorBoundary>} />
+          <Route path="/benchmark" element={<ErrorBoundary><Benchmark /></ErrorBoundary>} />
           <Route path="/diagnostics" element={<ErrorBoundary><Diagnostics /></ErrorBoundary>} />
         </Routes>
       </ErrorBoundary>
