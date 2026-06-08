@@ -8,6 +8,7 @@ import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
 import { Players } from './routes/Players'
 import { Simulations } from './routes/Simulations'
+import { TournamentDetail } from './routes/TournamentDetail'
 import { Tournaments } from './routes/Tournaments'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
           <Route path="/tournaments" element={<ErrorBoundary><Tournaments /></ErrorBoundary>} />
+          <Route path="/tournaments/:id" element={<ErrorBoundary><TournamentDetail /></ErrorBoundary>} />
           <Route path="/diagnostics" element={<ErrorBoundary><Diagnostics /></ErrorBoundary>} />
         </Routes>
       </ErrorBoundary>

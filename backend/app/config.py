@@ -51,6 +51,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Observability
+    sentry_dsn: str | None = Field(
+        default=None,
+        description=(
+            "Sentry DSN for error tracking and performance monitoring. "
+            "When absent, Sentry is disabled (no-op). "
+            "Set via: fly secrets set SENTRY_DSN=https://..."
+        ),
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.1,
+        description="Fraction of transactions sent to Sentry for performance monitoring.",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,3 +1,5 @@
+import { Link } from 'react-router'
+
 import { useTournaments } from '../lib/api/tournaments'
 import type { Tournament } from '../lib/api/types'
 
@@ -61,7 +63,11 @@ export function Tournaments() {
             <tbody className="divide-y">
               {data.data.map((t) => (
                 <tr key={t.id} className="bg-surface hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-3 font-medium text-fg">{t.name}</td>
+                  <td className="px-4 py-3 font-medium text-fg">
+                    <Link to={`/tournaments/${t.id}`} className="hover:text-accent hover:underline">
+                      {t.name}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3 text-fg-secondary">{t.season}</td>
                   <td className="px-4 py-3 text-fg-secondary">
                     {formatDate(t.start_date)} – {formatDate(t.end_date)}

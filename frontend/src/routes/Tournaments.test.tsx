@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router'
 
 import { Tournaments } from './Tournaments'
 
@@ -12,9 +13,11 @@ function makeClient() {
 
 function renderTournaments(client: QueryClient) {
   return render(
-    <QueryClientProvider client={client}>
-      <Tournaments />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <Tournaments />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
 }
 
