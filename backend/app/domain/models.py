@@ -131,6 +131,21 @@ class BettingLine(DomainModel):
     captured_at: datetime
 
 
+class OutrightOdds(DomainModel):
+    """Real sportsbook outright odds for the current event's field.
+
+    Returned by providers that surface live betting markets (DataGolf). The
+    ``odds`` map is keyed by player id (``dg_id``) → consensus American odds
+    across the books, so the betting service can compute a *real* market-implied
+    probability instead of the synthetic line it falls back to without a feed.
+    """
+
+    event_name: str
+    market: str  # DataGolf market key: "win", "top_5", "top_10", "top_20", "make_cut"
+    last_updated: str | None = None
+    odds: dict[int, int] = Field(default_factory=dict)
+
+
 # --- Skill snapshots (computed, not raw — included so providers may surface
 #     them once skill ratings exist; mock will leave these out in Phase 1) ----
 

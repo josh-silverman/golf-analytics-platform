@@ -19,12 +19,12 @@ primary_region = "iad"
   ENVIRONMENT = "production"
   LOG_FORMAT   = "json"
   LOG_LEVEL    = "INFO"
-  DATA_PROVIDER = "mock"
+  DATA_PROVIDER = "datagolf"
 
 # Secrets — set via `fly secrets set`:
 #   DATABASE_URL
 #   REDIS_URL
-#   DATAGOLF_API_KEY  (Phase 5 — DataGolf integration)
+#   DATAGOLF_API_KEY
 
 [http_service]
   internal_port = 8000
@@ -37,7 +37,7 @@ primary_region = "iad"
     grace_period  = "10s"
     interval      = "30s"
     method        = "GET"
-    path          = "/api/v1/health"
+    path          = "/api/v1/healthz"
     protocol      = "http"
     timeout       = "5s"
 

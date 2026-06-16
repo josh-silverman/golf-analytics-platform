@@ -112,35 +112,6 @@ class CalibrationReportPayload(BaseModel):
     outcomes: list[OutcomeCalibrationPayload]
 
 
-class SimulationOutcomePayload(BaseModel):
-    """One player's MC-derived outcome distribution.
-
-    ``expected_score`` is the per-round strokes-to-par derived from the
-    player's skill rating — the raw input to the simulation, exposed here
-    so the frontend can show skill rankings alongside outcome probabilities.
-    """
-
-    player_id: int
-    player_name: str
-    win_prob: float = Field(ge=0.0, le=1.0)
-    top_5_prob: float = Field(ge=0.0, le=1.0)
-    top_10_prob: float = Field(ge=0.0, le=1.0)
-    top_20_prob: float = Field(ge=0.0, le=1.0)
-    make_cut_prob: float = Field(ge=0.0, le=1.0)
-    expected_score: float
-
-
-class TournamentSimulationPayload(BaseModel):
-    """Body of ``GET /simulations/{tournament_id}``."""
-
-    tournament_id: int
-    tournament_name: str
-    as_of: date
-    n_iterations: int
-    score_std: float
-    outcomes: list[SimulationOutcomePayload]
-
-
 class BettingLinePayload(BaseModel):
     """One player's edge analysis for a single outcome market."""
 
@@ -152,6 +123,8 @@ class BettingLinePayload(BaseModel):
     edge: float
     ev_per_dollar: float
     kelly_fraction: float = Field(ge=0.0)
+    # "datagolf" if this line is a real sportsbook consensus, else "model".
+    odds_source: str = "model"
 
 
 class BettingBoardPayload(BaseModel):
@@ -166,6 +139,8 @@ class BettingBoardPayload(BaseModel):
     tournament_name: str
     outcome_key: str
     n_positive_ev: int
+    # "datagolf" when real sportsbook odds backed any line, else "model".
+    odds_source: str
     lines: list[BettingLinePayload]
 
 

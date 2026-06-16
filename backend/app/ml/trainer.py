@@ -114,9 +114,24 @@ class TrainerConfig:
     max_iter: int = 200
     max_depth: int | None = 3
     learning_rate: float = 0.05
-    min_samples_leaf: int = 20
+    # 80 (was 20, sklearn's default — the one GBDT param never tuned). Validated
+    # 2026-06-15: at production training size (~7.5k examples) raising the leaf
+    # minimum reduces overfitting across the board — 10-event backtest improved
+    # make_cut +0.010, top_20 +0.008, Spearman +0.093→+0.110, winner rank
+    # 62.8→54.8 with no regression. (At the data-starved 39-event fold of the
+    # 85-event backtest it instead over-regularizes and trades make_cut for
+    # top_20 — an artifact of that fold's size, not the production model.)
+    min_samples_leaf: int = 80
     l2_regularization: float = 0.0
     random_state: int = 0
+    # Half-life (in days) for exponential recency weighting of training
+    # examples: an example ``h`` days older than the training cutoff counts
+    # half as much, ``2h`` older a quarter, etc. ``None``/0 disables weighting
+    # (every example weight 1.0). 365 is the production default, validated
+    # 2026-06-13: on the 3-season window it preserved the durable-skill gains
+    # (make-cut/top-20) while recovering the leaderboard ranking that the
+    # unweighted 3-season model regressed. See project_model_baseline memory.
+    recency_half_life_days: int | None = 365
 
     def as_hyperparameters(self) -> dict[str, Any]:
         return {
@@ -127,6 +142,7 @@ class TrainerConfig:
             "min_samples_leaf": self.min_samples_leaf,
             "l2_regularization": self.l2_regularization,
             "random_state": self.random_state,
+            "recency_half_life_days": self.recency_half_life_days,
         }
 
 
@@ -193,6 +209,23 @@ class GBDTTrainer(Trainer):
     def hyperparameters(self) -> dict[str, Any]:
         return self._config.as_hyperparameters()
 
+    def _recency_weights(self, data: TrainingData) -> NDArray[np.float64] | None:
+        """Per-example exponential-decay weights, or ``None`` if disabled.
+
+        Age is measured from the dataset's training cutoff so the weighting is
+        anchored to a fixed point — not "today" — which keeps it reproducible
+        and identical to how the rolling backtest evaluates each fold.
+        """
+        half_life = self._config.recency_half_life_days
+        if not half_life:
+            return None
+        through = data.through_date
+        ages = np.array(
+            [max((through - ex.as_of).days, 0) for ex in data.examples],
+            dtype=np.float64,
+        )
+        return np.asarray(0.5 ** (ages / float(half_life)), dtype=np.float64)
+
     def fit(self, data: TrainingData) -> TrainingResult:
         if len(data) == 0:
             raise ValueError("Cannot train on an empty dataset")
@@ -205,6 +238,7 @@ class GBDTTrainer(Trainer):
             ],
             dtype=np.float64,
         )
+        sample_weight = self._recency_weights(data)
 
         estimators: dict[str, Any] = {}
         metrics: dict[str, float] = {}
@@ -221,7 +255,7 @@ class GBDTTrainer(Trainer):
                 l2_regularization=self._config.l2_regularization,
                 random_state=self._config.random_state,
             )
-            estimator.fit(x, y)
+            estimator.fit(x, y, sample_weight=sample_weight)
             estimators[outcome_key] = estimator
             metrics[f"brier_{outcome_key}"] = _in_sample_brier(estimator, x, y)
 

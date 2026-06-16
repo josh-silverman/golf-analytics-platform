@@ -132,6 +132,12 @@ class TrainingDataBuilder:
                     continue
                 as_of = tournament.start_date - timedelta(days=1)
                 field = await self._catalog.get_tournament_field(tournament.id)
+                # Field-aware extraction over the whole field once, so
+                # field-relative features see the true field they competed in
+                # — and identically to how the prediction path computes them.
+                extractions = await self._extractor.extract_field(
+                    [entry.player_id for entry in field], as_of
+                )
                 for entry in field:
                     # Need a final position (or an explicit missed cut) to
                     # produce coherent labels. Skip players whose entry is
@@ -140,9 +146,7 @@ class TrainingDataBuilder:
                         continue
                     if entry.status == EntryStatus.MADE_CUT and entry.final_position is None:
                         continue
-                    extraction = await self._extractor.extract(
-                        entry.player_id, as_of
-                    )
+                    extraction = extractions[entry.player_id]
                     examples.append(
                         TrainingExample(
                             player_id=entry.player_id,

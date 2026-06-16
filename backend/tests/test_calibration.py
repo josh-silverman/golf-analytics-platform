@@ -143,7 +143,10 @@ def test_calibrated_predictions_are_probabilities() -> None:
 
 def test_hyperparameters_record_isotonic_calibration() -> None:
     result = fit_calibrated(GBDTTrainer(_SMALL_DATA_CONFIG), _separable_dataset())
-    assert result.hyperparameters["calibration"] == "isotonic"
+    assert (
+        result.hyperparameters["calibration"]
+        == "per_market: sigmoid(win,top_5) + isotonic(rest)"
+    )
 
 
 def test_metrics_include_holdout_brier_per_outcome() -> None:
@@ -212,7 +215,10 @@ async def test_train_calibrated_and_register_activates(tmp_path: Path) -> None:
     active = registry.get_active("golf_v1")
     assert active is not None
     assert active.version_id == version.version_id
-    assert version.hyperparameters["calibration"] == "isotonic"
+    assert (
+        version.hyperparameters["calibration"]
+        == "per_market: sigmoid(win,top_5) + isotonic(rest)"
+    )
 
     loaded = registry.load_artifact(active, model_cls=CalibratedOutcomeModel)
     assert isinstance(loaded, CalibratedOutcomeModel)

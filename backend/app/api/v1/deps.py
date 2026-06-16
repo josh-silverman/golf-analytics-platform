@@ -21,7 +21,6 @@ from app.providers.factory import get_data_provider
 from app.services.catalog import CatalogService
 from app.services.features import FeatureExtractor
 from app.services.predictions import PredictionService
-from app.simulation.service import SimulationService  # noqa: TC001 — FastAPI DI
 
 if TYPE_CHECKING:
     from app.ml.base import Model
@@ -90,8 +89,3 @@ def get_prediction_service(
     )
 
 
-def get_simulation_service(
-    catalog: CatalogService = Depends(get_catalog_service),  # noqa: B008
-    extractor: FeatureExtractor = Depends(get_feature_extractor),  # noqa: B008
-) -> SimulationService:
-    return SimulationService(catalog=catalog, extractor=extractor)

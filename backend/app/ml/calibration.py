@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from sklearn.calibration import _SigmoidCalibration
 from sklearn.isotonic import IsotonicRegression
 
 from app.ml.base import Model
@@ -41,6 +42,14 @@ if TYPE_CHECKING:
 # bins or a stable isotonic fit, so calibration is skipped and the base
 # probabilities pass through unchanged.
 _MIN_CALIBRATION_EXAMPLES = 30
+
+# Rare-event markets (win, top-5) have too few positives for isotonic
+# regression, which degenerates into a coarse step function — a handful of
+# distinct probabilities, non-monotonic in skill — manufacturing fake edges. A
+# sigmoid (Platt) fit stays smooth and monotonic in the raw score. Dense markets
+# (top-10/20, make-cut) keep isotonic, which is flexible and well-behaved when
+# positives are plentiful.
+_SIGMOID_OUTCOMES = frozenset({"win_prob", "top_5_prob"})
 
 
 @dataclass(frozen=True)
@@ -241,8 +250,10 @@ def fit_calibrated(
             # Nothing to learn; leave this outcome uncalibrated.
             calibrated = raw
         else:
-            calibrator = IsotonicRegression(
-                out_of_bounds="clip", y_min=0.0, y_max=1.0
+            calibrator: Any = (
+                _SigmoidCalibration()
+                if outcome_key in _SIGMOID_OUTCOMES
+                else IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
             )
             calibrator.fit(raw, y)
             calibrators[outcome_key] = calibrator
@@ -273,7 +284,10 @@ def fit_calibrated(
         model=model,
         feature_names=base_result.feature_names,
         metrics=metrics,
-        hyperparameters={**base_result.hyperparameters, "calibration": "isotonic"},
+        hyperparameters={
+            **base_result.hyperparameters,
+            "calibration": "per_market: sigmoid(win,top_5) + isotonic(rest)",
+        },
         report=report,
     )
 

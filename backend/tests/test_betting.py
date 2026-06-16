@@ -17,7 +17,7 @@ from app.services.betting import (
     kelly,
     prob_to_american,
 )
-from app.simulation.engine import SimulationOutcome
+from app.services.predictions import PlayerOutcome
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,9 +32,8 @@ def _make_outcome(
     top_10_prob: float = 0.60,
     top_20_prob: float = 0.75,
     make_cut_prob: float = 0.88,
-    expected_score: float = -1.5,
-) -> SimulationOutcome:
-    return SimulationOutcome(
+) -> PlayerOutcome:
+    return PlayerOutcome(
         player_id=player_id,
         player_name=player_name,
         win_prob=win_prob,
@@ -42,7 +41,6 @@ def _make_outcome(
         top_10_prob=top_10_prob,
         top_20_prob=top_20_prob,
         make_cut_prob=make_cut_prob,
-        expected_score=expected_score,
     )
 
 
@@ -191,7 +189,6 @@ class TestBuildBettingBoard:
                 top_10_prob=0.30 + i * 0.06,
                 top_20_prob=0.50 + i * 0.04,
                 make_cut_prob=0.80 + i * 0.02,
-                expected_score=-0.5 * i,
             )
             for i in range(1, n_players + 1)
         )
@@ -267,3 +264,60 @@ class TestBuildBettingBoard:
         assert board.tournament_id == 1
         assert board.tournament_name == "Test Open"
         assert board.outcome_key == "win_prob"
+
+    def test_no_real_odds_marks_source_model(self) -> None:
+        board = self._board()
+        assert board.odds_source == "model"
+        assert all(line.odds_source == "model" for line in board.lines)
+
+
+class TestRealOdds:
+    """The real-odds path: when a sportsbook consensus is supplied, matching
+    players are priced against the de-vigged line and flagged ``datagolf``."""
+
+    def _outcomes(self, n: int = 4) -> tuple[PlayerOutcome, ...]:
+        return tuple(
+            _make_outcome(
+                player_id=i,
+                player_name=f"Player {i}",
+                win_prob=0.10 + i * 0.05,
+            )
+            for i in range(1, n + 1)
+        )
+
+    def test_real_odds_used_and_flagged(self) -> None:
+        outcomes = self._outcomes()
+        # Real American odds for two of the four players (player_id → odds).
+        real = {1: 500, 2: 250}
+        board = build_betting_board(
+            outcomes,
+            tournament_id=1,
+            tournament_name="Real Open",
+            outcome_key="win_prob",
+            real_odds=real,
+        )
+        assert board.odds_source == "datagolf"
+        by_id = {ln.player_id: ln for ln in board.lines}
+        # Players with a real line carry the exact American odds + datagolf flag.
+        assert by_id[1].odds_source == "datagolf"
+        assert by_id[1].american_odds == 500
+        assert by_id[2].american_odds == 250
+        # Players without a real line fall back to synthetic.
+        assert by_id[3].odds_source == "model"
+        assert by_id[4].odds_source == "model"
+
+    def test_win_market_devig_normalizes_to_one(self) -> None:
+        # A full field whose raw implied probs overround to >1 must de-vig so the
+        # fair implied probabilities sum back to ~1.0 for the win market.
+        outcomes = self._outcomes(n=3)
+        # +100 each → raw implied 0.5 each → sum 1.5 (a 50% overround).
+        real = {1: 100, 2: 100, 3: 100}
+        board = build_betting_board(
+            outcomes,
+            tournament_id=1,
+            tournament_name="Devig Open",
+            outcome_key="win_prob",
+            real_odds=real,
+        )
+        total_implied = sum(ln.implied_prob for ln in board.lines)
+        assert total_implied == pytest.approx(1.0, abs=1e-6)

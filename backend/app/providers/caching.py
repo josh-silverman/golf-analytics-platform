@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from app.domain.models import (
     Course,
     DataFreshness,
+    OutrightOdds,
     Page,
     Player,
     Round,
@@ -56,7 +57,12 @@ _TTL = {
     "courses": 86_400,       # 24 h
     "tournaments": 21_600,   # 6 h
     "field": 900,            # 15 min
-    "rounds": 3_600,         # 1 h
+    # Completed-event rounds are immutable, and a training/backtest run sweeps
+    # the whole multi-season archive in one pass that takes well over an hour.
+    # A short TTL expired early-fetched rounds mid-build, forcing throttled
+    # re-fetches in circles (a backtest burned 3.5h CPU thrashing). 24 h both
+    # outlasts any single build and lets successive runs reuse the archive.
+    "rounds": 86_400,        # 24 h — historical rounds never change
     "freshness": 300,        # 5 min
     "betting": 300,          # 5 min — odds move
 }
@@ -236,7 +242,17 @@ class CachingProviderWrapper(DataProvider):
         cursor: str | None = None,
         limit: int = 100,
     ) -> Page[Tournament]:
-        key = _key(self.get_source_name(), "list_tournaments", season, status, cursor, limit)
+        # ``season=None`` means "the provider's default span of seasons" — a
+        # code-level default the call arguments don't capture. Fold the
+        # provider's declared span into the key so widening/narrowing that
+        # default invalidates these entries instead of serving the old span
+        # for up to the TTL (which would silently feed training a stale,
+        # smaller event set).
+        span = getattr(self._provider, "default_schedule_seasons", None)
+        key = _key(
+            self.get_source_name(), "list_tournaments",
+            season, span, status, cursor, limit,
+        )
         return await self._get_or_set_page(
             key, _TTL["tournaments"],
             lambda: self._provider.list_tournaments(
@@ -306,3 +322,20 @@ class CachingProviderWrapper(DataProvider):
             lambda: self._provider.get_betting_lines(tournament_id),
             BettingLineDomain,
         )
+
+    async def get_outright_odds(self, market: str) -> OutrightOdds | None:
+        """Cache live outright odds for the short ``betting`` TTL (odds move).
+
+        Cached by ``(source, market)`` so the win/top-5/… boards each keep their
+        own entry. ``None`` (no feed) is cached too, so a mock or feedless
+        provider doesn't re-probe on every page view within the window.
+        """
+        key = _key(self.get_source_name(), "outrights", market)
+        cached = await self._redis.get(key)
+        if cached is not None:
+            raw = json.loads(cached)
+            return OutrightOdds.model_validate(raw) if raw is not None else None
+        result = await self._provider.get_outright_odds(market)
+        payload = result.model_dump() if result is not None else None
+        await self._redis.setex(key, _TTL["betting"], json.dumps(payload, default=str))
+        return result

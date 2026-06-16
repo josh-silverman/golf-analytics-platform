@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.deps import get_simulation_service
-from app.simulation.engine import SimulationOutcome
-from app.simulation.service import TournamentSimulation
+from app.api.v1.deps import get_prediction_service
+from app.providers.factory import get_data_provider
+from app.services.predictions import PlayerOutcome, TournamentPredictions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -18,15 +18,16 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
-def _simulation(tid: int = 1) -> TournamentSimulation:
-    return TournamentSimulation(
+def _predictions(tid: int = 1) -> TournamentPredictions:
+    return TournamentPredictions(
         tournament_id=tid,
         tournament_name="Eagle Invitational",
         as_of=date(2026, 6, 1),
-        n_iterations=10_000,
-        score_std=3.3,
+        model_name="golf_v1",
+        model_version_id="abc123def456",
+        feature_set_hash="deadbeef",
         outcomes=tuple(
-            SimulationOutcome(
+            PlayerOutcome(
                 player_id=i,
                 player_name=f"Player {i}",
                 win_prob=max(0.01, 0.20 - i * 0.03),
@@ -34,7 +35,6 @@ def _simulation(tid: int = 1) -> TournamentSimulation:
                 top_10_prob=max(0.10, 0.70 - i * 0.05),
                 top_20_prob=max(0.20, 0.85 - i * 0.04),
                 make_cut_prob=max(0.40, 0.95 - i * 0.03),
-                expected_score=-2.0 + i * 0.3,
             )
             for i in range(5)
         ),
@@ -45,26 +45,45 @@ class _StubService:
     def __init__(self, *, found: bool = True) -> None:
         self._found = found
 
-    async def simulate_tournament(
-        self, tournament_id: int, *, as_of: date, rng: object = None
-    ) -> TournamentSimulation | None:
-        return _simulation(tournament_id) if self._found else None
+    async def predict_tournament(
+        self, tournament_id: int, *, as_of: date
+    ) -> TournamentPredictions | None:
+        return _predictions(tournament_id) if self._found else None
+
+
+class _StubProvider:
+    """No-network stand-in for the data provider the edge endpoint resolves.
+
+    Without this override the endpoint resolves the real ``get_data_provider``
+    (DATA_PROVIDER=datagolf), which builds a ``DataGolfProvider`` whose
+    ``httpx.AsyncClient`` is created in the TestClient's portal loop and then
+    orphaned — under ``filterwarnings=["error"]`` its GC "Event loop is closed"
+    warning escalates to a non-deterministic ERROR. The endpoint only calls
+    ``get_outright_odds``; returning ``None`` falls back to synthetic odds.
+    """
+
+    async def get_outright_odds(self, outcome_key: str) -> None:
+        return None
 
 
 @pytest.fixture
 def edge_client(app: FastAPI) -> Iterator[TestClient]:
-    app.dependency_overrides[get_simulation_service] = lambda: _StubService(found=True)
+    app.dependency_overrides[get_prediction_service] = lambda: _StubService(found=True)
+    app.dependency_overrides[get_data_provider] = lambda: _StubProvider()
     with TestClient(app) as c:
         yield c
-    app.dependency_overrides.pop(get_simulation_service, None)
+    app.dependency_overrides.pop(get_prediction_service, None)
+    app.dependency_overrides.pop(get_data_provider, None)
 
 
 @pytest.fixture
 def missing_client(app: FastAPI) -> Iterator[TestClient]:
-    app.dependency_overrides[get_simulation_service] = lambda: _StubService(found=False)
+    app.dependency_overrides[get_prediction_service] = lambda: _StubService(found=False)
+    app.dependency_overrides[get_data_provider] = lambda: _StubProvider()
     with TestClient(app) as c:
         yield c
-    app.dependency_overrides.pop(get_simulation_service, None)
+    app.dependency_overrides.pop(get_prediction_service, None)
+    app.dependency_overrides.pop(get_data_provider, None)
 
 
 def test_edge_endpoint_returns_board(edge_client: TestClient) -> None:

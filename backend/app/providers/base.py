@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         BettingLine,
         Course,
         DataFreshness,
+        OutrightOdds,
         Page,
         Player,
         PlayerSkillSnapshot,
@@ -153,3 +154,13 @@ class DataProvider(ABC):
         raise NotImplementedError(
             f"{self.get_source_name()} does not surface skill snapshots",
         )
+
+    async def get_outright_odds(self, market: str) -> OutrightOdds | None:
+        """Real sportsbook outright odds for the current event's field.
+
+        ``market`` is an outcome key (``"win_prob"``, ``"top_5_prob"`` …).
+        Returns ``None`` when the provider has no live odds feed — the betting
+        service then falls back to synthetic lines. Override if the provider
+        declares :attr:`Capability.BETTING_LINES` with live data.
+        """
+        return None

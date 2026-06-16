@@ -11,7 +11,11 @@ from app.domain.enums import EntryStatus, TournamentStatus
 from app.domain.models import Player, Tournament, TournamentEntry
 from app.features.feature_sets import v1_baseline
 from app.ml.base import ConstantModel
-from app.services.predictions import PredictionService
+from app.services.predictions import (
+    PredictionService,
+    coherent_outcomes,
+    normalize_field,
+)
 
 _TOURNAMENT = Tournament(
     id=1,
@@ -86,6 +90,11 @@ class _StubExtractor:
         # Different SG values per player so we can verify the model
         # actually receives them.
         return _ExtractionStub(values={"sg_total_rating": float(player_id) / 10.0})
+
+    async def extract_field(
+        self, player_ids: list[int], as_of: date
+    ) -> dict[int, _ExtractionStub]:
+        return {pid: await self.extract(pid, as_of) for pid in dict.fromkeys(player_ids)}
 
 
 class _RankingModel(ConstantModel):
@@ -178,8 +187,12 @@ async def test_predict_tournament_with_fallback_model_reports_null_version() -> 
     result = await service.predict_tournament(1, as_of=date(2026, 5, 30))
     assert result is not None
     assert result.model_version_id is None
-    # ConstantModel returns the same numbers for every player.
-    assert all(o.win_prob == pytest.approx(0.005) for o in result.outcomes)
+    # ConstantModel returns the same numbers for every player, so after field
+    # normalization the win probability is split evenly — and sums to 1.0
+    # across the field (exactly one winner), not the raw 0.005 × 3.
+    n = len(result.outcomes)
+    assert all(o.win_prob == pytest.approx(1.0 / n) for o in result.outcomes)
+    assert sum(o.win_prob for o in result.outcomes) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -192,12 +205,94 @@ async def test_predict_tournament_returns_none_for_unknown_tournament() -> None:
     assert await service.predict_tournament(999, as_of=date(2026, 5, 30)) is None
 
 
-async def test_predict_tournament_uses_outcome_keys_from_model() -> None:
-    """Model returns only win_prob → other outcomes default to 0.0."""
+async def test_predict_tournament_outcomes_are_coherent_after_normalization() -> None:
+    """Every served outcome stays nested (win ≤ top-5 ≤ … ≤ make-cut).
+
+    A model that emits only ``win_prob`` defaults the wider buckets to 0.0; the
+    service lifts them for coherence, and field normalization preserves it. (The
+    precise lifting rules are covered directly in ``TestCoherentOutcomes``.)
+    """
     service = _make_service(model=ConstantModel({"win_prob": 0.10}))
     result = await service.predict_tournament(1, as_of=date(2026, 5, 30))
     assert result is not None
-    o = result.outcomes[0]
-    assert o.win_prob == pytest.approx(0.10)
-    assert o.top_5_prob == 0.0
-    assert o.make_cut_prob == 0.0
+    for o in result.outcomes:
+        assert o.win_prob <= o.top_5_prob <= o.top_10_prob <= o.top_20_prob <= o.make_cut_prob
+
+
+async def test_predict_tournament_normalizes_win_probs_to_one() -> None:
+    """The served field's win probabilities sum to ~1.0 (exactly one winner)."""
+    service = _make_service(
+        model=ConstantModel({
+            "win_prob": 0.047, "top_5_prob": 0.012, "top_10_prob": 0.033,
+            "top_20_prob": 0.096, "make_cut_prob": 0.427,
+        }),
+    )
+    result = await service.predict_tournament(1, as_of=date(2026, 5, 30))
+    assert result is not None
+    assert sum(o.win_prob for o in result.outcomes) == pytest.approx(1.0)
+    for o in result.outcomes:
+        assert o.win_prob <= o.top_5_prob <= o.top_10_prob <= o.top_20_prob <= o.make_cut_prob
+
+
+# ---------------------------------------------------------------------------
+# Pure functions: coherence + field normalization
+# ---------------------------------------------------------------------------
+
+
+class TestCoherentOutcomes:
+    def test_lifts_incoherent_wider_buckets(self) -> None:
+        win, top5, top10, top20, cut = coherent_outcomes({
+            "win_prob": 0.047, "top_5_prob": 0.012, "top_10_prob": 0.033,
+            "top_20_prob": 0.096, "make_cut_prob": 0.427,
+        })
+        assert win == pytest.approx(0.047)
+        assert top5 == pytest.approx(0.047)   # lifted from 0.012
+        assert top10 == pytest.approx(0.047)  # lifted from 0.033
+        assert top20 == pytest.approx(0.096)  # already coherent
+        assert cut == pytest.approx(0.427)    # already coherent
+
+    def test_missing_keys_default_then_lift_to_win(self) -> None:
+        assert coherent_outcomes({"win_prob": 0.10}) == pytest.approx(
+            (0.10, 0.10, 0.10, 0.10, 0.10)
+        )
+
+    def test_clamps_to_unit_interval(self) -> None:
+        win, top5, top10, top20, cut = coherent_outcomes(
+            {"win_prob": -0.5, "make_cut_prob": 2.0}
+        )
+        assert win == 0.0
+        assert cut == 1.0
+
+
+class TestNormalizeField:
+    def test_win_probs_sum_to_one(self) -> None:
+        rows = [(0.10, 0.30, 0.50, 0.70, 0.90)] * 4  # raw win sum 0.40
+        out = normalize_field(rows)
+        assert sum(r[0] for r in out) == pytest.approx(1.0)
+
+    def test_deflates_inflated_longshots(self) -> None:
+        # Four players each "win" 50% → field sum 2.0 → each scaled to 0.25.
+        rows = [(0.50, 0.50, 0.50, 0.50, 0.50) for _ in range(4)]
+        out = normalize_field(rows)
+        assert sum(r[0] for r in out) == pytest.approx(1.0)
+        assert out[0][0] == pytest.approx(0.25)
+
+    def test_preserves_win_ranking(self) -> None:
+        rows = [
+            (0.30, 0.40, 0.50, 0.60, 0.70),
+            (0.10, 0.20, 0.30, 0.40, 0.50),
+            (0.05, 0.10, 0.15, 0.20, 0.50),
+        ]
+        wins = [r[0] for r in normalize_field(rows)]
+        assert wins[0] > wins[1] > wins[2]  # order unchanged
+        assert sum(wins) == pytest.approx(1.0)
+
+    def test_output_stays_coherent(self) -> None:
+        rows = [(0.30, 0.35, 0.40, 0.45, 0.50), (0.05, 0.10, 0.15, 0.20, 0.30)]
+        for win, top5, top10, top20, cut in normalize_field(rows):
+            assert win <= top5 <= top10 <= top20 <= cut
+            assert win >= 0.0
+            assert cut <= 1.0
+
+    def test_empty_field_is_noop(self) -> None:
+        assert normalize_field([]) == []

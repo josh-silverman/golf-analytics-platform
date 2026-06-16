@@ -10,12 +10,14 @@ The core loop a sports bettor runs:
 "Betting edge is meaningless without well-calibrated probabilities" (doc 01 §1)
 — that is exactly why calibration lands before this module.
 
-Mock odds. We don't have real sportsbook feeds yet (DataGolf integration is
-Phase 5).  Mock odds are generated from the simulation probabilities with a
-realistic ~12% vig margin applied.  A small Gaussian perturbation is added so
-the book and our model don't agree perfectly — without noise, every player's
-edge would be the same sign, which makes a poor demo.  The noise simulates
-the real-world gap between a sportsbook's pricing model and ours.
+Odds source. When the data provider surfaces real sportsbook odds (DataGolf's
+``betting-tools/outrights``), we use the consensus line per player and remove
+the vig by *field normalization*: a book's implied probabilities across the
+field sum to more than the true total (1 winner, 5 top-5s, …); scaling them
+back to that theoretical total strips the margin without assuming a flat vig.
+Players the book doesn't price — and every market when no feed is configured —
+fall back to a synthetic line generated from our simulation probability with a
+realistic vig, so the board is always populated.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.simulation.engine import SimulationOutcome
+    from app.services.predictions import PlayerOutcome
 
 # Standard sportsbook vigourish margin: the book takes ~8-12% of every dollar
 # wagered as margin; 10% is a reasonable mid-market assumption.
@@ -39,6 +41,18 @@ KELLY_FRACTION = 0.5
 # Minimum edge (model_prob - implied_prob) before we flag a bet as +EV.
 # Below this threshold the edge could plausibly be noise.
 MIN_EDGE = 0.005
+
+
+# Theoretical sum of true probabilities across a full field, per market. A
+# book's de-vigged implied probabilities must sum to this (one winner, five
+# top-5 finishers, …). ``make_cut`` has no fixed total (depends on the cut
+# rule), so it de-vigs with a flat margin instead.
+_MARKET_TARGET_SUM: dict[str, float] = {
+    "win_prob": 1.0,
+    "top_5_prob": 5.0,
+    "top_10_prob": 10.0,
+    "top_20_prob": 20.0,
+}
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,8 @@ class BettingLine:
     ev_per_dollar: float
     # Half-Kelly stake as a fraction of bankroll (0 if no edge)
     kelly_fraction: float
+    # "datagolf" if this line came from a real sportsbook consensus, else "model"
+    odds_source: str = "model"
 
 
 @dataclass(frozen=True)
@@ -69,6 +85,8 @@ class BettingBoard:
     tournament_name: str
     outcome_key: str  # e.g. "win_prob"
     lines: tuple[BettingLine, ...]
+    # "datagolf" if any line used a real sportsbook consensus, else "model".
+    odds_source: str = "model"
 
     @property
     def positive_ev_lines(self) -> tuple[BettingLine, ...]:
@@ -157,25 +175,69 @@ def _generate_mock_american_odds(
 
 
 # ---------------------------------------------------------------------------
+# Real-odds de-vigging
+# ---------------------------------------------------------------------------
+
+
+def _devig_real_odds(
+    real_odds: dict[int, int],
+    *,
+    outcome_key: str,
+    vig_margin: float,
+) -> dict[int, float]:
+    """Convert real American odds → fair (de-vigged) implied probabilities.
+
+    For markets with a known theoretical total (win, top-N) we normalize the
+    field's raw implied probabilities to that total, which strips the book's
+    margin without assuming it's flat. ``make_cut`` has no fixed total, so it
+    falls back to dividing out a flat vig margin.
+    """
+    raw = {
+        pid: american_to_implied_prob(odds, vig_margin=0.0)
+        for pid, odds in real_odds.items()
+    }
+    target = _MARKET_TARGET_SUM.get(outcome_key)
+    if target is None:
+        # No theoretical total — strip a flat margin instead.
+        return {pid: p / (1.0 + vig_margin) for pid, p in raw.items()}
+    total = sum(raw.values())
+    if total <= 0.0:
+        return raw
+    scale = target / total
+    return {pid: min(0.999, p * scale) for pid, p in raw.items()}
+
+
+# ---------------------------------------------------------------------------
 # Board assembly
 # ---------------------------------------------------------------------------
 
 
 def build_betting_board(
-    outcomes: tuple[SimulationOutcome, ...],
+    outcomes: tuple[PlayerOutcome, ...],
     *,
     tournament_id: int,
     tournament_name: str,
     outcome_key: str = "win_prob",
     vig_margin: float = DEFAULT_VIG_MARGIN,
+    real_odds: dict[int, int] | None = None,
 ) -> BettingBoard:
     """Build a full betting board from MC simulation outcomes.
 
-    Generates mock American odds for each player, computes edge and Kelly
-    sizing, and returns lines sorted by EV descending (best bets first).
+    When ``real_odds`` (player_id → consensus American odds) is supplied, each
+    matching player is priced against the de-vigged real line; everyone else
+    falls back to a synthetic line. Lines are returned sorted by EV descending
+    (best bets first). ``board.odds_source`` is ``"datagolf"`` if any real line
+    was used.
     """
-    def _get_prob(o: SimulationOutcome) -> float:
+    def _get_prob(o: PlayerOutcome) -> float:
         return getattr(o, outcome_key, 0.0)
+
+    devigged: dict[int, float] = (
+        _devig_real_odds(real_odds, outcome_key=outcome_key, vig_margin=vig_margin)
+        if real_odds
+        else {}
+    )
+    used_real = False
 
     lines: list[BettingLine] = []
     for i, outcome in enumerate(outcomes):
@@ -183,10 +245,20 @@ def build_betting_board(
         if model_prob < 0.001:
             # Effectively 0 — skip to avoid degenerate odds.
             continue
-        amer = _generate_mock_american_odds(
-            model_prob, vig_margin=vig_margin, rng_state=float(i)
-        )
-        implied = american_to_implied_prob(amer, vig_margin=vig_margin)
+
+        real_implied = devigged.get(outcome.player_id)
+        if real_implied is not None and real_odds is not None:
+            implied = real_implied
+            amer = real_odds[outcome.player_id]
+            source = "datagolf"
+            used_real = True
+        else:
+            amer = _generate_mock_american_odds(
+                model_prob, vig_margin=vig_margin, rng_state=float(i)
+            )
+            implied = american_to_implied_prob(amer, vig_margin=vig_margin)
+            source = "model"
+
         edge = model_prob - implied
         lines.append(
             BettingLine(
@@ -198,6 +270,7 @@ def build_betting_board(
                 edge=edge,
                 ev_per_dollar=ev_per_dollar(model_prob, implied),
                 kelly_fraction=kelly(model_prob, implied),
+                odds_source=source,
             )
         )
 
@@ -208,4 +281,5 @@ def build_betting_board(
         tournament_name=tournament_name,
         outcome_key=outcome_key,
         lines=tuple(lines),
+        odds_source="datagolf" if used_real else "model",
     )

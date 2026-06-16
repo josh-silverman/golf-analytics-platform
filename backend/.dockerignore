@@ -19,3 +19,6 @@ __pycache__
 .vscode
 .idea
 *.swp
+
+# Throwaway analysis/diagnostic scripts — never ship to production
+diagnostics/

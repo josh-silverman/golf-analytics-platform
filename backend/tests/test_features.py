@@ -22,15 +22,21 @@ from app.features.base import (
     FeatureContext,
     FeatureRegistry,
     FeatureSet,
+    FieldContext,
 )
-from app.features.feature_sets import v1_baseline
+from app.features.feature_sets import v1_baseline, v2_field_relative
 from app.features.player import (
+    FieldRelativeSGTotal,
+    FieldStrength,
     FormIndex,
+    RoundCount,
+    ScoreVolatility,
     SGApproachRating,
     SGAroundTheGreenRating,
     SGOffTheTeeRating,
     SGPuttingRating,
     SGTotalRating,
+    shrink_to_prior,
 )
 from app.features.primitives import (
     days_between,
@@ -192,7 +198,7 @@ def test_feature_set_hash_is_deterministic_across_orderings() -> None:
 def test_feature_set_hash_changes_when_version_bumps() -> None:
     base = FeatureSet("v1", [SGOffTheTeeRating()])
     bumped_feature = SGOffTheTeeRating()
-    bumped_feature.version = 2
+    bumped_feature.version = SGOffTheTeeRating().version + 1
     bumped = FeatureSet("v1", [bumped_feature])
     assert base.hash != bumped.hash
 
@@ -202,45 +208,66 @@ def test_feature_set_hash_changes_when_version_bumps() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_sg_rating_empty_rounds_returns_zero() -> None:
+def test_sg_rating_empty_rounds_returns_prior() -> None:
+    """No history → the rating is exactly the below-average prior, not 0.0.
+
+    This is the low-data fix: an unknown player reads as below the field, so the
+    model doesn't hand thin-history longshots an average skill estimate.
+    """
     feature = SGOffTheTeeRating()
     ctx = FeatureContext(player_id=1, as_of_date=date(2026, 6, 4), rounds=())
-    assert feature.compute(ctx, {}) == 0.0
+    assert feature.compute(ctx, {}) == pytest.approx(feature._prior)
 
 
-def test_sg_rating_uniform_rounds_returns_their_value() -> None:
-    """Three identical rounds played on the same day → that exact value."""
+def test_sg_rating_uniform_rounds_shrinks_toward_prior() -> None:
+    """Three identical rounds (sg_ott=1.2) on the same day → weighted_total 3.6
+    over weight_sum 3, blended with the prior's pseudo-weight."""
     rounds = tuple(
         DatedRound(_make_round(rid=i, sg_ott=1.2), date(2026, 6, 1))
         for i in range(3)
     )
     ctx = FeatureContext(player_id=1, as_of_date=date(2026, 6, 4), rounds=rounds)
-    assert SGOffTheTeeRating().compute(ctx, {}) == pytest.approx(1.2)
+    # Rounds are 3 days before as_of, so each carries the same decay weight.
+    w = exponential_decay_weight(days_between(date(2026, 6, 1), date(2026, 6, 4)), 60.0)
+    expected = shrink_to_prior(3 * 1.2 * w, 3 * w, SGOffTheTeeRating._prior)
+    assert SGOffTheTeeRating().compute(ctx, {}) == pytest.approx(expected)
+    # A rich, strong history still lands well above the prior.
+    assert SGOffTheTeeRating().compute(ctx, {}) > SGOffTheTeeRating._prior
 
 
 def test_sg_rating_weights_recent_round_more_than_old_round() -> None:
-    """One round today (sg_ott=2), one round 60 days ago (sg_ott=0).
-    With 60-day half-life, weights are 1.0 and 0.5, so the rating should
-    be (2*1 + 0*0.5) / (1 + 0.5) = 4/3 ≈ 1.333.
-    """
+    """One round today (sg_ott=2, weight 1.0), one 60 days ago (sg_ott=0,
+    weight 0.5): weighted_total 2.0 over weight_sum 1.5, then shrunk."""
     today = date(2026, 6, 4)
     rounds = (
         DatedRound(_make_round(rid=1, sg_ott=2.0), today),
         DatedRound(_make_round(rid=2, sg_ott=0.0), date(2026, 4, 5)),  # 60 days ago
     )
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
-    assert SGOffTheTeeRating().compute(ctx, {}) == pytest.approx(4.0 / 3.0)
+    expected = shrink_to_prior(2.0 * 1.0 + 0.0 * 0.5, 1.5, SGOffTheTeeRating._prior)
+    assert SGOffTheTeeRating().compute(ctx, {}) == pytest.approx(expected)
 
 
 def test_each_sg_feature_reads_its_own_attribute() -> None:
     today = date(2026, 6, 4)
     r = _make_round(rid=1, sg_ott=1.0, sg_app=2.0, sg_arg=3.0, sg_putt=4.0, sg_total=10.0)
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=(DatedRound(r, today),))
-    assert SGOffTheTeeRating().compute(ctx, {}) == pytest.approx(1.0)
-    assert SGApproachRating().compute(ctx, {}) == pytest.approx(2.0)
-    assert SGAroundTheGreenRating().compute(ctx, {}) == pytest.approx(3.0)
-    assert SGPuttingRating().compute(ctx, {}) == pytest.approx(4.0)
-    assert SGTotalRating().compute(ctx, {}) == pytest.approx(10.0)
+    # Single round, weight 1.0 → shrink_to_prior(value, 1.0, prior) per category.
+    assert SGOffTheTeeRating().compute(ctx, {}) == pytest.approx(
+        shrink_to_prior(1.0, 1.0, SGOffTheTeeRating._prior)
+    )
+    assert SGApproachRating().compute(ctx, {}) == pytest.approx(
+        shrink_to_prior(2.0, 1.0, SGApproachRating._prior)
+    )
+    assert SGAroundTheGreenRating().compute(ctx, {}) == pytest.approx(
+        shrink_to_prior(3.0, 1.0, SGAroundTheGreenRating._prior)
+    )
+    assert SGPuttingRating().compute(ctx, {}) == pytest.approx(
+        shrink_to_prior(4.0, 1.0, SGPuttingRating._prior)
+    )
+    assert SGTotalRating().compute(ctx, {}) == pytest.approx(
+        shrink_to_prior(10.0, 1.0, SGTotalRating._prior)
+    )
 
 
 def test_form_index_is_zero_when_recent_equals_baseline() -> None:
@@ -302,11 +329,146 @@ def test_v1_baseline_registry_runs_end_to_end() -> None:
     values = registry.compute(ctx)
     # All six features ran.
     assert set(values.keys()) == {f.name for f in fs.features}
-    # With one round and 60-day half-life, sg_X_rating == sg_X value.
-    assert values["sg_total_rating"] == pytest.approx(2.0)
+    # One round (weight 1.0) shrunk toward the sg_total prior.
+    assert values["sg_total_rating"] == pytest.approx(
+        shrink_to_prior(2.0, 1.0, SGTotalRating._prior)
+    )
     # Single round → recent and baseline windows both contain only it,
     # so form_index is zero.
     assert values["form_index"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Field-relative features (v2)
+# ---------------------------------------------------------------------------
+
+
+def _ctx_with_field(
+    *,
+    own_sg_total: float,
+    field_mean_sg_total: float,
+    field_size: int = 100,
+    rounds: tuple[DatedRound, ...] = (),
+) -> FeatureContext:
+    return FeatureContext(
+        player_id=1,
+        as_of_date=date(2026, 6, 4),
+        rounds=rounds,
+        field=FieldContext(
+            mean_skill={"sg_total_rating": field_mean_sg_total},
+            field_size=field_size,
+        ),
+    )
+
+
+def test_field_relative_is_margin_over_field_mean() -> None:
+    # Player's own sg_total_rating arrives via deps; field mean from context.
+    ctx = _ctx_with_field(own_sg_total=1.5, field_mean_sg_total=0.4)
+    value = FieldRelativeSGTotal().compute(ctx, {"sg_total_rating": 1.5})
+    assert value == pytest.approx(1.1)  # 1.5 − 0.4
+
+
+def test_field_relative_negative_for_below_field_player() -> None:
+    ctx = _ctx_with_field(own_sg_total=-0.3, field_mean_sg_total=0.5)
+    value = FieldRelativeSGTotal().compute(ctx, {"sg_total_rating": -0.3})
+    assert value == pytest.approx(-0.8)
+
+
+def test_field_relative_neutral_without_field_context() -> None:
+    # No field (single-player extraction) → neutral 0.0 regardless of own skill.
+    ctx = FeatureContext(player_id=1, as_of_date=date(2026, 6, 4), rounds=())
+    value = FieldRelativeSGTotal().compute(ctx, {"sg_total_rating": 2.0})
+    assert value == 0.0
+
+
+def test_field_strength_returns_field_mean_sg_total() -> None:
+    ctx = _ctx_with_field(own_sg_total=1.0, field_mean_sg_total=0.42)
+    assert FieldStrength().compute(ctx, {"sg_total_rating": 1.0}) == pytest.approx(0.42)
+
+
+def test_field_strength_zero_without_field() -> None:
+    ctx = FeatureContext(player_id=1, as_of_date=date(2026, 6, 4), rounds=())
+    assert FieldStrength().compute(ctx, {"sg_total_rating": 1.0}) == 0.0
+
+
+def test_round_count_reports_number_of_rounds() -> None:
+    today = date(2026, 6, 4)
+    rounds = tuple(
+        DatedRound(_make_round(rid=i, sg_total=1.0), today) for i in range(7)
+    )
+    ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
+    assert RoundCount().compute(ctx, {}) == pytest.approx(7.0)
+
+
+def test_v2_field_relative_has_fourteen_features() -> None:
+    fs = v2_field_relative()
+    assert len(fs.features) == 14
+    names = {f.name for f in fs.features}
+    # v2 is a superset of v1.
+    assert {f.name for f in v1_baseline().features} <= names
+    # Plus the field-relative additions and the volatility estimate.
+    assert {
+        "field_rel_sg_ott", "field_rel_sg_app", "field_rel_sg_arg",
+        "field_rel_sg_putt", "field_rel_sg_total", "field_strength",
+        "round_count", "score_volatility",
+    } <= names
+
+
+def test_v2_registry_runs_end_to_end_with_field() -> None:
+    """The registry resolves field-relative deps and reads field context."""
+    fs = v2_field_relative()
+    registry = FeatureRegistry(fs.features)
+    today = date(2026, 6, 4)
+    r = _make_round(rid=1, sg_ott=0.5, sg_app=0.5, sg_arg=0.5, sg_putt=0.5, sg_total=2.0)
+    ctx = FeatureContext(
+        player_id=1,
+        as_of_date=today,
+        rounds=(DatedRound(r, today),),
+        field=FieldContext(mean_skill={"sg_total_rating": 0.5}, field_size=50),
+    )
+    values = registry.compute(ctx)
+    assert set(values.keys()) == {f.name for f in fs.features}
+    # One round today (weight 1.0) shrunk toward the sg_total prior.
+    expected_total = shrink_to_prior(2.0, 1.0, SGTotalRating._prior)
+    assert values["sg_total_rating"] == pytest.approx(expected_total)
+    assert values["field_rel_sg_total"] == pytest.approx(expected_total - 0.5)
+    assert values["field_strength"] == pytest.approx(0.5)
+    assert values["round_count"] == pytest.approx(1.0)
+
+
+def test_v2_hash_differs_from_v1() -> None:
+    assert v2_field_relative().hash != v1_baseline().hash
+
+
+def test_score_volatility_zero_when_too_few_rounds() -> None:
+    # Fewer than the 5-round minimum → 0.0 (engine reads as "unknown").
+    today = date(2026, 6, 4)
+    rounds = tuple(
+        DatedRound(_make_round(rid=i, sg_total=float(i)), today) for i in range(4)
+    )
+    ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
+    assert ScoreVolatility().compute(ctx, {}) == 0.0
+
+
+def test_score_volatility_zero_for_perfectly_consistent_player() -> None:
+    today = date(2026, 6, 4)
+    rounds = tuple(
+        DatedRound(_make_round(rid=i, sg_total=1.0), today) for i in range(10)
+    )
+    ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
+    assert ScoreVolatility().compute(ctx, {}) == pytest.approx(0.0)
+
+
+def test_score_volatility_is_population_std_of_recent_sg_total() -> None:
+    # sg_total alternating +2 / -2 over 6 rounds → mean 0, population std 2.0.
+    today = date(2026, 6, 4)
+    vals = [2.0, -2.0, 2.0, -2.0, 2.0, -2.0]
+    rounds = tuple(
+        DatedRound(_make_round(rid=i, sg_total=v), date(2026, 6, 1))
+        for i, v in enumerate(vals)
+    )
+    ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
+    assert ScoreVolatility().compute(ctx, {}) == pytest.approx(2.0)
 
 
 def test_v1_baseline_hash_is_stable() -> None:

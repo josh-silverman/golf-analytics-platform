@@ -36,6 +36,91 @@ _OUTCOME_KEYS: tuple[str, ...] = (
 )
 
 
+def coherent_outcomes(preds: dict[str, float]) -> tuple[float, float, float, float, float]:
+    """Coerce independently-predicted market probabilities into a coherent set.
+
+    The per-market classifiers are trained and calibrated independently, so a
+    raw prediction can be incoherent — e.g. ``win_prob`` exceeding ``top_5_prob``
+    even though winning is by definition a top-5 finish. Because the outcomes
+    are strictly nested (win ⊆ top-5 ⊆ top-10 ⊆ top-20 ⊆ make-cut), each wider
+    bucket's probability must be at least the next-narrower bucket's.
+
+    We enforce that by taking a running maximum outward from ``win_prob``. This
+    is monotonic, idempotent, and leaves already-coherent predictions untouched
+    — it only lifts a wider bucket up to its narrower neighbour when the raw
+    model violated the nesting. All values are clamped to ``[0, 1]``.
+    """
+    win = min(max(float(preds.get("win_prob", 0.0)), 0.0), 1.0)
+    top_5 = min(max(float(preds.get("top_5_prob", 0.0)), 0.0), 1.0)
+    top_10 = min(max(float(preds.get("top_10_prob", 0.0)), 0.0), 1.0)
+    top_20 = min(max(float(preds.get("top_20_prob", 0.0)), 0.0), 1.0)
+    make_cut = min(max(float(preds.get("make_cut_prob", 0.0)), 0.0), 1.0)
+
+    top_5 = max(top_5, win)
+    top_10 = max(top_10, top_5)
+    top_20 = max(top_20, top_10)
+    make_cut = max(make_cut, top_20)
+
+    return win, top_5, top_10, top_20, make_cut
+
+
+# Theoretical total of each market's probabilities across a full field: exactly
+# one winner, five top-5 finishers, ten top-10s, twenty top-20s. ``make_cut``
+# has no fixed total (it depends on the cut rule), so it is left unnormalized.
+_FIELD_TARGET_SUM: dict[str, float] = {
+    "win_prob": 1.0,
+    "top_5_prob": 5.0,
+    "top_10_prob": 10.0,
+    "top_20_prob": 20.0,
+}
+
+# Index of each market in the coherent-outcome tuple.
+_MARKET_ORDER: tuple[str, ...] = (
+    "win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob",
+)
+
+
+def normalize_field(
+    rows: list[tuple[float, float, float, float, float]],
+) -> list[tuple[float, float, float, float, float]]:
+    """Scale each market across the field to its theoretical total.
+
+    Independently-calibrated per-market classifiers don't respect the field
+    constraint that exactly one player wins, five finish top-5, and so on — so
+    raw win probabilities sum to well over 1.0, systematically over-pricing
+    longshots. We rescale each market (win→1, top-5→5, top-10→10, top-20→20,
+    each target capped at the field size) so the field sums to its true total,
+    then re-enforce the nested coherence the rescale may have nudged. ``make_cut``
+    is left as-is. The result is what makes both the leaderboard and any odds
+    comparison honest about a player's real chances.
+    """
+    if not rows:
+        return rows
+    n = len(rows)
+    # Per-market scale factor from the current field sum to the target.
+    scales: dict[int, float] = {}
+    for idx, market in enumerate(_MARKET_ORDER):
+        target = _FIELD_TARGET_SUM.get(market)
+        if target is None:
+            continue
+        total = sum(r[idx] for r in rows)
+        if total <= 0.0:
+            continue
+        # Can't have more top-20s than players in a tiny field.
+        scales[idx] = min(target, float(n)) / total
+
+    normalized: list[tuple[float, float, float, float, float]] = []
+    for r in rows:
+        scaled = {
+            _MARKET_ORDER[i]: min(r[i] * scales.get(i, 1.0), 1.0)
+            for i in range(len(_MARKET_ORDER))
+        }
+        # Re-apply nested coherence: scaling each market by a different factor
+        # can flip win above top-5 for a player who was previously tied.
+        normalized.append(coherent_outcomes(scaled))
+    return normalized
+
+
 @dataclass(frozen=True)
 class PlayerOutcome:
     """One player's predicted outcome distribution for the tournament."""
@@ -96,26 +181,46 @@ class PredictionService:
             return None
 
         field = await self._catalog.get_tournament_field(tournament_id)
-        outcomes: list[PlayerOutcome] = []
+        # Field-aware extraction over the whole field once, so field-relative
+        # features compare each player to the actual field (and match training).
+        extractions = await self._extractor.extract_field(
+            [entry.player_id for entry in field], as_of
+        )
+        # First pass: per-player coherent probabilities, keeping the player so we
+        # can rebuild outcomes after the field-level normalization step.
+        players: list[tuple[int, str]] = []
+        coherent_rows: list[tuple[float, float, float, float, float]] = []
         for entry in field:
             player = await self._catalog.get_player(entry.player_id)
             if player is None:
                 # Stale entry referencing a deleted player — skip rather
                 # than fail the whole request.
                 continue
-            extraction = await self._extractor.extract(entry.player_id, as_of)
+            extraction = extractions[entry.player_id]
             preds = self._model.predict(extraction.values)
-            outcomes.append(
-                PlayerOutcome(
-                    player_id=player.id,
-                    player_name=player.full_name,
-                    win_prob=float(preds.get("win_prob", 0.0)),
-                    top_5_prob=float(preds.get("top_5_prob", 0.0)),
-                    top_10_prob=float(preds.get("top_10_prob", 0.0)),
-                    top_20_prob=float(preds.get("top_20_prob", 0.0)),
-                    make_cut_prob=float(preds.get("make_cut_prob", 0.0)),
-                )
+            players.append((player.id, player.full_name))
+            coherent_rows.append(coherent_outcomes(preds))
+
+        # Field normalization: rescale each market so the field sums to its true
+        # total (one winner, five top-5s, …) instead of the >100% the
+        # independent classifiers produce. Without this, longshots are
+        # systematically over-priced and the betting edge shows phantom value.
+        normalized = normalize_field(coherent_rows)
+
+        outcomes: list[PlayerOutcome] = [
+            PlayerOutcome(
+                player_id=pid,
+                player_name=name,
+                win_prob=win,
+                top_5_prob=top_5,
+                top_10_prob=top_10,
+                top_20_prob=top_20,
+                make_cut_prob=make_cut,
             )
+            for (pid, name), (win, top_5, top_10, top_20, make_cut) in zip(
+                players, normalized, strict=True
+            )
+        ]
 
         # Sort by win probability descending — the natural leaderboard order.
         outcomes.sort(key=lambda o: o.win_prob, reverse=True)

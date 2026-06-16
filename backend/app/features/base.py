@@ -42,6 +42,27 @@ class DatedRound:
 
 
 @dataclass(frozen=True)
+class FieldContext:
+    """Field-level aggregates for the event a player is competing in.
+
+    Field-relative features (a player's skill *relative to the field* they
+    face that week) need to see the whole field, which a per-player context
+    can't provide. The extractor computes each player's absolute features
+    first, aggregates them into this object, then re-runs the registry with
+    it attached — so a feature can ask "how does this player compare to the
+    field mean?" while still being a pure function of its context.
+
+    ``mean_skill`` maps an absolute feature name to that feature's mean across
+    the field. ``None`` on a ``FeatureContext`` means single-player extraction
+    (no field), in which case field-relative features fall back to a neutral
+    value (the player sitting exactly at an unknown field average).
+    """
+
+    mean_skill: dict[str, float]
+    field_size: int
+
+
+@dataclass(frozen=True)
 class FeatureContext:
     """Everything a feature needs to produce a value for one (player, date).
 
@@ -53,6 +74,7 @@ class FeatureContext:
     player_id: int
     as_of_date: date
     rounds: tuple[DatedRound, ...]
+    field: FieldContext | None = None
 
 
 class Feature(ABC):
