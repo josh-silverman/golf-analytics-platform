@@ -33,7 +33,14 @@ def _build_raw_provider() -> DataProvider:
     if name == "datagolf":  # pragma: no cover — lands Phase 5
         from app.providers.datagolf.datagolf_provider import DataGolfProvider
 
-        return DataGolfProvider()
+        # Share the Redis client (when caching is on) so the provider can cache
+        # immutable per-event archives durably — see DataGolfProvider._event_rows.
+        redis = None
+        if settings.data_provider_cache:
+            from app.cache.redis import redis_client
+
+            redis = redis_client
+        return DataGolfProvider(redis=redis)
 
     raise ValueError(f"Unknown DATA_PROVIDER: {name!r}")
 

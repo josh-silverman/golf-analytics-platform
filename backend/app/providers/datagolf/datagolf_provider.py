@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -48,6 +49,9 @@ from app.domain.models import (
     TournamentEntry,
 )
 from app.providers.base import Capability, DataProvider
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 _BASE_URL = "https://feeds.datagolf.com"
 
@@ -88,6 +92,13 @@ _HISTORY_SEASONS = 2
 # Must cover _SCHEDULE_SEASONS plus the 2-year feature window, or the oldest
 # training events silently get truncated windows.
 _MAX_ROUNDS_SEASONS = 5
+
+# Per-event historical archives are immutable, so they're cached in Redis with a
+# long TTL — shared across processes and surviving the daily as-of roll that
+# rotates the per-player rounds cache key. Without this, the first field
+# extraction each day re-fetches ~100 event archives at the 8s throttle, which
+# is the multi-minute "cold load" on the leaderboard.
+_EVENT_ROWS_TTL_S = 2_592_000  # 30 days
 
 
 class _RetryTransport(httpx.AsyncBaseTransport):
@@ -497,6 +508,7 @@ class DataGolfProvider(DataProvider):
         *,
         api_key: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        redis: Redis | None = None,
     ) -> None:
         self._settings = get_settings()
         self._api_key = api_key or self._settings.datagolf_api_key
@@ -531,6 +543,10 @@ class DataGolfProvider(DataProvider):
         # thousands-of-calls fan-out to one fetch per event, which is the
         # difference between sailing through and tripping DataGolf's rate limit.
         self._event_rows_cache: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        # Optional Redis L2 for those immutable per-event archives, so they
+        # survive process restarts and the daily as-of cache-key roll. Absent
+        # (None) in tests/offline → L1-only, identical to the previous behaviour.
+        self._redis = redis
         # Pace calls to the strict historical-raw-data endpoint. Disabled when a
         # transport is injected (tests/offline) so the suite stays instant —
         # a MockTransport has no rate limit to respect.
@@ -839,6 +855,15 @@ class DataGolfProvider(DataProvider):
         if cached is not None:
             return cached
 
+        # L2: durable Redis cache of the immutable archive. A hit here is the
+        # difference between a fast leaderboard and the multi-minute cold sweep
+        # that re-fetches every event at the 8s throttle each day.
+        redis_key = f"pga:datagolf:event_rows:{tournament_id}:{year}"
+        l2 = await self._redis_get_rows(redis_key)
+        if l2 is not None:
+            self._event_rows_cache[cache_key] = l2
+            return l2
+
         # Skip a throttled request for events the archive doesn't carry: if we
         # have the valid-event set for this year and this id isn't in it, it has
         # no SG raw data (it would 400 or return empty). An empty set means the
@@ -851,7 +876,32 @@ class DataGolfProvider(DataProvider):
 
         rows = await self._fetch_event_rows(tournament_id, year)
         self._event_rows_cache[cache_key] = rows
+        # Persist only real archives — an empty result may be a not-yet-archived
+        # in-progress event, which must be re-checked, not pinned empty for days.
+        if rows:
+            await self._redis_set_rows(redis_key, rows)
         return rows
+
+    async def _redis_get_rows(self, key: str) -> list[dict[str, Any]] | None:
+        """Read a cached event archive from Redis; ``None`` on miss/any error."""
+        if self._redis is None:
+            return None
+        try:
+            raw = await self._redis.get(key)
+            if raw is None:
+                return None
+            return json.loads(raw)
+        except Exception:  # noqa: BLE001 — cache is best-effort, never block serving
+            return None
+
+    async def _redis_set_rows(self, key: str, rows: list[dict[str, Any]]) -> None:
+        """Best-effort durable cache of an immutable event archive."""
+        if self._redis is None:
+            return
+        try:
+            await self._redis.setex(key, _EVENT_ROWS_TTL_S, json.dumps(rows, default=str))
+        except Exception:  # noqa: BLE001 — best-effort
+            return
 
     async def _valid_event_ids(self, year: int) -> set[int]:
         """PGA event ids with SG-categorized raw data for ``year``.
