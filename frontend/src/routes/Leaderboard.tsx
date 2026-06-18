@@ -426,11 +426,11 @@ export function Leaderboard() {
               aria-label="Search players"
             />
             <div className="flex items-center gap-3">
-              <p className="text-xs text-fg-tertiary">
-                {query.trim()
-                  ? `${rows.length} of ${predictions.outcomes.length} players`
-                  : `${predictions.outcomes.length} players`}
-              </p>
+              {query.trim() && (
+                <p className="text-xs text-fg-tertiary">
+                  {rows.length} of {predictions.outcomes.length} players
+                </p>
+              )}
               <button
                 type="button"
                 onClick={() =>
