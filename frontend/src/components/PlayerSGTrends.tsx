@@ -139,7 +139,7 @@ interface SgCategory {
 }
 
 const SG_CATEGORIES: SgCategory[] = [
-  { key: 'sg_total', label: 'Total', color: '#4FD1C5', description: 'Strokes gained vs field across all phases' },
+  { key: 'sg_total', label: 'Total', color: '#34A65F', description: 'Strokes gained vs field across all phases' },
   { key: 'sg_ott', label: 'OTT', color: '#3b82f6', description: 'Off the tee' },
   { key: 'sg_app', label: 'APP', color: '#8b5cf6', description: 'Approach' },
   { key: 'sg_arg', label: 'ARG', color: '#f59e0b', description: 'Around the green' },

@@ -15,7 +15,7 @@ const config: Config = {
           secondary: '#9BA3B7',
           tertiary: '#5E6680',
         },
-        accent: '#4FD1C5',
+        accent: '#34A65F', // Pinpoint brand green
         positive: '#22C55E',
         negative: '#EF4444',
         warning: '#F59E0B',

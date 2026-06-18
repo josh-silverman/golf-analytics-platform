@@ -1,7 +1,6 @@
 import { Link, NavLink, Navigate, Route, Routes } from 'react-router'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { Logo } from './components/Logo'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
@@ -36,7 +35,11 @@ export default function App() {
       <nav className="border-b bg-surface px-6 py-3">
         <div className="mx-auto flex max-w-6xl items-center gap-6">
           <NavLink to="/" end aria-label="Pinpoint home" className="mr-1">
-            <Logo />
+            <img
+              src="/pinpoint-wordmark.png"
+              alt="Pinpoint — Golf Analytics"
+              className="h-8 w-auto rounded"
+            />
           </NavLink>
           <NavLink to="/" end className={navClass}>
             Home

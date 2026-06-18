@@ -127,7 +127,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
               width={Math.max(barWidth, 2)}
               height={BAR_HEIGHT}
               rx={2}
-              fill={positive ? '#4FD1C5' : '#EF4444'}
+              fill={positive ? '#34A65F' : '#EF4444'}
               opacity={positive ? 0.85 : 0.45}
             />
 
