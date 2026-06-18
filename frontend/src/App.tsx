@@ -9,11 +9,8 @@ import { Players } from './routes/Players'
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `text-sm transition-colors ${isActive ? 'text-accent font-medium' : 'text-fg-secondary hover:text-fg'}`
 
-// Views on the roadmap but not yet live. Shown in the nav as disabled "soon"
-// chips so the roadmap is legible, and routed to a ComingSoon placeholder so a
-// direct URL lands somewhere honest rather than a half-finished page.
-const FUTURE = ['Betting Edge', 'Benchmark', 'Diagnostics'] as const
-
+// Roadmap views — their routes (/edge, /benchmark, /diagnostics) and components
+// stay in the codebase but are unlinked from the nav until they're ready.
 function ComingSoon({ title }: { title: string }) {
   return (
     <main className="mx-auto max-w-6xl px-6 py-20 text-center">
@@ -22,8 +19,8 @@ function ComingSoon({ title }: { title: string }) {
       </p>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">{title}</h1>
       <p className="mx-auto mt-3 max-w-md text-sm text-fg-secondary">
-        This view is on the roadmap and not yet available. The model, leaderboard,
-        players, and tournaments are all live today.
+        This view is on the roadmap and not yet available. The model and leaderboard
+        are live today.
       </p>
       <Link to="/leaderboard" className="mt-6 inline-block text-sm text-accent hover:underline">
         → Go to the Leaderboard
@@ -44,20 +41,6 @@ export default function App() {
           <NavLink to="/leaderboard" className={navClass}>
             Leaderboard
           </NavLink>
-          <span className="ml-auto flex items-center gap-4">
-            {FUTURE.map((label) => (
-              <span
-                key={label}
-                title="Coming soon"
-                className="flex cursor-default items-center gap-1 text-sm text-fg-tertiary/60"
-              >
-                {label}
-                <span className="rounded bg-surface-2 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-fg-tertiary">
-                  soon
-                </span>
-              </span>
-            ))}
-          </span>
         </div>
       </nav>
 

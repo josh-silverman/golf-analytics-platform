@@ -76,7 +76,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
         y1={PADDING.top - 8}
         x2={zeroX}
         y2={PADDING.top + visible.length * CHART_ROW_HEIGHT}
-        stroke="var(--color-border)"
+        stroke="#232B40"
         strokeWidth={1}
       />
 
@@ -127,7 +127,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
               width={Math.max(barWidth, 2)}
               height={BAR_HEIGHT}
               rx={2}
-              fill={positive ? 'var(--color-accent)' : 'var(--color-negative)'}
+              fill={positive ? '#4FD1C5' : '#EF4444'}
               opacity={positive ? 0.85 : 0.45}
             />
 
@@ -154,7 +154,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
             y1={PADDING.top + visible.length * CHART_ROW_HEIGHT}
             x2={x}
             y2={PADDING.top + visible.length * CHART_ROW_HEIGHT + 4}
-            stroke="var(--color-border)"
+            stroke="#232B40"
             strokeWidth={1}
           />
         )

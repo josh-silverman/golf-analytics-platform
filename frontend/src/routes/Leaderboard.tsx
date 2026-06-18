@@ -301,6 +301,12 @@ export function Leaderboard() {
           </div>
         )}
 
+        {predictions && (
+          <p className="text-xs italic text-fg-tertiary">
+            Pre-event predictions — not updated during play.
+          </p>
+        )}
+
         {trackRecord?.available && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
             <span className="font-medium text-fg-secondary">
@@ -443,8 +449,8 @@ export function Leaderboard() {
           </div>
 
           <div className="overflow-hidden rounded-lg border">
-            <div className="max-h-[70vh] overflow-y-auto">
-              <table className="w-full text-sm">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead className="sticky top-0 z-10">
                   <tr className="bg-surface-2 text-left text-xs uppercase tracking-wider text-fg-tertiary">
                     <th className="px-4 py-3 w-12 text-right">#</th>
