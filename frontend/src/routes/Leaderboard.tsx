@@ -364,13 +364,19 @@ export function Leaderboard() {
         <>
           {/* How to read this board — reflects the model's real strengths. */}
           <div className="rounded-lg border border-border/70 bg-surface px-4 py-3 text-xs leading-relaxed text-fg-secondary">
-            <span className="font-medium text-fg">How to read this board.</span>{' '}
-            Players are ranked by <span className="text-accent">Top 20</span> — the market where the
-            model is most reliable, together with Make Cut. <span className="text-fg">Win</span> is
-            intentionally de-emphasised: the model reads overall contention well but does not
-            reliably single out one winner, so weigh a player&rsquo;s chances by Top 10 / Top 20 /
-            Make Cut rather than the Win column. Click any column header to re-sort, or a player to
-            view their strokes-gained trends.
+            <p className="font-medium text-fg">How to read this board</p>
+            <ul className="mt-1.5 list-disc space-y-1 pl-4 marker:text-fg-tertiary">
+              <li>
+                Players are ranked by <span className="text-accent">Top 20</span> — the market where
+                the model is most reliable, together with Make Cut.
+              </li>
+              <li>
+                <span className="text-fg">Win</span> is intentionally de-emphasised: the model reads
+                overall contention well but does not reliably single out one winner — weigh a
+                player&rsquo;s chances by Top 10 / Top 20 / Make Cut, not the Win column.
+              </li>
+              <li>Click any column header to re-sort, or a player to view their strokes-gained trends.</li>
+            </ul>
           </div>
 
           {/* Completed event → model report card; otherwise field at-a-glance */}
