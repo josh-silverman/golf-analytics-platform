@@ -60,7 +60,7 @@ describe('Home', () => {
   it('renders the page heading immediately', () => {
     mockFetch()
     renderHome(makeClient())
-    expect(screen.getByRole('heading', { name: /PGA Tour Analytics/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Pinpoint/i })).toBeInTheDocument()
   })
 
   it('renders the healthz status when the backend responds', async () => {

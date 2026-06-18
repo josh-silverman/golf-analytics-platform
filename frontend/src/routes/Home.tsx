@@ -61,7 +61,8 @@ export function Home() {
       {/* Hero                                                                */}
       {/* ------------------------------------------------------------------ */}
       <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">PGA Tour Analytics</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Pinpoint</h1>
+        <p className="text-xs uppercase tracking-[0.25em] text-fg-tertiary">Golf Analytics</p>
         <p className="max-w-xl text-fg-secondary">
           End-to-end sports analytics platform: strokes-gained feature engineering,
           gradient-boosted outcome classification, and per-market probability

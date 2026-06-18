@@ -1,6 +1,7 @@
 import { Link, NavLink, Navigate, Route, Routes } from 'react-router'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { Logo } from './components/Logo'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
@@ -34,7 +35,9 @@ export default function App() {
     <div className="min-h-screen bg-background">
       <nav className="border-b bg-surface px-6 py-3">
         <div className="mx-auto flex max-w-6xl items-center gap-6">
-          <span className="font-semibold text-fg">PGA Analytics</span>
+          <NavLink to="/" end aria-label="Pinpoint home" className="mr-1">
+            <Logo />
+          </NavLink>
           <NavLink to="/" end className={navClass}>
             Home
           </NavLink>
