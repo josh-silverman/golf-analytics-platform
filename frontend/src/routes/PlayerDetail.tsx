@@ -14,7 +14,26 @@
 import { Link, useParams } from 'react-router'
 
 import { usePlayer, useRecentRounds } from '../lib/api/players'
+import { usePredictions } from '../lib/api/predictions'
+import { useCurrentTournament } from '../lib/api/tournaments'
 import type { Round } from '../lib/api/types'
+
+// Current-event model outlook. Same honest emphasis as the leaderboard: Win is
+// de-emphasised (the model doesn't sharply pick one winner), Top 20 highlighted
+// as the most reliable market.
+type ProbKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
+
+const OUTLOOK_MARKETS: { key: ProbKey; label: string; valueClass: string }[] = [
+  { key: 'win_prob', label: 'Win', valueClass: 'text-fg-tertiary' },
+  { key: 'top_5_prob', label: 'Top 5', valueClass: 'text-fg' },
+  { key: 'top_10_prob', label: 'Top 10', valueClass: 'text-fg' },
+  { key: 'top_20_prob', label: 'Top 20', valueClass: 'text-accent' },
+  { key: 'make_cut_prob', label: 'Make Cut', valueClass: 'text-fg-secondary' },
+]
+
+function formatPct(p: number): string {
+  return `${(p * 100).toFixed(1)}%`
+}
 
 // ---------------------------------------------------------------------------
 // Sparkline geometry constants
@@ -306,6 +325,13 @@ export function PlayerDetail() {
   const { data: playerEnv, isLoading: playerLoading, isError: playerError } = usePlayer(playerId)
   const { data: roundsEnv, isLoading: roundsLoading } = useRecentRounds(playerId)
 
+  // Current-event model probabilities for this player (cheap — the board is
+  // cached server-side). Empty when there's no active event or the player isn't
+  // in its field.
+  const { data: currentTournament } = useCurrentTournament()
+  const { data: predictions } = usePredictions(currentTournament?.id ?? null)
+  const outlook = predictions?.outcomes.find((o) => o.player_id === playerId) ?? null
+
   const player = playerEnv?.data
   // API returns most-recent first; reverse so chart reads oldest → newest
   const rounds = roundsEnv ? [...roundsEnv.data].reverse() : []
@@ -358,6 +384,43 @@ export function PlayerDetail() {
           </span>
         </div>
       </header>
+
+      {/* Current-event model outlook */}
+      {currentTournament && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-base font-semibold">Current Event Outlook</h2>
+            <Link to="/leaderboard" className="text-xs text-accent hover:underline">
+              {currentTournament.name} →
+            </Link>
+          </div>
+          {outlook ? (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {OUTLOOK_MARKETS.map((m) => (
+                  <div key={m.key} className="rounded-lg border bg-surface p-3">
+                    <p className="text-xs uppercase tracking-wider text-fg-tertiary">{m.label}</p>
+                    <p className={`mt-1 font-mono text-lg font-semibold tabular-nums ${m.valueClass}`}>
+                      {formatPct(outlook[m.key])}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-fg-tertiary">
+                From the active model
+                {predictions?.model_version_id ? (
+                  <> (<span className="font-mono">{predictions.model_name}</span>)</>
+                ) : null}
+                . Top 20 and Make Cut are the most reliable markets; Win is intentionally coarse.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-fg-tertiary">
+              Not in the field for {currentTournament.name}.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* SG Trend Charts */}
       {rounds.length > 0 && (

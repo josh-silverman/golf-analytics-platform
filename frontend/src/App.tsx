@@ -1,19 +1,38 @@
-import { NavLink, Route, Routes } from 'react-router'
+import { Link, NavLink, Route, Routes } from 'react-router'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { Benchmark } from './routes/Benchmark'
-import { BettingEdge } from './routes/BettingEdge'
-import { Diagnostics } from './routes/Diagnostics'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
 import { Players } from './routes/Players'
-import { Simulations } from './routes/Simulations'
 import { TournamentDetail } from './routes/TournamentDetail'
 import { Tournaments } from './routes/Tournaments'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `text-sm transition-colors ${isActive ? 'text-accent font-medium' : 'text-fg-secondary hover:text-fg'}`
+
+// Views on the roadmap but not yet live. Shown in the nav as disabled "soon"
+// chips so the roadmap is legible, and routed to a ComingSoon placeholder so a
+// direct URL lands somewhere honest rather than a half-finished page.
+const FUTURE = ['Betting Edge', 'Benchmark', 'Diagnostics'] as const
+
+function ComingSoon({ title }: { title: string }) {
+  return (
+    <main className="mx-auto max-w-6xl px-6 py-20 text-center">
+      <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+        Future addition
+      </p>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">{title}</h1>
+      <p className="mx-auto mt-3 max-w-md text-sm text-fg-secondary">
+        This view is on the roadmap and not yet available. The model, leaderboard,
+        players, and tournaments are all live today.
+      </p>
+      <Link to="/leaderboard" className="mt-6 inline-block text-sm text-accent hover:underline">
+        → Go to the Leaderboard
+      </Link>
+    </main>
+  )
+}
 
 export default function App() {
   return (
@@ -33,18 +52,20 @@ export default function App() {
           <NavLink to="/tournaments" className={navClass}>
             Tournaments
           </NavLink>
-          <NavLink to="/simulations" className={navClass}>
-            Simulation
-          </NavLink>
-          <NavLink to="/edge" className={navClass}>
-            Betting Edge
-          </NavLink>
-          <NavLink to="/benchmark" className={navClass}>
-            Benchmark
-          </NavLink>
-          <NavLink to="/diagnostics" className={navClass}>
-            Diagnostics
-          </NavLink>
+          <span className="ml-auto flex items-center gap-4">
+            {FUTURE.map((label) => (
+              <span
+                key={label}
+                title="Coming soon"
+                className="flex cursor-default items-center gap-1 text-sm text-fg-tertiary/60"
+              >
+                {label}
+                <span className="rounded bg-surface-2 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-fg-tertiary">
+                  soon
+                </span>
+              </span>
+            ))}
+          </span>
         </div>
       </nav>
 
@@ -52,14 +73,14 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/leaderboard" element={<ErrorBoundary><Leaderboard /></ErrorBoundary>} />
-          <Route path="/simulations" element={<ErrorBoundary><Simulations /></ErrorBoundary>} />
-          <Route path="/edge" element={<ErrorBoundary><BettingEdge /></ErrorBoundary>} />
           <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
           <Route path="/tournaments" element={<ErrorBoundary><Tournaments /></ErrorBoundary>} />
           <Route path="/tournaments/:id" element={<ErrorBoundary><TournamentDetail /></ErrorBoundary>} />
-          <Route path="/benchmark" element={<ErrorBoundary><Benchmark /></ErrorBoundary>} />
-          <Route path="/diagnostics" element={<ErrorBoundary><Diagnostics /></ErrorBoundary>} />
+          {/* Roadmap views — gated until live. */}
+          <Route path="/edge" element={<ComingSoon title="Betting Edge" />} />
+          <Route path="/benchmark" element={<ComingSoon title="Benchmark" />} />
+          <Route path="/diagnostics" element={<ComingSoon title="Diagnostics" />} />
         </Routes>
       </ErrorBoundary>
     </div>

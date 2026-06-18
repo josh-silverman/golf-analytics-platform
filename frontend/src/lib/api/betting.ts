@@ -18,6 +18,44 @@ export const OUTCOME_LABELS: Record<OutcomeKey, string> = {
   make_cut_prob: 'Make Cut',
 }
 
+// Per-market reliability, grounded in the rolling-origin backtest (skill vs a
+// base-rate baseline) and live odds availability. This is deliberately honest:
+// the model improves on a naive baseline but does NOT beat a sharp sportsbook,
+// so large edges are most likely model error, not exploitable value. We surface
+// that here so the board reads as model-vs-market *divergence* (research), not a
+// "+EV" money printer.
+//   - win/top_5: model calibration is coarse (few positive examples → isotonic
+//     collapses to a near-flat plateau); divergences are mostly noise.
+//   - top_10/top_20: best model resolution + real book odds, but still
+//     mis-rates individual players vs the book.
+//   - make_cut: best-calibrated market, but NO live book odds (synthetic lines),
+//     so its "edge" is a vig artifact, not a real comparison.
+export const OUTCOME_RELIABILITY: Record<
+  OutcomeKey,
+  { tier: 'low' | 'medium' | 'synthetic'; note: string }
+> = {
+  win_prob: {
+    tier: 'low',
+    note: 'Win probabilities are coarse (model can’t separate this market); edges are likely noise.',
+  },
+  top_5_prob: {
+    tier: 'low',
+    note: 'Thin model resolution on this market; treat edges as directional only.',
+  },
+  top_10_prob: {
+    tier: 'medium',
+    note: 'Model’s strongest real-odds markets, but it still mis-rates individual players vs the book.',
+  },
+  top_20_prob: {
+    tier: 'medium',
+    note: 'Model’s strongest real-odds markets, but it still mis-rates individual players vs the book.',
+  },
+  make_cut_prob: {
+    tier: 'synthetic',
+    note: 'No live sportsbook make-cut market — odds are synthetic, so the edge is a vig artifact, not real.',
+  },
+}
+
 export interface BettingLine {
   player_id: number
   player_name: string
@@ -27,6 +65,7 @@ export interface BettingLine {
   edge: number
   ev_per_dollar: number
   kelly_fraction: number
+  odds_source: string
 }
 
 export interface BettingBoard {
@@ -34,6 +73,7 @@ export interface BettingBoard {
   tournament_name: string
   outcome_key: string
   n_positive_ev: number
+  odds_source: string
   lines: BettingLine[]
 }
 
@@ -47,7 +87,7 @@ async function fetchBettingEdge(
   return r.json() as Promise<BettingBoard>
 }
 
-export function useBettingEdge(tournamentId: number | null, outcomeKey: OutcomeKey = 'win_prob') {
+export function useBettingEdge(tournamentId: number | null, outcomeKey: OutcomeKey = 'top_20_prob') {
   return useQuery({
     queryKey: ['betting', tournamentId, outcomeKey],
     queryFn: () => fetchBettingEdge(tournamentId!, outcomeKey),

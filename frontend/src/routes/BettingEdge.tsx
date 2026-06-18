@@ -3,6 +3,7 @@ import { useState } from 'react'
 import {
   OUTCOME_KEYS,
   OUTCOME_LABELS,
+  OUTCOME_RELIABILITY,
   type BettingLine,
   type OutcomeKey,
   useBettingEdge,
@@ -267,11 +268,46 @@ function LinesTable({ lines }: { lines: BettingLine[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Reliability note — honest, per-market framing of how much to trust the edge
+// ---------------------------------------------------------------------------
+
+function ReliabilityNote({ outcomeKey }: { outcomeKey: OutcomeKey }) {
+  const { tier, note } = OUTCOME_RELIABILITY[outcomeKey]
+  const style =
+    tier === 'medium'
+      ? 'border-accent/30 bg-accent/5 text-fg-secondary'
+      : 'border-negative/30 bg-negative/5 text-fg-secondary'
+  const badge =
+    tier === 'medium'
+      ? { label: 'Best available market', cls: 'bg-accent/15 text-accent' }
+      : tier === 'synthetic'
+        ? { label: 'Synthetic odds', cls: 'bg-negative/15 text-negative' }
+        : { label: 'Low confidence', cls: 'bg-negative/15 text-negative' }
+
+  return (
+    <div className={`rounded-lg border px-4 py-3 text-xs ${style}`}>
+      <div className="flex items-center gap-2">
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.cls}`}>
+          {badge.label}
+        </span>
+        <span className="font-medium text-fg">{OUTCOME_LABELS[outcomeKey]} market</span>
+      </div>
+      <p className="mt-1.5 leading-relaxed">{note}</p>
+      <p className="mt-1.5 leading-relaxed text-fg-tertiary">
+        This model improves on a naive base-rate baseline but does not beat a sharp sportsbook.
+        Read this board as where the model <em>disagrees</em> with the market — a research signal,
+        not guaranteed +EV. Large edges are most often model error, not value.
+      </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export function BettingEdge() {
-  const [outcomeKey, setOutcomeKey] = useState<OutcomeKey>('win_prob')
+  const [outcomeKey, setOutcomeKey] = useState<OutcomeKey>('top_20_prob')
 
   const { data: currentTournament, isLoading: tournamentLoading } = useCurrentTournament()
   const tournamentId = currentTournament?.id ?? null
@@ -302,10 +338,15 @@ export function BettingEdge() {
         {board && (
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-fg-tertiary">
             <span>
-              Source: <span className="font-mono text-accent">MC Simulation</span>
+              Odds:{' '}
+              {board.odds_source === 'datagolf' ? (
+                <span className="font-mono text-positive">Live sportsbook consensus</span>
+              ) : (
+                <span className="font-mono text-accent">Synthetic (model)</span>
+              )}
             </span>
             <span>
-              Vig removed: <span className="font-mono">10%</span>
+              Model: <span className="font-mono">Calibrated classifier (golf_v1)</span>
             </span>
             <span>
               Sizing:{' '}
@@ -319,8 +360,9 @@ export function BettingEdge() {
           </div>
         )}
         <p className="mt-2 text-xs text-fg-tertiary">
-          Odds are mock lines generated from simulation probabilities with a 10% vig margin and
-          realistic noise. Edge = model probability − book implied probability after vig removal.
+          {board?.odds_source === 'datagolf'
+            ? 'Odds are a median consensus across sportsbooks (via DataGolf), de-vigged by field normalization. Edge = model probability − fair book-implied probability.'
+            : 'No live odds feed configured — odds are synthetic lines from model probabilities with a 10% vig margin. Edge = model probability − book implied probability after vig removal.'}
         </p>
       </header>
 
@@ -345,6 +387,11 @@ export function BettingEdge() {
             <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">Market</p>
             <MarketPicker value={outcomeKey} onChange={setOutcomeKey} />
           </section>
+
+          {/* Honest reliability caveat — the model improves on a naive baseline
+              but does not beat a sharp sportsbook, so this board is a model-vs-
+              market divergence view, not a guaranteed +EV signal. */}
+          <ReliabilityNote outcomeKey={outcomeKey} />
 
           {/* Edge bar chart */}
           <section className="space-y-3">

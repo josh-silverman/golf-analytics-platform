@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Leaderboard } from './Leaderboard'
@@ -13,7 +14,9 @@ function makeClient() {
 function renderLeaderboard(client: QueryClient) {
   return render(
     <QueryClientProvider client={client}>
-      <Leaderboard />
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }

@@ -64,8 +64,8 @@ export function Home() {
         <h1 className="text-3xl font-semibold tracking-tight">PGA Tour Analytics</h1>
         <p className="max-w-xl text-fg-secondary">
           End-to-end sports analytics platform: strokes-gained feature engineering,
-          gradient-boosted outcome classification, isotonic calibration, Monte Carlo
-          simulation, and Kelly-sized betting edge — all on live tour data.
+          gradient-boosted outcome classification, and per-market probability
+          calibration — all on live tour data.
         </p>
         <div className="flex flex-wrap gap-2 pt-1">
           <Pill label="FastAPI" />
@@ -118,43 +118,26 @@ export function Home() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <FeatureCard
             to="/leaderboard"
-            category="ML · Phase 2"
+            category="Predictions"
             title="Prediction Leaderboard"
-            description="GBDT classifier win/top-N probabilities for every player in the field, served from the active model version."
-          />
-          <FeatureCard
-            to="/simulations"
-            category="Simulation · Phase 3"
-            title="Monte Carlo Simulation"
-            badge="10k iter"
-            description="Vectorised numpy simulation producing coherent outcome distributions — win ≤ top-5 ≤ top-10 ≤ make-cut by construction."
-          />
-          <FeatureCard
-            to="/edge"
-            category="Betting · Phase 4"
-            title="Betting Edge"
-            badge="+EV"
-            description="Half-Kelly sizing on mock sportsbook lines. Custom SVG diverging bar chart shows edge magnitude at a glance."
-          />
-          <FeatureCard
-            to="/diagnostics"
-            category="ML · Phase 2"
-            title="Calibration Diagnostics"
-            description="Reliability diagrams comparing raw vs isotonic-calibrated Brier scores — the evidence behind every probability served."
+            description="GBDT win / top-N probabilities for every player in the field, served from the active model version."
           />
           <FeatureCard
             to="/players"
-            category="Data"
+            category="Players"
             title="Player SG Trends"
             description="Per-player strokes-gained sparklines across OTT, APP, ARG, PUTT, and Total. Custom SVG charts, no D3 dependency."
           />
           <FeatureCard
             to="/tournaments"
-            category="Data"
+            category="Schedule"
             title="Tournaments"
-            description="5 seasons × 40 events of deterministic mock data. Identical output on every seed for reproducible ML experiments."
+            description="Live DataGolf data across 3 PGA Tour seasons — real fields, results, and strokes-gained powering every prediction."
           />
         </div>
+        <p className="text-xs text-fg-tertiary">
+          Coming soon: Betting Edge, Benchmark, and ML Diagnostics.
+        </p>
       </section>
 
       {/* ------------------------------------------------------------------ */}
