@@ -123,10 +123,14 @@ export function Home() {
             description="Win / top-N / make-cut probabilities for any tournament's field. Switch events, sort by market, search players, and click any name for their strokes-gained trends and current-event outlook."
           />
         </div>
-        <p className="text-xs text-fg-tertiary">
+        <p
+          className="overflow-x-auto whitespace-nowrap text-xs text-fg-tertiary"
+          title="Out-of-sample Brier skill vs a base-rate baseline (higher = more reliable). Make-cut and Top-20 carry genuine skill; Win is intentionally coarse."
+        >
           <span className="font-medium text-fg-secondary">Model reliability</span>
-          <span className="px-1.5 font-semibold text-fg-secondary">·</span>
-          out-of-sample Brier skill (higher = more reliable):{' '}
+          <span className="px-1.5 font-semibold text-fg">·</span>
+          <span className="cursor-help text-fg-tertiary">Brier skill ⓘ</span>
+          <span className="px-1.5 font-semibold text-fg">·</span>
           <span className="font-mono text-accent">Make cut +0.16</span>
           <span className="px-1.5 font-semibold text-fg">·</span>
           <span className="font-mono text-accent">Top 20 +0.07</span>
