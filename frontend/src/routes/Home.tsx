@@ -115,18 +115,12 @@ export function Home() {
       {/* ------------------------------------------------------------------ */}
       <section className="space-y-3">
         <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">Features</p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3">
           <FeatureCard
             to="/leaderboard"
             category="Predictions"
             title="Prediction Leaderboard"
-            description="Win / top-N / make-cut probabilities for any tournament's field. Switch events, sort by market, and click a player for their strokes-gained trends."
-          />
-          <FeatureCard
-            to="/players"
-            category="Players"
-            title="Player Directory"
-            description="Search the full tour registry; open any player for strokes-gained sparklines, recent form, and their current-event outlook."
+            description="Win / top-N / make-cut probabilities for any tournament's field. Switch events, sort by market, search players, and click any name for their strokes-gained trends and current-event outlook."
           />
         </div>
         <p className="text-xs text-fg-tertiary">

@@ -44,9 +44,6 @@ export default function App() {
           <NavLink to="/leaderboard" className={navClass}>
             Leaderboard
           </NavLink>
-          <NavLink to="/players" className={navClass}>
-            Players
-          </NavLink>
           <span className="ml-auto flex items-center gap-4">
             {FUTURE.map((label) => (
               <span
