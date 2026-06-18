@@ -123,9 +123,17 @@ export function Home() {
             description="Win / top-N / make-cut probabilities for any tournament's field. Switch events, sort by market, search players, and click any name for their strokes-gained trends and current-event outlook."
           />
         </div>
-        <p className="text-xs text-fg-tertiary">
-          Coming soon: Betting Edge, Benchmark, and ML Diagnostics.
-        </p>
+        <div className="rounded-lg border border-border/70 bg-surface px-4 py-3 text-xs leading-relaxed text-fg-secondary">
+          <span className="font-medium text-fg">Model reliability</span> — out-of-sample Brier
+          skill (higher = more reliable):{' '}
+          <span className="font-mono text-accent">Make cut +0.16</span> ·{' '}
+          <span className="font-mono text-accent">Top 20 +0.07</span> ·{' '}
+          <span className="font-mono text-fg-secondary">Top 10 +0.05</span> ·{' '}
+          <span className="font-mono text-fg-secondary">Top 5 +0.05</span> ·{' '}
+          <span className="font-mono text-fg-tertiary">Win +0.00</span>. Make-cut and Top-20 carry
+          genuine skill; Win is intentionally coarse — read contention through Top 10 / Top 20 /
+          Make Cut, not the Win column.
+        </div>
       </section>
 
       {/* ------------------------------------------------------------------ */}

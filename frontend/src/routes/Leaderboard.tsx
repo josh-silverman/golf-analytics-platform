@@ -94,37 +94,6 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
   )
 }
 
-// Validated out-of-sample Brier skill of the active model (from the rolling
-// backtest). Keyed by model version so a future model swap hides stale figures
-// rather than misreporting them. Higher = more reliable; win is ~0 by design.
-const MODEL_SKILL: Record<
-  string,
-  { make_cut: number; top_20: number; top_10: number; top_5: number; win: number }
-> = {
-  '136a5aca11d2': { make_cut: 0.16, top_20: 0.07, top_10: 0.05, top_5: 0.05, win: 0.0 },
-}
-
-function SkillPill({
-  label,
-  value,
-  tone,
-}: {
-  label: string
-  value: number
-  tone: 'good' | 'ok' | 'weak'
-}) {
-  const cls =
-    tone === 'good' ? 'text-accent' : tone === 'weak' ? 'text-fg-tertiary' : 'text-fg-secondary'
-  return (
-    <span className="text-fg-tertiary">
-      {label}{' '}
-      <span className={`font-mono ${cls}`}>
-        {value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2)}
-      </span>
-    </span>
-  )
-}
-
 export function Leaderboard() {
   const { data: currentTournament, isLoading: currentLoading } = useCurrentTournament()
   const { data: tournamentsEnv } = useTournaments()
@@ -232,11 +201,6 @@ export function Leaderboard() {
   const drawerOutcome =
     predictions?.outcomes.find((o) => o.player_id === selectedPlayerId) ?? null
 
-  // Validated skill figures for whichever model is actually serving (or none).
-  const modelSkill = predictions?.model_version_id
-    ? MODEL_SKILL[predictions.model_version_id]
-    : undefined
-
   // At-a-glance leaders, computed from the already-loaded field.
   const fieldSummary = useMemo(() => {
     const o = predictions?.outcomes ?? []
@@ -334,23 +298,6 @@ export function Leaderboard() {
               </span>
             </span>
             <span>As of: {predictions.as_of}</span>
-          </div>
-        )}
-
-        {predictions && modelSkill && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="font-medium text-fg-secondary">Model reliability:</span>
-            <SkillPill label="Make cut" value={modelSkill.make_cut} tone="good" />
-            <SkillPill label="Top 20" value={modelSkill.top_20} tone="good" />
-            <SkillPill label="Top 10" value={modelSkill.top_10} tone="ok" />
-            <SkillPill label="Top 5" value={modelSkill.top_5} tone="ok" />
-            <SkillPill label="Win" value={modelSkill.win} tone="weak" />
-            <span
-              className="cursor-help text-fg-tertiary"
-              title="Brier skill vs a base-rate baseline (positive beats it), measured out-of-sample on the rolling backtest. Make-cut and Top-20 carry genuine skill; Win is intentionally coarse."
-            >
-              out-of-sample Brier skill · higher = more reliable ⓘ
-            </span>
           </div>
         )}
 
