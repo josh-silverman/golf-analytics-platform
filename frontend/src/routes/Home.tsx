@@ -120,19 +120,13 @@ export function Home() {
             to="/leaderboard"
             category="Predictions"
             title="Prediction Leaderboard"
-            description="GBDT win / top-N probabilities for every player in the field, served from the active model version."
+            description="Win / top-N / make-cut probabilities for any tournament's field. Switch events, sort by market, and click a player for their strokes-gained trends."
           />
           <FeatureCard
             to="/players"
             category="Players"
-            title="Player SG Trends"
-            description="Per-player strokes-gained sparklines across OTT, APP, ARG, PUTT, and Total. Custom SVG charts, no D3 dependency."
-          />
-          <FeatureCard
-            to="/tournaments"
-            category="Schedule"
-            title="Tournaments"
-            description="Live DataGolf data across 3 PGA Tour seasons — real fields, results, and strokes-gained powering every prediction."
+            title="Player Directory"
+            description="Search the full tour registry; open any player for strokes-gained sparklines, recent form, and their current-event outlook."
           />
         </div>
         <p className="text-xs text-fg-tertiary">

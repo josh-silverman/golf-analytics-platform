@@ -1,12 +1,10 @@
-import { Link, NavLink, Route, Routes } from 'react-router'
+import { Link, NavLink, Navigate, Route, Routes } from 'react-router'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
 import { Players } from './routes/Players'
-import { TournamentDetail } from './routes/TournamentDetail'
-import { Tournaments } from './routes/Tournaments'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `text-sm transition-colors ${isActive ? 'text-accent font-medium' : 'text-fg-secondary hover:text-fg'}`
@@ -49,9 +47,6 @@ export default function App() {
           <NavLink to="/players" className={navClass}>
             Players
           </NavLink>
-          <NavLink to="/tournaments" className={navClass}>
-            Tournaments
-          </NavLink>
           <span className="ml-auto flex items-center gap-4">
             {FUTURE.map((label) => (
               <span
@@ -75,12 +70,12 @@ export default function App() {
           <Route path="/leaderboard" element={<ErrorBoundary><Leaderboard /></ErrorBoundary>} />
           <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
-          <Route path="/tournaments" element={<ErrorBoundary><Tournaments /></ErrorBoundary>} />
-          <Route path="/tournaments/:id" element={<ErrorBoundary><TournamentDetail /></ErrorBoundary>} />
           {/* Roadmap views — gated until live. */}
           <Route path="/edge" element={<ComingSoon title="Betting Edge" />} />
           <Route path="/benchmark" element={<ComingSoon title="Benchmark" />} />
           <Route path="/diagnostics" element={<ComingSoon title="Diagnostics" />} />
+          {/* Removed (e.g. /tournaments) or unknown paths land on the hub. */}
+          <Route path="*" element={<Navigate to="/leaderboard" replace />} />
         </Routes>
       </ErrorBoundary>
     </div>

@@ -1,28 +1,20 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
-import { useCurrentTournament } from '../lib/api/tournaments'
+
+import { PlayerDrawer } from '../components/PlayerDrawer'
 import { usePredictions } from '../lib/api/predictions'
+import { useCurrentTournament, useTournaments } from '../lib/api/tournaments'
+import type { Tournament } from '../lib/api/types'
 
 function formatPct(p: number): string {
   return `${(p * 100).toFixed(1)}%`
 }
 
-type SortKey =
-  | 'win_prob'
-  | 'top_5_prob'
-  | 'top_10_prob'
-  | 'top_20_prob'
-  | 'make_cut_prob'
+type SortKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
 
-// Per-column config so the header and body stay in sync. ``cellClass`` carries
-// the per-column emphasis (Win is de-emphasised — the model does not sharply
-// separate a single winner; Top 20 is highlighted as the most reliable market).
-const COLUMNS: {
-  key: SortKey
-  label: string
-  cellClass: string
-  barClass: string
-}[] = [
+// Per-column config. ``cellClass`` carries the per-column emphasis (Win is
+// de-emphasised — the model does not sharply separate a single winner; Top 20 is
+// highlighted as the most reliable market).
+const COLUMNS: { key: SortKey; label: string; cellClass: string; barClass: string }[] = [
   { key: 'win_prob', label: 'Win', cellClass: 'text-fg-tertiary', barClass: 'bg-fg-tertiary/20' },
   { key: 'top_5_prob', label: 'Top 5', cellClass: 'text-fg', barClass: 'bg-fg-secondary/20' },
   { key: 'top_10_prob', label: 'Top 10', cellClass: 'text-fg', barClass: 'bg-fg-secondary/25' },
@@ -36,20 +28,64 @@ const STATUS_BADGE: Record<string, string> = {
   completed: 'bg-fg-tertiary/15 text-fg-tertiary',
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  upcoming: 'Upcoming',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+}
+
+// Dropdown ordering: live first, then soonest upcoming, then most-recent done.
+const _STATUS_ORDER: Record<string, number> = { in_progress: 0, upcoming: 1, completed: 2 }
+
+function eventLabel(t: Tournament): string {
+  const d = new Date(t.start_date).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  return `${t.name} · ${STATUS_LABEL[t.status] ?? t.status} · ${d}`
+}
+
 export function Leaderboard() {
-  const { data: currentTournament, isLoading: tournamentLoading } = useCurrentTournament()
-  const tournamentId = currentTournament?.id ?? null
+  const { data: currentTournament, isLoading: currentLoading } = useCurrentTournament()
+  const { data: tournamentsEnv } = useTournaments()
+
+  // Selected event: an explicit pick overrides; otherwise follow the current event.
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const effectiveId = selectedId ?? currentTournament?.id ?? null
+
   const {
     data: predictions,
     isLoading: predictionsLoading,
     isError,
     error,
-  } = usePredictions(tournamentId)
+  } = usePredictions(effectiveId)
 
-  // Default sort: Top 20 descending — the most reliable market, not Win.
+  // Event options for the switcher; falls back to just the current event when
+  // the full list isn't available.
+  const eventOptions = useMemo(() => {
+    const list = Array.isArray(tournamentsEnv?.data)
+      ? tournamentsEnv.data
+      : currentTournament
+        ? [currentTournament]
+        : []
+    return [...list].sort((a, b) => {
+      const sa = _STATUS_ORDER[a.status] ?? 9
+      const sb = _STATUS_ORDER[b.status] ?? 9
+      if (sa !== sb) return sa - sb
+      const ta = +new Date(a.start_date)
+      const tb = +new Date(b.start_date)
+      return a.status === 'upcoming' ? ta - tb : tb - ta
+    })
+  }, [tournamentsEnv, currentTournament])
+
+  const selectedTournament =
+    eventOptions.find((t) => t.id === effectiveId) ?? currentTournament ?? null
+
   const [sortKey, setSortKey] = useState<SortKey>('top_20_prob')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [query, setQuery] = useState('')
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null)
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -90,39 +126,56 @@ export function Leaderboard() {
     })
   }, [predictions, sortKey, sortDir, query])
 
+  const drawerOutcome =
+    predictions?.outcomes.find((o) => o.player_id === selectedPlayerId) ?? null
+
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
       <header className="space-y-3">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <h1 className="text-2xl font-semibold tracking-tight">Leaderboard</h1>
-          {currentTournament && (
+          {selectedTournament && (
             <span
               className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium uppercase tracking-wider ${
-                STATUS_BADGE[currentTournament.status] ?? 'bg-fg-tertiary/15 text-fg-tertiary'
+                STATUS_BADGE[selectedTournament.status] ?? 'bg-fg-tertiary/15 text-fg-tertiary'
               }`}
             >
-              {currentTournament.status.replace('_', ' ')}
+              {selectedTournament.status.replace('_', ' ')}
             </span>
           )}
         </div>
 
-        {currentTournament && (
-          <p className="text-sm text-fg-secondary">
-            {currentTournament.name} ·{' '}
-            {new Date(currentTournament.start_date).toLocaleDateString(undefined, {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })}
-            {predictions && (
-              <span className="text-fg-tertiary"> · {predictions.outcomes.length} players</span>
+        {/* Event switcher — pick any tournament's board */}
+        {eventOptions.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs uppercase tracking-wider text-fg-tertiary" htmlFor="event-select">
+              Event
+            </label>
+            <select
+              id="event-select"
+              value={effectiveId ?? ''}
+              onChange={(e) => setSelectedId(Number(e.target.value))}
+              className="max-w-full rounded-md border bg-surface px-3 py-2 text-sm text-fg focus:border-accent focus:outline-none"
+            >
+              {eventOptions.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {eventLabel(t)}
+                </option>
+              ))}
+            </select>
+            {selectedTournament?.purse != null && (
+              <span className="text-xs text-fg-tertiary">
+                Purse ${(selectedTournament.purse / 1_000_000).toFixed(1)}M
+              </span>
             )}
-          </p>
+          </div>
         )}
 
         {predictions && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
-            <span>Model: <span className="font-mono text-fg-secondary">{predictions.model_name}</span></span>
+            <span>
+              Model: <span className="font-mono text-fg-secondary">{predictions.model_name}</span>
+            </span>
             <span>
               Version:{' '}
               {predictions.model_version_id ? (
@@ -132,14 +185,17 @@ export function Leaderboard() {
               )}
             </span>
             <span>
-              Features: <span className="font-mono text-fg-secondary">{predictions.feature_set_hash.slice(0, 12)}</span>
+              Features:{' '}
+              <span className="font-mono text-fg-secondary">
+                {predictions.feature_set_hash.slice(0, 12)}
+              </span>
             </span>
             <span>As of: {predictions.as_of}</span>
           </div>
         )}
       </header>
 
-      {(tournamentLoading || predictionsLoading) && (
+      {(currentLoading || predictionsLoading) && (
         <div className="space-y-1">
           <p className="text-fg-secondary">Loading predictions…</p>
           <p className="text-xs text-fg-tertiary">
@@ -149,7 +205,7 @@ export function Leaderboard() {
         </div>
       )}
 
-      {!tournamentLoading && currentTournament == null && (
+      {!currentLoading && effectiveId == null && (
         <p className="text-fg-secondary">No active tournament to predict.</p>
       )}
 
@@ -167,8 +223,8 @@ export function Leaderboard() {
             Sorted by <span className="text-accent">Top 20</span> — the model's most reliable
             market (make-cut and top-20 carry genuine skill). <span className="text-fg">Win</span>{' '}
             is intentionally de-emphasised: the model does not sharply separate a single winner, so
-            read contention through Top 10 / Top 20 / Make Cut rather than the Win column. Click any
-            column header to re-sort.
+            read contention through Top 10 / Top 20 / Make Cut rather than the Win column. Click a
+            column header to re-sort, or a player to see their strokes-gained trends.
           </div>
 
           {/* Controls */}
@@ -227,16 +283,15 @@ export function Leaderboard() {
                         idx === 0 ? 'bg-surface-2/60' : 'bg-surface'
                       }`}
                     >
-                      <td className="px-4 py-2.5 text-right font-mono text-fg-tertiary">
-                        {idx + 1}
-                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-fg-tertiary">{idx + 1}</td>
                       <td className="px-4 py-2.5 font-medium text-fg">
-                        <Link
-                          to={`/players/${o.player_id}`}
-                          className="hover:text-accent hover:underline"
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPlayerId(o.player_id)}
+                          className="text-left hover:text-accent hover:underline"
                         >
                           {o.player_name}
-                        </Link>
+                        </button>
                       </td>
                       {COLUMNS.map((col) => {
                         const value = o[col.key]
@@ -249,9 +304,7 @@ export function Leaderboard() {
                                 className={`pointer-events-none absolute inset-y-[3px] right-0 rounded-sm ${col.barClass}`}
                                 style={{ width: `${width}%` }}
                               />
-                              <span
-                                className={`relative z-[1] font-mono tabular-nums ${col.cellClass}`}
-                              >
+                              <span className={`relative z-[1] font-mono tabular-nums ${col.cellClass}`}>
                                 {formatPct(value)}
                               </span>
                             </div>
@@ -266,11 +319,18 @@ export function Leaderboard() {
           </div>
 
           {rows.length === 0 && query.trim() && (
-            <p className="text-sm text-fg-tertiary">
-              No players match “{query.trim()}”.
-            </p>
+            <p className="text-sm text-fg-tertiary">No players match “{query.trim()}”.</p>
           )}
         </>
+      )}
+
+      {selectedPlayerId != null && (
+        <PlayerDrawer
+          playerId={selectedPlayerId}
+          outcome={drawerOutcome}
+          tournamentName={selectedTournament?.name ?? null}
+          onClose={() => setSelectedPlayerId(null)}
+        />
       )}
     </main>
   )
