@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
-import { usePredictions } from '../lib/api/predictions'
+import { usePredictions, type PlayerOutcome } from '../lib/api/predictions'
 import { useCurrentTournament, useTournaments } from '../lib/api/tournaments'
 import type { Tournament } from '../lib/api/types'
 
@@ -46,12 +47,57 @@ function eventLabel(t: Tournament): string {
   return `${t.name} · ${STATUS_LABEL[t.status] ?? t.status} · ${d}`
 }
 
+const SORT_KEYS: SortKey[] = COLUMNS.map((c) => c.key)
+
+function csvEscape(s: string): string {
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+// Export the current (sorted + filtered) board as CSV for offline analysis.
+function downloadBoardCsv(filename: string, rows: PlayerOutcome[]): void {
+  const header = ['Rank', 'Player', 'Win', 'Top 5', 'Top 10', 'Top 20', 'Make Cut']
+  const body = rows.map((o, i) =>
+    [
+      i + 1,
+      csvEscape(o.player_name),
+      o.win_prob.toFixed(4),
+      o.top_5_prob.toFixed(4),
+      o.top_10_prob.toFixed(4),
+      o.top_20_prob.toFixed(4),
+      o.make_cut_prob.toFixed(4),
+    ].join(','),
+  )
+  const csv = [header.join(','), ...body].join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Combined label + value in a single text node on purpose, so the player name
+// never appears as its own element (keeps it out of exact-text test queries).
+function SummaryTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-surface px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wider text-fg-tertiary">{label}</p>
+      <p className="mt-0.5 truncate text-sm text-fg">{value}</p>
+    </div>
+  )
+}
+
 export function Leaderboard() {
   const { data: currentTournament, isLoading: currentLoading } = useCurrentTournament()
   const { data: tournamentsEnv } = useTournaments()
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  // Selected event: an explicit pick overrides; otherwise follow the current event.
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // Selected event: an explicit pick overrides; otherwise follow the current
+  // event. Seeded from the URL so a board is shareable/bookmarkable.
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    const e = searchParams.get('event')
+    return e ? Number(e) : null
+  })
   const effectiveId = selectedId ?? currentTournament?.id ?? null
 
   const {
@@ -82,10 +128,28 @@ export function Leaderboard() {
   const selectedTournament =
     eventOptions.find((t) => t.id === effectiveId) ?? currentTournament ?? null
 
-  const [sortKey, setSortKey] = useState<SortKey>('top_20_prob')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    const s = searchParams.get('sort') as SortKey | null
+    return s && SORT_KEYS.includes(s) ? s : 'top_20_prob'
+  })
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(() =>
+    searchParams.get('dir') === 'asc' ? 'asc' : 'desc',
+  )
   const [query, setQuery] = useState('')
-  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null)
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(() => {
+    const p = searchParams.get('player')
+    return p ? Number(p) : null
+  })
+
+  // Mirror the current view into the URL (replace, so it doesn't spam history).
+  useEffect(() => {
+    const next = new URLSearchParams()
+    if (effectiveId != null) next.set('event', String(effectiveId))
+    next.set('sort', sortKey)
+    next.set('dir', sortDir)
+    if (selectedPlayerId != null) next.set('player', String(selectedPlayerId))
+    setSearchParams(next, { replace: true })
+  }, [effectiveId, sortKey, sortDir, selectedPlayerId, setSearchParams])
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -128,6 +192,19 @@ export function Leaderboard() {
 
   const drawerOutcome =
     predictions?.outcomes.find((o) => o.player_id === selectedPlayerId) ?? null
+
+  // At-a-glance leaders, computed from the already-loaded field.
+  const fieldSummary = useMemo(() => {
+    const o = predictions?.outcomes ?? []
+    if (o.length === 0) return null
+    const top = (k: SortKey) => o.reduce((best, c) => (c[k] > best[k] ? c : best), o[0])
+    return {
+      favorite: top('win_prob'),
+      contender: top('top_20_prob'),
+      safestCut: top('make_cut_prob'),
+      size: o.length,
+    }
+  }, [predictions])
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
@@ -227,6 +304,25 @@ export function Leaderboard() {
             column header to re-sort, or a player to see their strokes-gained trends.
           </div>
 
+          {/* Field at-a-glance */}
+          {fieldSummary && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <SummaryTile
+                label="Favorite"
+                value={`${fieldSummary.favorite.player_name} · ${formatPct(fieldSummary.favorite.win_prob)}`}
+              />
+              <SummaryTile
+                label="Top contender"
+                value={`${fieldSummary.contender.player_name} · ${formatPct(fieldSummary.contender.top_20_prob)}`}
+              />
+              <SummaryTile
+                label="Safest cut"
+                value={`${fieldSummary.safestCut.player_name} · ${formatPct(fieldSummary.safestCut.make_cut_prob)}`}
+              />
+              <SummaryTile label="Field" value={`${fieldSummary.size} players`} />
+            </div>
+          )}
+
           {/* Controls */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <input
@@ -237,11 +333,27 @@ export function Leaderboard() {
               className="w-full rounded-md border bg-surface px-3 py-2 text-sm text-fg placeholder:text-fg-tertiary focus:border-accent focus:outline-none sm:w-72"
               aria-label="Search players"
             />
-            <p className="text-xs text-fg-tertiary">
-              {query.trim()
-                ? `${rows.length} of ${predictions.outcomes.length} players`
-                : `${predictions.outcomes.length} players`}
-            </p>
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-fg-tertiary">
+                {query.trim()
+                  ? `${rows.length} of ${predictions.outcomes.length} players`
+                  : `${predictions.outcomes.length} players`}
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadBoardCsv(
+                    `${(selectedTournament?.name ?? 'leaderboard')
+                      .replace(/[^a-z0-9]+/gi, '-')
+                      .toLowerCase()}-board.csv`,
+                    rows,
+                  )
+                }
+                className="shrink-0 rounded-md border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary transition-colors hover:text-fg"
+              >
+                Export CSV
+              </button>
+            </div>
           </div>
 
           <div className="overflow-hidden rounded-lg border">
