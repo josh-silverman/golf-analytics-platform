@@ -34,13 +34,7 @@ export default function App() {
     <div className="min-h-screen bg-background">
       <nav className="border-b bg-surface px-6 py-3">
         <div className="mx-auto flex max-w-6xl items-center gap-6">
-          <NavLink to="/" end aria-label="Pinpoint home" className="mr-1">
-            <img
-              src="/pinpoint-wordmark.png"
-              alt="Pinpoint — Golf Analytics"
-              className="h-8 w-auto rounded"
-            />
-          </NavLink>
+          <span className="font-semibold text-fg">Pinpoint Analytics</span>
           <NavLink to="/" end className={navClass}>
             Home
           </NavLink>
