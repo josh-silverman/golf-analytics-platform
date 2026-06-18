@@ -1,10 +1,9 @@
 # PGA Tour Analytics Platform
 
-> Production-grade ML platform for PGA Tour outcome prediction, Monte Carlo
-> simulation, and betting edge analysis. Built end-to-end: data ingestion →
-> strokes-gained feature engineering → gradient-boosted skill estimation →
-> 10,000-iteration tournament simulation → calibrated probabilities →
-> +EV bet identification.
+> Production-grade ML platform for PGA Tour outcome prediction and betting edge
+> analysis. Built end-to-end: data ingestion → strokes-gained feature engineering
+> → gradient-boosted outcome classification → per-market calibration →
+> model-vs-market divergence with Kelly-sized framing.
 
 **Status:** Phase 0 — Foundation. The full 12-section system design is complete and committed under [`docs/architecture/`](docs/architecture/); the runtime so far is the FastAPI scaffold, the React dashboard skeleton, and a docker-compose dev stack. Phase 1+ adds the data layer, model, simulator, and betting edge analysis — see the [Roadmap](#roadmap) below.
 
@@ -13,8 +12,7 @@
 Sourced from the architecture docs. Items marked **(shipped)** work today.
 
 - **Calibrated probabilistic predictions** for win, T5, T10, and make-cut. Skill-and-simulate architecture rather than one-model-per-outcome — see [02 §4](docs/architecture/02-technical-core.md).
-- **Vectorized Monte Carlo simulator** — 10,000 iterations of a 156-player field in ~20s on a single core, NumPy-vectorized over iterations with cut logic as a boolean mask.
-- **Betting edge analysis** across 11 sportsbooks with fractional Kelly sizing, calibrated against historical odds.
+- **Betting edge analysis** — model-vs-market divergence with fractional Kelly sizing across win, top-5, top-10, and top-20 markets.
 - **Live model comparison vs. DataGolf** — head-to-head Brier scores on common events. The DataGolf benchmark page is the project's signature demo asset.
 - **Pluggable data providers** (`DataProvider` interface, decorator-wrapped Redis cache, contract-tested) so mock and DataGolf implementations swap without touching consumers — see [02 §5](docs/architecture/02-technical-core.md).
 - **Production-grade engineering** — release-time Alembic migrations, structured JSON logging with trace IDs, calibration drift monitoring, and an actual runbook. **(shipped)** scaffolds for these are in place.
@@ -58,7 +56,7 @@ The full topology is in [01 §2](docs/architecture/01-vision-and-system-design.m
 └──────────┘  └──────────┘
 ```
 
-Phase 1+ adds the Prefect ingestion + training pipelines, a `DataProvider` interface with `MockDataProvider` and (eventually) `DataGolfProvider`, the simulation engine, the model registry, and the betting edge layer. See the [planning docs](docs/architecture/) for the full picture.
+Phase 1+ adds the Prefect ingestion + training pipelines, a `DataProvider` interface with `MockDataProvider` and `DataGolfProvider`, the model registry, and the betting edge layer. See the [planning docs](docs/architecture/) for the full picture.
 
 ## Project structure
 
@@ -94,8 +92,8 @@ Phase 1+ adds the Prefect ingestion + training pipelines, a `DataProvider` inter
 |--------------------|-----------------------------------------|---------------------------------------------------------------------|
 | Backend framework  | FastAPI + Pydantic v2                   | Async-first, Pydantic models double as data contracts and OpenAPI   |
 | Python tooling     | uv, ruff, mypy (strict), pytest         | One toolchain, locked deps, fast feedback                           |
-| Database           | PostgreSQL 16                           | Materialized views + JSONB for sim result distributions             |
-| Cache / queue      | Redis 7                                 | Per-endpoint TTL cache + SSE pub/sub + arq job queue (Phase 3)      |
+| Database           | PostgreSQL 16                           | Materialized views + JSONB for feature storage                      |
+| Cache / queue      | Redis 7                                 | Per-endpoint TTL cache                                               |
 | Migrations         | Alembic (async, release-phase)          | DB url from Pydantic settings; no startup migrations                |
 | Frontend framework | Vite 6 + React 19 + TS strict           | Vite for HMR speed, React 19 for current ecosystem                  |
 | Routing / data     | React Router 7 · TanStack Query 5       | Server state stale-while-revalidate; Zustand for local UI state     |
@@ -105,7 +103,7 @@ Phase 1+ adds the Prefect ingestion + training pipelines, a `DataProvider` inter
 | Deploy target      | Fly.io (api + worker) · Vercel (web)    | "Polished but practical" — $20–40/mo per doc 03 §4                  |
 | CI                 | GitHub Actions, three jobs              | Backend / frontend / docker image — concurrency-cancelled per ref   |
 
-ML stack (XGBoost / LightGBM, Prefect, MLflow-style registry) lands in Phase 1+.
+ML stack (sklearn HistGradientBoosting with per-market calibration, MLflow-style registry) is shipped.
 
 ## Planning documents
 
@@ -121,9 +119,8 @@ Phasing from [01 §4](docs/architecture/01-vision-and-system-design.md). Each ph
 
 - **Phase 0 — Foundation.** Monorepo, FastAPI `/healthz` + `/readyz`, React shell, docker-compose, CI. *Demo:* the whole stack boots. **← shipped**
 - **Phase 1 — Data layer & mock provider.** `DataProvider` interface, `MockDataProvider` generating ~5 years of statistically plausible tour data, Postgres schema, ingestion pipeline, read-only player/tournament endpoints. *Demo:* browse players and tournaments.
-- **Phase 2 — Feature engineering & first model.** SG features, XGBoost training, model registry, isotonic calibration, predictions endpoint, leaderboard view. *Demo:* model predicts this week's field.
-- **Phase 3 — Simulation engine.** Vectorized Monte Carlo simulator with cut logic, async job queue, win / T5 / T10 / make-cut probability derivation, simulation diagnostics page. *Demo:* 10,000 sims of a 156-player field in ~20s.
-- **Phase 4 — Betting edge & analytics polish.** Mock sportsbook odds with realistic vig, edge calculation, fractional Kelly sizing, calibration reliability page, custom D3 viz, player trend pages. *Demo:* +EV bets with sizing recommendations and calibration evidence.
+- **Phase 2 — Feature engineering & first model.** SG features, gradient-boosted trees (sklearn HistGradientBoosting), model registry, per-market calibration (sigmoid for win/top-5, isotonic for top-10/20/cut), predictions endpoint, leaderboard view. *Demo:* model predicts this week's field. **← shipped**
+- **Phase 4 — Betting edge & analytics polish.** Real DataGolf sportsbook odds, edge calculation, fractional Kelly sizing, calibration reliability page, custom SVG visualizations, player trend pages. *Demo:* model-vs-market divergence with Kelly-sized framing. **← shipped**
 - **Phase 5 — Production polish & DataGolf integration.** Fly.io + Vercel deploy, Sentry + Axiom, `DataGolfProvider` swap (the contract-test suite validates it), the model-vs-DataGolf benchmark page, runbook, Loom walkthrough.
 
 ## License

@@ -152,10 +152,10 @@ pipeline to verify the DataGolf connection and train the first model:
 cd backend
 export DATA_PROVIDER=datagolf
 export DATAGOLF_API_KEY=<your-key>
-uv run python -m pipelines.bootstrap
+uv run python -m app.cli.bootstrap
 
 # On Fly.io directly
-fly ssh console -C "python -m pipelines.bootstrap"
+fly ssh console -C "python -m app.cli.bootstrap"
 ```
 
 Expected output:
@@ -224,7 +224,7 @@ make test-frontend # vitest
 echo 'DATA_PROVIDER=datagolf' >> backend/.env
 echo 'DATAGOLF_API_KEY=<your-key>' >> backend/.env
 
-cd backend && uv run python -m pipelines.bootstrap
+cd backend && uv run python -m app.cli.bootstrap
 ```
 
 ---
@@ -281,7 +281,7 @@ If using mock, the data is generated in-memory on startup — always populated.
 If using datagolf, the Redis cache may be cold. Check:
 
 ```bash
-fly ssh console -C "python -m pipelines.bootstrap --skip-train"
+fly ssh console -C "python -m app.cli.bootstrap --skip-train"
 ```
 
 ### Sentry not receiving events
