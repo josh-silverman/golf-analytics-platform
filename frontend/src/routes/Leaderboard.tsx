@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
 import { usePredictions, type PlayerOutcome } from '../lib/api/predictions'
+import { useTrackRecord } from '../lib/api/trackRecord'
 import { useCurrentTournament, useTournaments } from '../lib/api/tournaments'
 import type { Tournament } from '../lib/api/types'
 
@@ -127,6 +128,7 @@ function SkillPill({
 export function Leaderboard() {
   const { data: currentTournament, isLoading: currentLoading } = useCurrentTournament()
   const { data: tournamentsEnv } = useTournaments()
+  const { data: trackRecord } = useTrackRecord()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Selected event: an explicit pick overrides; otherwise follow the current
@@ -348,6 +350,38 @@ export function Leaderboard() {
               title="Brier skill vs a base-rate baseline (positive beats it), measured out-of-sample on the rolling backtest. Make-cut and Top-20 carry genuine skill; Win is intentionally coarse."
             >
               out-of-sample Brier skill · higher = more reliable ⓘ
+            </span>
+          </div>
+        )}
+
+        {trackRecord?.available && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
+            <span className="font-medium text-fg-secondary">
+              Track record (last {trackRecord.events} events):
+            </span>
+            <span>
+              winner in top-10{' '}
+              <span className="font-mono text-fg-secondary">
+                {formatPct(trackRecord.winner_in_top10_rate)}
+              </span>
+            </span>
+            <span>
+              · top-20 hit rate{' '}
+              <span className="font-mono text-accent">
+                {formatPct(trackRecord.avg_top20_hit_rate)}
+              </span>
+            </span>
+            <span>
+              · make-cut accuracy{' '}
+              <span className="font-mono text-accent">
+                {formatPct(trackRecord.make_cut_accuracy)}
+              </span>
+            </span>
+            <span>
+              · avg winner rank{' '}
+              <span className="font-mono text-fg-secondary">
+                {trackRecord.mean_winner_rank.toFixed(0)}
+              </span>
             </span>
           </div>
         )}

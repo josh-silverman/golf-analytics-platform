@@ -14,6 +14,7 @@ requests.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from app.domain.enums import EntryStatus
@@ -185,6 +186,13 @@ class PredictionService:
         tournament = await self._catalog.get_tournament(tournament_id)
         if tournament is None:
             return None
+
+        # Predict as the model would have *before* the event: never use data past
+        # its eve. For upcoming events this is just ``as_of`` (today); for
+        # in-progress/completed events it caps at start_date − 1, so the board —
+        # and the report card / track record built on it — is a genuine
+        # pre-event prediction rather than hindsight.
+        as_of = min(as_of, tournament.start_date - timedelta(days=1))
 
         field = await self._catalog.get_tournament_field(tournament_id)
         # Actual results per player (meaningful once the event is graded; all
