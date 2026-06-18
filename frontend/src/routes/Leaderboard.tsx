@@ -10,6 +10,12 @@ function formatPct(p: number): string {
   return `${(p * 100).toFixed(1)}%`
 }
 
+function formatFinish(o: PlayerOutcome): string {
+  if (o.final_position != null) return `${o.final_position}`
+  if (o.made_cut === false) return 'MC'
+  return '—'
+}
+
 type SortKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
 
 // Per-column config. ``cellClass`` carries the per-column emphasis (Win is
@@ -206,6 +212,28 @@ export function Leaderboard() {
     }
   }, [predictions])
 
+  const isCompleted = selectedTournament?.status === 'completed'
+
+  // Model report card: how the pre-event board compared to the actual result.
+  const reportCard = useMemo(() => {
+    if (!predictions || !isCompleted) return null
+    const o = predictions.outcomes
+    if (!o.some((x) => x.final_position != null || x.made_cut != null)) return null
+    const winner = o.find((x) => x.final_position === 1) ?? null
+    const byWin = [...o].sort((a, b) => b.win_prob - a.win_prob)
+    const winnerRank = winner
+      ? byWin.findIndex((x) => x.player_id === winner.player_id) + 1
+      : null
+    const modelTop20 = [...o].sort((a, b) => b.top_20_prob - a.top_20_prob).slice(0, 20)
+    const top20Hits = modelTop20.filter(
+      (x) => x.final_position != null && x.final_position <= 20,
+    ).length
+    const cutGraded = o.filter((x) => x.made_cut != null)
+    const cutCorrect = cutGraded.filter((x) => (x.make_cut_prob >= 0.5) === x.made_cut).length
+    const cutAcc = cutGraded.length ? cutCorrect / cutGraded.length : null
+    return { winner, winnerRank, top20Hits, cutAcc }
+  }, [predictions, isCompleted])
+
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
       <header className="space-y-3">
@@ -304,23 +332,47 @@ export function Leaderboard() {
             column header to re-sort, or a player to see their strokes-gained trends.
           </div>
 
-          {/* Field at-a-glance */}
-          {fieldSummary && (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <SummaryTile
-                label="Favorite"
-                value={`${fieldSummary.favorite.player_name} · ${formatPct(fieldSummary.favorite.win_prob)}`}
-              />
-              <SummaryTile
-                label="Top contender"
-                value={`${fieldSummary.contender.player_name} · ${formatPct(fieldSummary.contender.top_20_prob)}`}
-              />
-              <SummaryTile
-                label="Safest cut"
-                value={`${fieldSummary.safestCut.player_name} · ${formatPct(fieldSummary.safestCut.make_cut_prob)}`}
-              />
-              <SummaryTile label="Field" value={`${fieldSummary.size} players`} />
+          {/* Completed event → model report card; otherwise field at-a-glance */}
+          {isCompleted && reportCard ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <SummaryTile
+                  label="Winner"
+                  value={
+                    reportCard.winner
+                      ? `${reportCard.winner.player_name} · model #${reportCard.winnerRank} by win%`
+                      : '—'
+                  }
+                />
+                <SummaryTile label="Top-20 hits" value={`${reportCard.top20Hits} / 20`} />
+                <SummaryTile
+                  label="Make-cut accuracy"
+                  value={reportCard.cutAcc != null ? formatPct(reportCard.cutAcc) : '—'}
+                />
+              </div>
+              <p className="text-xs text-fg-tertiary">
+                Report card — the model&rsquo;s pre-event board vs. what actually happened. The
+                Finish column shows where each player ended up (MC = missed cut).
+              </p>
             </div>
+          ) : (
+            fieldSummary && (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <SummaryTile
+                  label="Favorite"
+                  value={`${fieldSummary.favorite.player_name} · ${formatPct(fieldSummary.favorite.win_prob)}`}
+                />
+                <SummaryTile
+                  label="Top contender"
+                  value={`${fieldSummary.contender.player_name} · ${formatPct(fieldSummary.contender.top_20_prob)}`}
+                />
+                <SummaryTile
+                  label="Safest cut"
+                  value={`${fieldSummary.safestCut.player_name} · ${formatPct(fieldSummary.safestCut.make_cut_prob)}`}
+                />
+                <SummaryTile label="Field" value={`${fieldSummary.size} players`} />
+              </div>
+            )
           )}
 
           {/* Controls */}
@@ -363,6 +415,7 @@ export function Leaderboard() {
                   <tr className="bg-surface-2 text-left text-xs uppercase tracking-wider text-fg-tertiary">
                     <th className="px-4 py-3 w-12 text-right">#</th>
                     <th className="px-4 py-3">Player</th>
+                    {isCompleted && <th className="px-4 py-3 text-right">Finish</th>}
                     {COLUMNS.map((col) => (
                       <th key={col.key} className="px-4 py-3 text-right">
                         <button
@@ -405,6 +458,15 @@ export function Leaderboard() {
                           {o.player_name}
                         </button>
                       </td>
+                      {isCompleted && (
+                        <td
+                          className={`px-4 py-2.5 text-right font-mono text-xs ${
+                            o.final_position != null ? 'text-fg' : 'text-fg-tertiary'
+                          }`}
+                        >
+                          {formatFinish(o)}
+                        </td>
+                      )}
                       {COLUMNS.map((col) => {
                         const value = o[col.key]
                         const max = colMax[col.key]

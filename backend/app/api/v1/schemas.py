@@ -63,6 +63,9 @@ class PlayerOutcomePayload(BaseModel):
     top_10_prob: float = Field(ge=0.0, le=1.0)
     top_20_prob: float = Field(ge=0.0, le=1.0)
     make_cut_prob: float = Field(ge=0.0, le=1.0)
+    # Actual result once the event is graded; null beforehand.
+    final_position: int | None = None
+    made_cut: bool | None = None
 
 
 class TournamentPredictionsPayload(BaseModel):

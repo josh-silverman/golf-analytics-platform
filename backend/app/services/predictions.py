@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.domain.enums import EntryStatus
+
 if TYPE_CHECKING:
     from datetime import date
 
@@ -132,6 +134,10 @@ class PlayerOutcome:
     top_10_prob: float
     top_20_prob: float
     make_cut_prob: float
+    # Actual result, populated only once the event is graded (completed). Lets
+    # the leaderboard show a predicted-vs-actual "report card". ``None`` before.
+    final_position: int | None = None
+    made_cut: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +187,17 @@ class PredictionService:
             return None
 
         field = await self._catalog.get_tournament_field(tournament_id)
+        # Actual results per player (meaningful once the event is graded; all
+        # ``None`` while it's upcoming/in-progress). Used for the report card.
+        actual_by_player: dict[int, tuple[int | None, bool | None]] = {}
+        for entry in field:
+            if entry.status == EntryStatus.MADE_CUT:
+                made: bool | None = True
+            elif entry.status == EntryStatus.MISSED_CUT:
+                made = False
+            else:
+                made = None
+            actual_by_player[entry.player_id] = (entry.final_position, made)
         # Field-aware extraction over the whole field once, so field-relative
         # features compare each player to the actual field (and match training).
         extractions = await self._extractor.extract_field(
@@ -216,6 +233,8 @@ class PredictionService:
                 top_10_prob=top_10,
                 top_20_prob=top_20,
                 make_cut_prob=make_cut,
+                final_position=actual_by_player.get(pid, (None, None))[0],
+                made_cut=actual_by_player.get(pid, (None, None))[1],
             )
             for (pid, name), (win, top_5, top_10, top_20, make_cut) in zip(
                 players, normalized, strict=True

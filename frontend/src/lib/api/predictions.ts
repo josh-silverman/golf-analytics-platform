@@ -8,6 +8,9 @@ export interface PlayerOutcome {
   top_10_prob: number
   top_20_prob: number
   make_cut_prob: number
+  // Actual result once the event is graded; null/absent beforehand.
+  final_position?: number | null
+  made_cut?: boolean | null
 }
 
 export interface TournamentPredictions {

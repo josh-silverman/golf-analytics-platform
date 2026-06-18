@@ -90,6 +90,8 @@ async def predict_tournament(
                 top_10_prob=o.top_10_prob,
                 top_20_prob=o.top_20_prob,
                 make_cut_prob=o.make_cut_prob,
+                final_position=o.final_position,
+                made_cut=o.made_cut,
             )
             for o in predictions.outcomes
         ],
