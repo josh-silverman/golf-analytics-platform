@@ -28,6 +28,7 @@ import pytest
 
 from app.domain.enums import EntryStatus, TournamentStatus
 from app.ml.training import labels_from_entry
+from app.providers.datagolf import datagolf_provider as dgp
 from app.providers.datagolf.datagolf_provider import (
     DataGolfProvider,
     _parse_dg_date_range,
@@ -486,3 +487,42 @@ async def test_real_field_produces_nonzero_features_and_labels() -> None:
     mc_labels = labels_from_entry(mc_entry)
     assert mc_labels["made_cut"] == 0
     assert mc_labels["win"] == 0
+
+
+# ---------------------------------------------------------------------------
+# In-process cache TTL — the weekly-restart fix
+# ---------------------------------------------------------------------------
+
+
+async def test_schedule_cache_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The in-process schedule cache must expire after the 6h TTL.
+
+    Without expiry it freezes at first read (mid-tournament) and never sees an
+    event flip ``in_progress → completed``, forcing a weekly container restart.
+    Past the TTL a read must re-fetch rather than serve the stale value.
+    """
+    calls = {"schedule": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/get-schedule":
+            calls["schedule"] += 1
+            return httpx.Response(200, json=_SCHEDULE)
+        return httpx.Response(404, json={"error": "not found"})
+
+    provider = DataGolfProvider(api_key="test-key", transport=httpx.MockTransport(handler))
+    _CREATED.append(provider)  # closed by the autouse fixture, in-loop
+
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(dgp, "_now_monotonic", lambda: clock["now"])
+
+    await provider._fetch_schedule(_THIS_YEAR)
+    assert calls["schedule"] == 1
+
+    # Second read within the TTL window → served from cache, no new fetch.
+    await provider._fetch_schedule(_THIS_YEAR)
+    assert calls["schedule"] == 1
+
+    # Advance past the 6h TTL → entry is stale → a fresh fetch is triggered.
+    clock["now"] += dgp._INPROC_CACHE_TTL_S + 1
+    await provider._fetch_schedule(_THIS_YEAR)
+    assert calls["schedule"] == 2

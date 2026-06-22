@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -99,6 +100,35 @@ _MAX_ROUNDS_SEASONS = 5
 # extraction each day re-fetches ~100 event archives at the 8s throttle, which
 # is the multi-minute "cold load" on the leaderboard.
 _EVENT_ROWS_TTL_S = 2_592_000  # 30 days
+
+# The schedule and valid-event-id caches live in-process on a provider that is a
+# process-lifetime singleton (``get_data_provider`` is ``@lru_cache``-d), so
+# without an expiry they freeze the moment they're first read — mid-tournament —
+# and never see an event flip ``in_progress → completed`` or its SG archive get
+# posted, requiring a manual container restart to grade each completed event.
+# A 6h TTL (matching the Redis ``tournaments`` layer above) lets them self-heal.
+_INPROC_CACHE_TTL_S = 21_600  # 6 hours
+
+
+def _now_monotonic() -> float:
+    """Monotonic clock for in-process cache expiry (patchable in tests)."""
+    return time.monotonic()
+
+
+def _ttl_cache_get(store: dict[Any, tuple[float, Any]], key: Any) -> Any | None:
+    """Read a value from a TTL'd in-process cache, or ``None`` if missing/expired."""
+    entry = store.get(key)
+    if entry is None:
+        return None
+    expires_at, value = entry
+    if _now_monotonic() >= expires_at:
+        return None
+    return value
+
+
+def _ttl_cache_set(store: dict[Any, tuple[float, Any]], key: Any, value: Any) -> None:
+    """Store a value in a TTL'd in-process cache with a fresh expiry stamp."""
+    store[key] = (_now_monotonic() + _INPROC_CACHE_TTL_S, value)
 
 
 class _RetryTransport(httpx.AsyncBaseTransport):
@@ -535,7 +565,8 @@ class DataGolfProvider(DataProvider):
         # request when multiple services call the same provider method.
         # Redis TTL (via CachingProviderWrapper) handles cross-request caching.
         self._player_cache: list[Player] | None = None
-        self._schedule_cache: dict[int, list[Tournament]] = {}
+        # TTL'd (6h) — value is ``(expires_at, [Tournament])``; see _INPROC_CACHE_TTL_S.
+        self._schedule_cache: dict[int, tuple[float, list[Tournament]]] = {}
         self._course_cache: dict[str, Course] = {}
         # Raw per-event rounds, keyed by (event_id, year). An event's historical
         # rows are immutable and get requested once per player during a field
@@ -556,7 +587,8 @@ class DataGolfProvider(DataProvider):
         # Which (event_id) actually carry SG-categorized raw data per year, from
         # the light ``event-list`` endpoint. Lets ``_event_rows`` skip events
         # absent from the archive without spending a throttled request on a 400.
-        self._valid_events_cache: dict[int, set[int]] = {}
+        # TTL'd (6h) — value is ``(expires_at, {event_id})``; see _INPROC_CACHE_TTL_S.
+        self._valid_events_cache: dict[int, tuple[float, set[int]]] = {}
 
     # -----------------------------------------------------------------------
     # Lifecycle
@@ -619,8 +651,9 @@ class DataGolfProvider(DataProvider):
 
     async def _fetch_schedule(self, season: int) -> list[Tournament]:
         """GET /get-schedule?tour=pga&season=YYYY — one season's events."""
-        if season in self._schedule_cache:
-            return self._schedule_cache[season]
+        cached = _ttl_cache_get(self._schedule_cache, season)
+        if cached is not None:
+            return cached
         r = await self._http.get(
             "/get-schedule",
             params={"tour": "pga", "season": season},
@@ -628,7 +661,7 @@ class DataGolfProvider(DataProvider):
         # A season DataGolf doesn't have (e.g. a future year) returns 400 — treat
         # it as "no events" so a lookup that probes adjacent years doesn't crash.
         if r.status_code == 400:
-            self._schedule_cache[season] = []
+            _ttl_cache_set(self._schedule_cache, season, [])
             return []
         r.raise_for_status()
 
@@ -667,7 +700,7 @@ class DataGolfProvider(DataProvider):
                     status=status,
                 )
             )
-        self._schedule_cache[season] = tournaments
+        _ttl_cache_set(self._schedule_cache, season, tournaments)
         return tournaments
 
     def _get_or_create_course(self, raw_name: str) -> Course:
@@ -911,7 +944,7 @@ class DataGolfProvider(DataProvider):
         callers treat as "unknown → don't filter" so a shape change degrades to
         the old sweep-and-skip-400 behaviour rather than training on nothing.
         """
-        cached = self._valid_events_cache.get(year)
+        cached = _ttl_cache_get(self._valid_events_cache, year)
         if cached is not None:
             return cached
         try:
@@ -919,7 +952,7 @@ class DataGolfProvider(DataProvider):
             r.raise_for_status()
             rows: Any = r.json()
         except (httpx.HTTPError, ValueError):
-            self._valid_events_cache[year] = set()
+            _ttl_cache_set(self._valid_events_cache, year, set())
             return set()
         ids = {
             int(row["event_id"])
@@ -930,7 +963,7 @@ class DataGolfProvider(DataProvider):
             and row.get("event_id") is not None
             and int(row.get("calendar_year", 0)) == year
         }
-        self._valid_events_cache[year] = ids
+        _ttl_cache_set(self._valid_events_cache, year, ids)
         return ids
 
     async def _throttle_rounds(self) -> None:
