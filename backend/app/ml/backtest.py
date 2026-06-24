@@ -65,7 +65,13 @@ _LOG_LOSS_EPS = 1e-15
 
 @dataclass(frozen=True)
 class OutcomeMetrics:
-    """Out-of-sample probability quality for one market (e.g. ``win_prob``)."""
+    """Out-of-sample probability quality for one market (e.g. ``win_prob``).
+
+    ``brier_skill_score_ci_lower`` / ``_upper`` are the 90% block-bootstrap
+    interval over event resamples — the gating quantity for promotion under
+    the "lower CI > 0" rule. Both are ``nan`` when CI computation is disabled
+    or when there are too few events to bootstrap meaningfully (< 3).
+    """
 
     outcome_key: str
     n: int
@@ -75,6 +81,8 @@ class OutcomeMetrics:
     ece: float
     base_rate_brier: float
     brier_skill_score: float
+    brier_skill_score_ci_lower: float = float("nan")
+    brier_skill_score_ci_upper: float = float("nan")
 
 
 @dataclass(frozen=True)
@@ -114,6 +122,10 @@ class BacktestReport:
     outcomes: tuple[OutcomeMetrics, ...]
     ranking: RankingMetrics
     events: tuple[EventResult, ...]
+    # Confidence-interval provenance — None when CI computation was disabled.
+    # Promotion rule under the "lower CI > 0" gate (Direction 2) uses these.
+    bootstrap_reps: int | None = None
+    bootstrap_ci: float | None = None  # e.g. 0.90 for 90% CI
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +174,47 @@ def _spearman(a: NDArray[np.float64], b: NDArray[np.float64]) -> float:
     return float(np.corrcoef(ra, rb)[0, 1])
 
 
+def _bootstrap_skill_ci(
+    y_events: list[NDArray[np.float64]],
+    p_events: list[NDArray[np.float64]],
+    *,
+    n_reps: int,
+    ci: float,
+    seed: int = 0,
+) -> tuple[float, float]:
+    """Block-bootstrap CI on Brier skill score, resampling events with replacement.
+
+    Resamples whole *events* (not rows) so the unit of variance matches reality
+    — predictions within a tournament are correlated (same field, same model,
+    same date) so a row-level bootstrap dramatically under-estimates dispersion.
+    The block-bootstrap CI lets the promotion rule become "lower CI > 0", which
+    would have caught the layoff false positive on the first backtest.
+
+    Both arrays must be in matching per-event order. Returns ``(lower, upper)``
+    quantiles of the bootstrap skill-score distribution at the requested CI
+    (e.g. ``ci=0.90`` → 5th and 95th percentiles). Returns ``(nan, nan)`` when
+    fewer than 3 events are available — too few to bootstrap meaningfully.
+    """
+    n_events = len(y_events)
+    if n_events < 3 or n_reps <= 0:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    skills = np.empty(n_reps, dtype=np.float64)
+    indices = rng.integers(0, n_events, size=(n_reps, n_events))
+    for i in range(n_reps):
+        idx = indices[i]
+        y_cat = np.concatenate([y_events[j] for j in idx])
+        p_cat = np.concatenate([p_events[j] for j in idx])
+        base_rate = float(np.mean(y_cat))
+        base_brier = float(np.mean((base_rate - y_cat) ** 2))
+        model_brier = float(np.mean((p_cat - y_cat) ** 2))
+        skills[i] = 0.0 if base_brier == 0.0 else 1.0 - model_brier / base_brier
+    half = (1.0 - ci) / 2.0
+    lo = float(np.quantile(skills, half))
+    hi = float(np.quantile(skills, 1.0 - half))
+    return lo, hi
+
+
 def _rankdata(x: NDArray[np.float64]) -> NDArray[np.float64]:
     """Average-tie ranks (1-based), matching scipy.stats.rankdata's default,
     implemented with numpy so we take on no scipy dependency.
@@ -204,6 +257,9 @@ async def run_backtest(
     base_trainer: Trainer | None = None,
     test_events: int = 10,
     holdout_fraction: float = 0.25,
+    bootstrap_reps: int = 200,
+    bootstrap_ci: float = 0.90,
+    bootstrap_seed: int = 0,
 ) -> BacktestReport:
     """Walk-forward backtest over the most recent ``test_events`` tournaments.
 
@@ -236,9 +292,17 @@ async def run_backtest(
     n_train_examples = len(train_data)
 
     # --- Predict & collect outcomes across the test window -----------------
-    # Per-outcome accumulators.
-    y_by_outcome: dict[str, list[float]] = {k: [] for k in LABEL_TO_OUTCOME_KEY.values()}
-    p_by_outcome: dict[str, list[float]] = {k: [] for k in LABEL_TO_OUTCOME_KEY.values()}
+    # Per-outcome accumulators, kept GROUPED BY EVENT so the block-bootstrap
+    # below can resample whole tournaments (the correct unit of variance —
+    # predictions within an event are correlated). The flat per-outcome list
+    # used for point estimates is reconstituted by concatenation just before
+    # the aggregate metrics step, so the existing math is unchanged.
+    y_events_by_outcome: dict[str, list[list[float]]] = {
+        k: [] for k in LABEL_TO_OUTCOME_KEY.values()
+    }
+    p_events_by_outcome: dict[str, list[list[float]]] = {
+        k: [] for k in LABEL_TO_OUTCOME_KEY.values()
+    }
 
     event_results: list[EventResult] = []
     spearmans: list[float] = []
@@ -272,6 +336,14 @@ async def run_backtest(
         winner_player_id: int | None = None
         winner_idx: int | None = None
         n_scored = 0
+        # Per-event-per-market y/p — appended to the grouped accumulators when
+        # the event finishes, so the bootstrap unit is the event.
+        ev_y_by_outcome: dict[str, list[float]] = {
+            k: [] for k in LABEL_TO_OUTCOME_KEY.values()
+        }
+        ev_p_by_outcome: dict[str, list[float]] = {
+            k: [] for k in LABEL_TO_OUTCOME_KEY.values()
+        }
 
         # Worst placement used for missed-cut players in the ranking metric.
         made_cut_positions = [
@@ -292,8 +364,8 @@ async def run_backtest(
             served = served_by_player[entry.player_id]
             win = served["win_prob"]
             for label_key, outcome_key in LABEL_TO_OUTCOME_KEY.items():
-                y_by_outcome[outcome_key].append(float(labels[label_key]))
-                p_by_outcome[outcome_key].append(served[outcome_key])
+                ev_y_by_outcome[outcome_key].append(float(labels[label_key]))
+                ev_p_by_outcome[outcome_key].append(served[outcome_key])
 
             placement = (
                 entry.final_position
@@ -339,18 +411,39 @@ async def run_backtest(
                 winner_predicted_rank=winner_rank,
             )
         )
+        # Flush this event's y/p into the per-event grouped accumulator. Empty
+        # events are dropped so the bootstrap never resamples a zero-row event.
+        for outcome_key in LABEL_TO_OUTCOME_KEY.values():
+            if ev_y_by_outcome[outcome_key]:
+                y_events_by_outcome[outcome_key].append(ev_y_by_outcome[outcome_key])
+                p_events_by_outcome[outcome_key].append(ev_p_by_outcome[outcome_key])
 
     # --- Aggregate per-outcome metrics -------------------------------------
     outcome_metrics: list[OutcomeMetrics] = []
     for outcome_key in LABEL_TO_OUTCOME_KEY.values():
-        y = np.array(y_by_outcome[outcome_key], dtype=np.float64)
-        p = np.array(p_by_outcome[outcome_key], dtype=np.float64)
-        if len(y) == 0:
+        # Per-event arrays preserved through the loop so the block-bootstrap
+        # can resample events; concatenate for the point-estimate metrics.
+        y_events_np = [
+            np.array(ev, dtype=np.float64) for ev in y_events_by_outcome[outcome_key]
+        ]
+        p_events_np = [
+            np.array(ev, dtype=np.float64) for ev in p_events_by_outcome[outcome_key]
+        ]
+        if not y_events_np:
             continue
+        y = np.concatenate(y_events_np)
+        p = np.concatenate(p_events_np)
         base_rate = float(np.mean(y))
         base_brier = float(np.mean((base_rate - y) ** 2))
         model_brier = _brier(y, p)
         skill = 0.0 if base_brier == 0.0 else 1.0 - model_brier / base_brier
+        # Block-bootstrap CI on the skill score — resample events with
+        # replacement so the inferential unit matches the data's correlation
+        # structure (rows within an event share field/model/date).
+        ci_lo, ci_hi = _bootstrap_skill_ci(
+            y_events_np, p_events_np,
+            n_reps=bootstrap_reps, ci=bootstrap_ci, seed=bootstrap_seed,
+        )
         outcome_metrics.append(
             OutcomeMetrics(
                 outcome_key=outcome_key,
@@ -361,6 +454,8 @@ async def run_backtest(
                 ece=_ece(y, p),
                 base_rate_brier=base_brier,
                 brier_skill_score=skill,
+                brier_skill_score_ci_lower=ci_lo,
+                brier_skill_score_ci_upper=ci_hi,
             )
         )
 
@@ -386,4 +481,6 @@ async def run_backtest(
         outcomes=tuple(outcome_metrics),
         ranking=ranking,
         events=tuple(event_results),
+        bootstrap_reps=bootstrap_reps if bootstrap_reps > 0 else None,
+        bootstrap_ci=bootstrap_ci if bootstrap_reps > 0 else None,
     )

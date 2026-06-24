@@ -102,12 +102,23 @@ async def _run(*, test_events: int, holdout: float, half_life: int | None) -> No
     print("\n" + "-" * 70)
     print("PROBABILITY QUALITY (out-of-sample)")
     print("-" * 70)
+    ci_label = (
+        f"{int(report.bootstrap_ci * 100)}% CI" if report.bootstrap_ci else "CI"
+    )
     print(
         f"{'market':<14}{'base':>8}{'brier':>9}{'logloss':>9}"
-        f"{'ece':>8}{'skill':>9}"
+        f"{'ece':>8}{'skill':>9}{ci_label:>22}"
     )
-    print(f"{'':<14}{'rate':>8}{'':>9}{'':>9}{'':>8}{'vs base':>9}")
+    print(f"{'':<14}{'rate':>8}{'':>9}{'':>9}{'':>8}{'vs base':>9}"
+          f"{'(block-bootstrap)':>22}")
     for o in report.outcomes:
+        if o.brier_skill_score_ci_lower != o.brier_skill_score_ci_lower:  # NaN check
+            ci_str = "—"
+        else:
+            ci_str = (
+                f"[{o.brier_skill_score_ci_lower:+.3f},"
+                f"{o.brier_skill_score_ci_upper:+.3f}]"
+            )
         print(
             f"{o.outcome_key:<14}"
             f"{_fmt_pct(o.base_rate):>8}"
@@ -115,10 +126,13 @@ async def _run(*, test_events: int, holdout: float, half_life: int | None) -> No
             f"{o.log_loss:>9.4f}"
             f"{o.ece:>8.4f}"
             f"{o.brier_skill_score:>+9.3f}"
+            f"{ci_str:>22}"
         )
     print(
         "\n  skill = 1 − brier/base_rate_brier. Positive ⇒ beats predicting the\n"
-        "  field-average rate for everyone; ≤ 0 ⇒ no edge over that baseline."
+        "  field-average rate for everyone; ≤ 0 ⇒ no edge over that baseline.\n"
+        "  CI = block-bootstrap over events (resamples whole tournaments,\n"
+        "  preserving within-event correlation). Promotion rule: lower CI > 0."
     )
 
     # --- Ranking quality ---------------------------------------------------
