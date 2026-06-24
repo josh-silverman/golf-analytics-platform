@@ -36,7 +36,8 @@ DataGolf data integration; (3) value for bettors.
 - **Infra:** Docker; Fly.io for deploy.
 
 ## The current model (the baseline all work is measured against)
-- `golf_v1`, registered version `736afc12e6b3` (active, not necessarily deployed).
+- `golf_v1`, registered version `136a5aca11d2` (active, not necessarily deployed;
+  the `min_samples_leaf=80` model that superseded `736afc12e6b3`).
 - **v2 feature set = 14 features**, all derived from a player's strokes-gained (SG)
   history: absolute SG ratings (off-the-tee / approach / around-green / putting /
   total), recent form, the five **field-relative** SG margins, field strength,
@@ -84,6 +85,15 @@ Validation tooling:
 - 📌 **Player-history information appears SATURATED** (~2 latent skill dimensions).
   Re-sampling a player's own SG distribution (more windows, more moments, sub-stats)
   keeps landing in the same subspace and failing the incremental gate.
+- 🔒 **Second research program closed 2026-06-23.** Four additional directions tested
+  beyond the original six: **field-shape features** (failed gate, did not move target
+  residual), **layoff/staleness** (inconclusive — 10-event positive, holdout worse,
+  not promoted), **empirical-Bayes shrinkage** (rejected, 0/3 checks), **player
+  random-effects prior** (inconclusive — 10-event positive, holdout make_cut worse,
+  not promoted). Infrastructure added: **block-bootstrap 90% CI in backtest harness**;
+  make_cut [+0.078, +0.220] and top_20 [+0.029, +0.093] lower CI bounds confirm genuine
+  skill. Active model: **golf_v1 @ 136a5aca11d2**. Ceiling confirmed pending a new data
+  class.
 
 ## Data-capability facts (from a live DataGolf payload audit)
 The historical rounds payload we already fetch contains, at ~full coverage, fields we
