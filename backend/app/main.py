@@ -55,6 +55,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         sentry_enabled=settings.sentry_dsn is not None,
     )
     yield
+    # Close the shared Redis client so its pooled connections are released
+    # inside the running event loop. Without this the global client's sockets
+    # are reaped by GC after the loop closes, and under pytest's
+    # ``filterwarnings = ["error"]`` the resulting unclosed-socket
+    # ResourceWarning is escalated into a non-deterministic test failure
+    # (it surfaces on whichever test GC happens to run during). Best-effort:
+    # a cache shutdown error must never block app stop.
+    from app.cache.redis import redis_client
+
+    try:
+        await redis_client.aclose()
+    except Exception:  # noqa: BLE001 — shutdown cleanup is best-effort
+        log.warning("redis_close_failed", exc_info=True)
     log.info("app_stopping")
 
 
