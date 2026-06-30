@@ -22,9 +22,11 @@ from typing import TYPE_CHECKING
 from app.domain.enums import EntryStatus, TournamentStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import date
 
-    from app.domain.models import TournamentEntry
+    from app.domain.models import Tournament, TournamentEntry
+    from app.providers.datagolf.datagolf_provider import DataGolfProvider
     from app.services.catalog import CatalogService
     from app.services.features import FeatureExtractor
 
@@ -92,14 +94,28 @@ class TrainingDataBuilder:
     date so backfills (re-running an older training) are reproducible.
     """
 
+    # Pre-2024 seasons reachable only through the historical archive (get-schedule
+    # 400s for them). Deliberately bounded to 2021–2023 for this validation step:
+    # the 365-day recency weighting makes pre-2021 examples nearly zero-weight, so
+    # going further back is unlikely to pay for the throttled fetch cost.
+    _ARCHIVE_SEASONS: tuple[int, ...] = (2023, 2022, 2021)
+
     def __init__(
         self,
         *,
         catalog: CatalogService,
         extractor: FeatureExtractor,
+        use_historical_archive: bool = False,
+        archive_provider: DataGolfProvider | None = None,
     ) -> None:
         self._catalog = catalog
         self._extractor = extractor
+        # OFF by default → existing behaviour unchanged. When True (and an
+        # archive-enabled provider is supplied) the builder ALSO emits examples
+        # from the 2021–2023 archive, with year-correct fields (the event_id
+        # collision means get_tournament_field(id) can't be used for them).
+        self._use_historical_archive = use_historical_archive
+        self._archive_provider = archive_provider
 
     async def build(
         self,
@@ -107,6 +123,7 @@ class TrainingDataBuilder:
         through: date,
         season: int | None = None,
         page_size: int = 200,
+        on_event: Callable[[str, int, int], None] | None = None,
     ) -> TrainingData:
         """Walk completed tournaments through ``through`` and emit examples.
 
@@ -117,9 +134,16 @@ class TrainingDataBuilder:
         not actually in the field, or whose entry lacks a final position
         despite ``MADE_CUT`` status, are skipped rather than treated as
         zeros: bad data should be loud, not silently mislabeled.
+
+        ``on_event`` is an optional progress hook called once per completed
+        event with ``(phase, tournament_id, running_example_count)`` — purely
+        for observability (the build is CPU-bound and otherwise silent for
+        minutes). It defaults to ``None`` so production behaviour is unchanged.
         """
-        cursor: str | None = None
         examples: list[TrainingExample] = []
+
+        # --- Current path: get-schedule (2024+), unchanged ------------------
+        cursor: str | None = None
         while True:
             page = await self._catalog.list_tournaments(
                 season=season,
@@ -130,38 +154,68 @@ class TrainingDataBuilder:
             for tournament in page.items:
                 if tournament.end_date > through:
                     continue
-                as_of = tournament.start_date - timedelta(days=1)
                 field = await self._catalog.get_tournament_field(tournament.id)
-                # Field-aware extraction over the whole field once, so
-                # field-relative features see the true field they competed in
-                # — and identically to how the prediction path computes them.
-                extractions = await self._extractor.extract_field(
-                    [entry.player_id for entry in field], as_of
-                )
-                for entry in field:
-                    # Need a final position (or an explicit missed cut) to
-                    # produce coherent labels. Skip players whose entry is
-                    # in an inconsistent state.
-                    if entry.status == EntryStatus.ACTIVE:
-                        continue
-                    if entry.status == EntryStatus.MADE_CUT and entry.final_position is None:
-                        continue
-                    extraction = extractions[entry.player_id]
-                    examples.append(
-                        TrainingExample(
-                            player_id=entry.player_id,
-                            tournament_id=tournament.id,
-                            as_of=as_of,
-                            features=dict(extraction.values),
-                            labels=labels_from_entry(entry),
-                        )
-                    )
+                examples.extend(await self._examples_for_event(tournament, field))
+                if on_event is not None:
+                    on_event("schedule", tournament.id, len(examples))
             if page.next_cursor is None:
                 break
             cursor = page.next_cursor
+
+        # --- Archive path: 2021–2023 from historical-raw-data (opt-in) ------
+        # Year-correct fields come straight from _fetch_historical_training_events
+        # (NOT get_tournament_field, which would mis-resolve the recurring
+        # event_id to the most recent season). Only events on/before ``through``
+        # are emitted, so a backtest's train cutoff is still respected.
+        if self._use_historical_archive and self._archive_provider is not None:
+            for yr in self._ARCHIVE_SEASONS:
+                tournaments, fields = (
+                    await self._archive_provider._fetch_historical_training_events(yr)  # noqa: SLF001
+                )
+                for tournament in tournaments:
+                    if tournament.end_date > through:
+                        continue
+                    field = fields.get(tournament.id, [])
+                    examples.extend(await self._examples_for_event(tournament, field))
+                    if on_event is not None:
+                        on_event(f"archive:{yr}", tournament.id, len(examples))
 
         return TrainingData(
             examples=tuple(examples),
             feature_set_hash=self._extractor.feature_set.hash,
             through_date=through,
         )
+
+    async def _examples_for_event(
+        self, tournament: Tournament, field: list[TournamentEntry]
+    ) -> list[TrainingExample]:
+        """Build training examples for one event's field (shared by both paths).
+
+        Features are computed as of ``start_date - 1`` over the whole field at
+        once (so field-relative features see the true field), and paired with
+        binary outcome labels. Players with no resolved outcome are skipped —
+        bad data should be loud, not silently mislabeled.
+        """
+        if not field:
+            return []
+        as_of = tournament.start_date - timedelta(days=1)
+        extractions = await self._extractor.extract_field(
+            [entry.player_id for entry in field], as_of
+        )
+        out: list[TrainingExample] = []
+        for entry in field:
+            if entry.status == EntryStatus.ACTIVE:
+                continue
+            if entry.status == EntryStatus.MADE_CUT and entry.final_position is None:
+                continue
+            extraction = extractions[entry.player_id]
+            out.append(
+                TrainingExample(
+                    player_id=entry.player_id,
+                    tournament_id=tournament.id,
+                    as_of=as_of,
+                    features=dict(extraction.values),
+                    labels=labels_from_entry(entry),
+                )
+            )
+        return out

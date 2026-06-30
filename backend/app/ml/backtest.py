@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
     from app.domain.models import Tournament
     from app.ml.trainer import Trainer
+    from app.providers.datagolf.datagolf_provider import DataGolfProvider
     from app.services.catalog import CatalogService
     from app.services.features import FeatureExtractor
 
@@ -260,6 +261,8 @@ async def run_backtest(
     bootstrap_reps: int = 200,
     bootstrap_ci: float = 0.90,
     bootstrap_seed: int = 0,
+    use_historical_archive: bool = False,
+    archive_provider: DataGolfProvider | None = None,
 ) -> BacktestReport:
     """Walk-forward backtest over the most recent ``test_events`` tournaments.
 
@@ -281,7 +284,15 @@ async def run_backtest(
     train_through = test[0].start_date - timedelta(days=1)
 
     # --- Train once on everything before the test window ---
-    builder = TrainingDataBuilder(catalog=catalog, extractor=extractor)
+    # The test window is always the most-recent get-schedule events, identical
+    # across arms; the archive only ADDS 2021–2023 training examples (all before
+    # ``train_through``), so this is a clean A/B on training data alone.
+    builder = TrainingDataBuilder(
+        catalog=catalog,
+        extractor=extractor,
+        use_historical_archive=use_historical_archive,
+        archive_provider=archive_provider,
+    )
     train_data = await builder.build(through=train_through)
     if len(train_data) == 0:
         raise ValueError("No training examples before the test window.")

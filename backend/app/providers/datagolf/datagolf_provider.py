@@ -539,8 +539,20 @@ class DataGolfProvider(DataProvider):
         api_key: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         redis: Redis | None = None,
+        archive_enabled: bool = False,
     ) -> None:
         self._settings = get_settings()
+        # OFF by default and ONLY ever set by the training/backtest/bootstrap
+        # construction — never the serving deps. When True, the pre-2024
+        # historical archive (historical-raw-data/event-list, which reaches
+        # back to 2004) becomes available to _fetch_historical_training_events
+        # and to get_rounds_for_player's feature-window enumeration. The serving
+        # path (list_tournaments / get_tournament / get_tournament_field) is
+        # untouched regardless of this flag — it always uses get-schedule.
+        self._archive_enabled = archive_enabled
+        # Full historical-raw-data/event-list, fetched once and indexed by
+        # calendar year; only populated in archive mode.
+        self._archive_eventlist_cache: dict[int, list[dict[str, Any]]] | None = None
         self._api_key = api_key or self._settings.datagolf_api_key
         if not self._api_key:
             raise RuntimeError(
@@ -574,6 +586,12 @@ class DataGolfProvider(DataProvider):
         # thousands-of-calls fan-out to one fetch per event, which is the
         # difference between sailing through and tripping DataGolf's rate limit.
         self._event_rows_cache: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        # Parsed-once index of an event's rounds, grouped by entry_id. Field
+        # extraction asks the same event for every player in the field, so
+        # without this the whole field's rows get re-parsed into Round objects
+        # once *per player* (O(players × events)) — the dominant cost of a
+        # field/training extraction. Keyed (event_id, year) like _event_rows.
+        self._event_rounds_index_cache: dict[tuple[int, int], dict[int, list[Round]]] = {}
         # Optional Redis L2 for those immutable per-event archives, so they
         # survive process restarts and the daily as-of cache-key roll. Absent
         # (None) in tests/offline → L1-only, identical to the previous behaviour.
@@ -868,6 +886,103 @@ class DataGolfProvider(DataProvider):
         return _field_from_rows(rows, tournament_id)
 
     # -----------------------------------------------------------------------
+    # Historical archive (training only) — GET /historical-raw-data/event-list
+    #
+    # The serving path enumerates events via get-schedule, which DataGolf caps
+    # at 2024. The historical-raw-data archive reaches back to 2004 with the
+    # identical rounds payload (same dg_id / fin_text / sg_* / course_* shape
+    # the completed-event field+round parsers already consume). These helpers
+    # expose that archive for TRAINING enumeration only, gated on
+    # ``_archive_enabled``; nothing here is reachable from the serving methods.
+    # -----------------------------------------------------------------------
+
+    async def _archive_event_list(self, year: int) -> list[dict[str, Any]]:
+        """Completed PGA events with SG data for ``year`` from the archive.
+
+        One call to ``/historical-raw-data/event-list`` (all years), filtered
+        to ``tour=pga`` + ``sg_categories=yes`` and indexed by calendar year.
+        Returns ``[]`` on any error so a builder degrades to the events it can
+        reach rather than crashing.
+        """
+        if self._archive_eventlist_cache is None:
+            index: dict[int, list[dict[str, Any]]] = {}
+            try:
+                r = await self._http.get("/historical-raw-data/event-list")
+                r.raise_for_status()
+                rows: Any = r.json()
+            except (httpx.HTTPError, ValueError):
+                rows = []
+            for row in rows if isinstance(rows, list) else []:
+                if (
+                    isinstance(row, dict)
+                    and row.get("tour") == "pga"
+                    and row.get("sg_categories") == "yes"
+                    and row.get("event_id") is not None
+                ):
+                    index.setdefault(int(row.get("calendar_year", 0)), []).append(row)
+            self._archive_eventlist_cache = index
+        return self._archive_eventlist_cache.get(year, [])
+
+    def _archive_tournament(self, row: dict[str, Any], year: int) -> Tournament | None:
+        """Build a COMPLETED ``Tournament`` skeleton from an event-list row.
+
+        Course is a stable placeholder keyed off the event name — v2 features
+        and training labels don't read course attributes, and the field/results
+        come from the rounds payload, so this is sufficient for training.
+        """
+        event_id_raw = row.get("event_id")
+        iso = row.get("date")
+        if event_id_raw is None or not iso:
+            return None
+        try:
+            event_id = int(event_id_raw)
+            start = date.fromisoformat(str(iso)[:10])
+        except (ValueError, TypeError):
+            return None
+        name = row.get("event_name", "Unknown Event")
+        return Tournament(
+            id=event_id,
+            course_id=_course_id(f"archive:{name}"),
+            name=name,
+            season=year,
+            start_date=start,
+            end_date=start + timedelta(days=3),
+            purse=None,
+            field_strength=None,
+            status=TournamentStatus.COMPLETED,
+        )
+
+    async def _archive_tournaments_for_year(self, year: int) -> list[Tournament]:
+        """All archive ``Tournament`` skeletons for a year (empty if disabled)."""
+        if not self._archive_enabled:
+            return []
+        rows = await self._archive_event_list(year)
+        out = [self._archive_tournament(r, year) for r in rows]
+        return [t for t in out if t is not None]
+
+    async def _fetch_historical_training_events(
+        self, year: int
+    ) -> tuple[list[Tournament], dict[int, list[TournamentEntry]]]:
+        """Archive events + fields for ``year``, shaped for TrainingDataBuilder.
+
+        Returns ``([Tournament], {tournament_id: [TournamentEntry]})`` built from
+        the SAME ``_event_rows`` + ``_field_from_rows`` machinery the live
+        completed-event path uses — so a historical entry is byte-identical to
+        what ``get_tournament_field`` would produce. A row whose rounds payload
+        is empty is dropped (no field → unusable for training labels).
+        """
+        tournaments = await self._archive_tournaments_for_year(year)
+        fields: dict[int, list[TournamentEntry]] = {}
+        kept: list[Tournament] = []
+        for t in tournaments:
+            rows = await self._event_rows(t.id, year)
+            if not rows:
+                continue
+            fields[t.id] = _field_from_rows(rows, t.id)
+            kept.append(t)
+        return kept, fields
+
+    # -----------------------------------------------------------------------
     # Rounds  —  GET /historical-raw-data/rounds
     # -----------------------------------------------------------------------
 
@@ -1060,6 +1175,28 @@ class DataGolfProvider(DataProvider):
                 )
         return rounds
 
+    async def _event_rounds_index(
+        self, tournament_id: int, year: int, start_date: date
+    ) -> dict[int, list[Round]]:
+        """Event's rounds parsed once and grouped by ``entry_id``.
+
+        ``_rounds_from_rows`` builds Round objects for the *whole* field; doing
+        that per player (as ``get_rounds_for_player`` did) re-parsed the same
+        event 100+ times. Memoising the grouped result per ``(event_id, year)``
+        makes per-player access a dict lookup. The objects are identical to the
+        old path, so features — and the feature-set hash — are unchanged.
+        """
+        cache_key = (tournament_id, year)
+        cached = self._event_rounds_index_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        rows = await self._event_rows(tournament_id, year)
+        index: dict[int, list[Round]] = {}
+        for rnd in self._rounds_from_rows(rows, tournament_id, start_date):
+            index.setdefault(rnd.entry_id, []).append(rnd)
+        self._event_rounds_index_cache[cache_key] = index
+        return index
+
     async def get_rounds(self, tournament_id: int) -> list[Round]:
         """All rounds for a tournament, dated from the event's start date."""
         tournament = await self._find_tournament(tournament_id)
@@ -1099,15 +1236,27 @@ class DataGolfProvider(DataProvider):
         """
         today = date.today()
         if since is not None:
-            first_year = max(since.year, today.year - _MAX_ROUNDS_SEASONS + 1)
+            # In archive mode the whole point is to reach pre-2024 history, so
+            # the _MAX_ROUNDS_SEASONS cap (which exists to bound serving-side
+            # lookups) is lifted — the window is exactly ``since.year``..today.
+            first_year = (
+                since.year
+                if self._archive_enabled
+                else max(since.year, today.year - _MAX_ROUNDS_SEASONS + 1)
+            )
             target_seasons = list(range(today.year, first_year - 1, -1))
         else:
             target_seasons = [today.year - i for i in range(_HISTORY_SEASONS)]
 
-        # Collect completed/in-progress tournaments sorted newest-first
+        # Collect completed/in-progress tournaments newest-first. Years DataGolf's
+        # get-schedule still serves (2024+) come from there; older years come from
+        # the historical archive when enabled (get-schedule 400s for them). This
+        # is the ONLY behavioural change, and only when ``_archive_enabled``.
         all_tournaments: list[Tournament] = []
         for yr in target_seasons:
             events = await self._fetch_schedule(yr)
+            if not events and self._archive_enabled:
+                events = await self._archive_tournaments_for_year(yr)
             all_tournaments.extend(
                 t for t in events
                 if t.status in (TournamentStatus.COMPLETED, TournamentStatus.IN_PROGRESS)
@@ -1121,13 +1270,10 @@ class DataGolfProvider(DataProvider):
             if since and tournament.end_date < since:
                 continue
             target = _entry_id(tournament.id, player_id)
-            rows = await self._event_rows(tournament.id, tournament.start_date.year)
-            event_rounds = self._rounds_from_rows(
-                rows, tournament.id, tournament.start_date
+            index = await self._event_rounds_index(
+                tournament.id, tournament.start_date.year, tournament.start_date
             )
-            player_rounds.extend(
-                rnd for rnd in event_rounds if rnd.entry_id == target
-            )
+            player_rounds.extend(index.get(target, []))
 
         # Newest first — by actual round date now that rounds are dated, so
         # rounds from different events interleave correctly for time decay.
