@@ -1,0 +1,39 @@
+{
+  "artifact_relpath": "golf_v1/a212ed166088/artifact.pkl",
+  "feature_set_hash": "bc91c96027e88d56b4d3e5d9db4e16e9e901c4cb56e804beed329692925ed6c5",
+  "hyperparameters": {
+    "calibration": "per_market: sigmoid(win,top_5) + isotonic(rest)",
+    "l2_regularization": 0.0,
+    "learning_rate": 0.05,
+    "max_depth": 3,
+    "max_iter": 200,
+    "min_samples_leaf": 80,
+    "model_family": "sklearn.HistGradientBoostingClassifier",
+    "random_state": 0,
+    "recency_half_life_days": 365
+  },
+  "metrics": {
+    "brier_holdout_cal_make_cut_prob": 0.21011103620988822,
+    "brier_holdout_cal_top_10_prob": 0.08535994513704494,
+    "brier_holdout_cal_top_20_prob": 0.15092420777272408,
+    "brier_holdout_cal_top_5_prob": 0.046230603573748065,
+    "brier_holdout_cal_win_prob": 0.008829360889360104,
+    "brier_holdout_raw_make_cut_prob": 0.2123607533165885,
+    "brier_holdout_raw_top_10_prob": 0.08625443706049792,
+    "brier_holdout_raw_top_20_prob": 0.1522725430128693,
+    "brier_holdout_raw_top_5_prob": 0.0459468566421925,
+    "brier_holdout_raw_win_prob": 0.008899071570630218,
+    "brier_make_cut_prob": 0.21641881355215922,
+    "brier_top_10_prob": 0.07698237591209868,
+    "brier_top_20_prob": 0.13001542626455515,
+    "brier_top_5_prob": 0.04208032709803497,
+    "brier_win_prob": 0.007509026056575151,
+    "n_calibration_examples": 5729.0,
+    "n_examples": 17188.0,
+    "n_features": 14.0
+  },
+  "name": "golf_v1",
+  "trained_at": "2026-06-29T22:26:15.668042+00:00",
+  "training_data_through": "2026-06-29",
+  "version_id": "a212ed166088"
+}

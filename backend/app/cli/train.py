@@ -88,7 +88,13 @@ async def _train(
     print(f"Registry:  {settings.model_registry_path}")
     print(f"Provider:  {settings.data_provider}")
     print(f"Training through: {through} | season filter: {season or 'all'}")
-    print(f"Archive:   {'on (2021-2023)' if use_historical_archive else 'off'}")
+    archive_label = (
+        f"on ({min(TrainingDataBuilder._ARCHIVE_SEASONS)}-"
+        f"{max(TrainingDataBuilder._ARCHIVE_SEASONS)})"
+        if use_historical_archive
+        else "off"
+    )
+    print(f"Archive:   {archive_label}")
     print()
 
     registry = ModelRegistry(Path(settings.model_registry_path))

@@ -263,6 +263,7 @@ async def run_backtest(
     bootstrap_seed: int = 0,
     use_historical_archive: bool = False,
     archive_provider: DataGolfProvider | None = None,
+    archive_seasons: tuple[int, ...] | None = None,
 ) -> BacktestReport:
     """Walk-forward backtest over the most recent ``test_events`` tournaments.
 
@@ -292,6 +293,7 @@ async def run_backtest(
         extractor=extractor,
         use_historical_archive=use_historical_archive,
         archive_provider=archive_provider,
+        archive_seasons=archive_seasons,
     )
     train_data = await builder.build(through=train_through)
     if len(train_data) == 0:

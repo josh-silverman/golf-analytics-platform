@@ -95,10 +95,12 @@ class TrainingDataBuilder:
     """
 
     # Pre-2024 seasons reachable only through the historical archive (get-schedule
-    # 400s for them). Deliberately bounded to 2021–2023 for this validation step:
-    # the 365-day recency weighting makes pre-2021 examples nearly zero-weight, so
-    # going further back is unlikely to pay for the throttled fetch cost.
-    _ARCHIVE_SEASONS: tuple[int, ...] = (2023, 2022, 2021)
+    # 400s for them). Validated 2018–2023: Phase 1 promoted 2021–2023, Phase 2
+    # promoted the 2018–2020 extension (both the 10-event backtest and the
+    # 30-event holdout improved make_cut Brier and ranking, hash unchanged). The
+    # 365-day recency weighting attenuates older examples, but they still help
+    # the data-starved markets, so the window pays for the (cached) fetch cost.
+    _ARCHIVE_SEASONS: tuple[int, ...] = (2023, 2022, 2021, 2020, 2019, 2018)
 
     def __init__(
         self,
@@ -107,15 +109,20 @@ class TrainingDataBuilder:
         extractor: FeatureExtractor,
         use_historical_archive: bool = False,
         archive_provider: DataGolfProvider | None = None,
+        archive_seasons: tuple[int, ...] | None = None,
     ) -> None:
         self._catalog = catalog
         self._extractor = extractor
         # OFF by default → existing behaviour unchanged. When True (and an
         # archive-enabled provider is supplied) the builder ALSO emits examples
-        # from the 2021–2023 archive, with year-correct fields (the event_id
+        # from the archive seasons, with year-correct fields (the event_id
         # collision means get_tournament_field(id) can't be used for them).
         self._use_historical_archive = use_historical_archive
         self._archive_provider = archive_provider
+        # Which pre-2024 seasons to pull. None → the validated 2021–2023 default
+        # so existing callers are unchanged; an explicit tuple lets a backtest
+        # A/B a wider window (e.g. 2018–2023) without changing the default.
+        self._archive_seasons = archive_seasons or self._ARCHIVE_SEASONS
 
     async def build(
         self,
@@ -168,7 +175,7 @@ class TrainingDataBuilder:
         # event_id to the most recent season). Only events on/before ``through``
         # are emitted, so a backtest's train cutoff is still respected.
         if self._use_historical_archive and self._archive_provider is not None:
-            for yr in self._ARCHIVE_SEASONS:
+            for yr in self._archive_seasons:
                 tournaments, fields = (
                     await self._archive_provider._fetch_historical_training_events(yr)  # noqa: SLF001
                 )
