@@ -3,7 +3,7 @@
 A consolidated snapshot of the predictive model, the research program that
 validated its performance ceiling, the architecture, and the methodology used
 to reach these conclusions. This is a **reference document**, not a roadmap:
-it records where the project stands as of **2026-06-23** and the evidence
+it records where the project stands as of **2026-07-01** and the evidence
 behind that state.
 
 For the prompt-validation briefing (how to judge proposed work against settled
@@ -19,15 +19,15 @@ log see the `project_model_baseline` memory.
 | Property | Value |
 |---|---|
 | Model name | `golf_v1` |
-| Active version | `136a5aca11d2` |
+| Active version | `d69cf2a7323f` |
 | Feature set | `v2_field_relative` (hash `bc91c96027e8…`) |
 | Feature count | 14 |
 | Estimator | scikit-learn `HistGradientBoostingClassifier`, one per market |
 | Markets | win, top-5, top-10, top-20, make-cut |
 | Calibration | per-market: sigmoid (win, top-5) + isotonic (top-10, top-20, make-cut) |
-| Trained through | 2026-06-16 |
-| Training examples | 6,519 (+ 2,173 held out for calibration) |
-| Training span | 3 PGA seasons, 365-day recency weighting |
+| Trained through | 2026-06-30 |
+| Training examples | 26,853 (+ 8,951 held out for calibration) = 35,804 total |
+| Training span | 2024+ (get-schedule) plus the 2018–2023 historical archive; 365-day recency weighting |
 | Feature window | 730 days per example, computed as-of each example's date (leakage-safe) |
 | Deployment | not necessarily deployed; `fly.toml` targets `pga-analytics-api` (iad) with `DATA_PROVIDER=datagolf` |
 
@@ -89,21 +89,26 @@ train/serve-parity invariant the whole feature layer exists to protect.
 ### 1.4 Validated performance ceiling (per market)
 
 Out-of-sample, from the rolling-origin backtest of the active model
-(`136a5aca11d2`), 10 most-recent completed events, 1,223 predictions, trained
-through 2026-04-22. The 90% confidence interval is from the block-bootstrap
-infrastructure (Section 3.2), resampling whole events with replacement.
+(`d69cf2a7323f`), 10 most-recent completed events, 1,147 predictions, trained
+through 2026-04-29 (34,657 training examples). The 90% confidence interval is
+from the block-bootstrap infrastructure (Section 3.2), resampling whole events
+with replacement.
 
 | Market | Base rate | Brier | Brier skill vs base rate | 90% CI (block-bootstrap) | Verdict |
 |---|---|---|---|---|---|
-| win | 0.9% | 0.0089 | +0.003 | **[−0.001, +0.007]** | straddles 0 — no edge |
-| top-5 | 5.1% | 0.0477 | +0.008 | **[−0.054, +0.062]** | straddles 0 — noisy |
-| top-10 | 10.5% | 0.0918 | +0.021 | **[−0.011, +0.046]** | straddles 0 |
-| top-20 | 21.3% | 0.1568 | +0.063 | **[+0.029, +0.093]** | lower CI > 0 — genuine skill |
-| make-cut | 58.5% | 0.2065 | +0.149 | **[+0.078, +0.220]** | lower CI > 0 — genuine skill |
+| win | 0.9% | 0.0087 | −0.009 | **[−0.049, +0.031]** | straddles 0 — no edge |
+| top-5 | 5.1% | 0.0471 | +0.018 | **[−0.060, +0.096]** | straddles 0 — noisy |
+| top-10 | 10.0% | 0.0866 | +0.040 | **[+0.001, +0.073]** | lower CI > 0 — marginal skill |
+| top-20 | 20.5% | 0.1486 | +0.088 | **[+0.055, +0.106]** | lower CI > 0 — genuine skill |
+| make-cut | 62.6% | 0.1917 | +0.181 | **[+0.097, +0.263]** | lower CI > 0 — genuine skill |
 
-Held-out calibrated Brier from the registered artifact (independent of the
-backtest split): win 0.00941, top-5 0.04925, top-10 0.09122, top-20 0.15476,
-make-cut 0.19956.
+Ranking quality: Spearman(win-prob, finish) +0.291, mean winner predicted rank
+33.7, winner-in-top-5 30%, winner-in-top-10 30%.
+
+Held-out calibrated Brier from the registered artifact (a per-model random split
+of its own training set — **not** comparable across models with different
+training composition; see Section 2.6): win 0.0087, top-5 0.0452, top-10 0.0839,
+top-20 0.1492, make-cut 0.2138.
 
 **Brier skill score** = `1 − model_brier / base_rate_brier`. Positive means the
 model beats predicting the field-average rate for everyone. It does **not**
@@ -113,9 +118,11 @@ mean beating a sportsbook — that is a far higher bar the model does not clear
 ### 1.5 Honest scope — which markets to trust
 
 - **make-cut and top-20 are trustworthy.** Their lower CI bounds are clearly
-  above zero (+0.078 and +0.029). These markets carry real, reproducible skill
+  above zero (+0.097 and +0.055). These markets carry real, reproducible skill
   over the naive baseline and are where the model's analytic value lives.
-- **win, top-5, top-10 are intentionally coarse.** Their skill CIs straddle
+  top-10's lower CI is now marginally positive (+0.001) at the larger 2018–2023
+  training scale, but it sits right at the boundary and should be read as weak.
+- **win, top-5 are intentionally coarse.** Their skill CIs straddle
   zero. Winner prediction in particular has ≈0 skill and is near a practical
   ceiling: its driver is week-of variance (form, draw, conditions) that the
   model's player-history features cannot recover. The win market also has very
@@ -385,7 +392,22 @@ in `backend/.env`, bring the stack up, then run `bootstrap`. With
 
 The program is closed **pending a new data class**, not closed permanently. It
 should reopen only when genuinely orthogonal information becomes available —
-not for another transform of existing free SG/field data. Qualifying triggers:
+not for another transform of existing free SG/field data.
+
+**Recently exploited or re-validated (now closed, do not retry):**
+
+- **Historical-archive training data — EXPLOITED, closed at 2018–2023.** The
+  DataGolf `historical-raw-data` archive (a genuine new data class: pre-2024
+  events `get-schedule` can't reach) multiplied the training set ~6.5×
+  (6,519 → 35,804). Validated one window at a time: +2021–2023 and +2018–2020
+  both cleared the two-regime gate and were promoted; +2015–2017 failed
+  (make-cut holdout Brier regressed, ranking dropped) — recency weighting
+  attenuates pre-2018 to near-zero weight. Full detail in Section 2.6.
+- **Recency half-life — RE-VALIDATED at 365 days.** Re-tested at the new 35.8k
+  scale (180 / 545 / 730 vs 365); none cleared the tighter gate without a
+  make-cut or ranking regression. 365d is the Pareto sweet spot. Closed.
+
+**Qualifying triggers that would still reopen the program:**
 
 - **Real course attributes at full schedule coverage** (yardage, course type,
   not just the ~33 curated venues). Course identity and par are already in the
@@ -415,9 +437,10 @@ finding rather than an assumption**.
 
 No feature is promoted on a single backtest split. Every candidate runs:
 
-1. **10-event production-regime backtest** — trains on ≈7,500 examples, the
-   real deployment scale. The primary gate (≥ +0.010 Brier skill on make-cut or
-   top-20, no ranking regression).
+1. **10-event production-regime backtest** — trains on the real deployment scale
+   (≈7,500 examples before the historical archive; ≈35k after, from 2018–2023).
+   The primary gate (≥ +0.010 Brier skill on make-cut or top-20, no ranking
+   regression).
 2. **85-event cross-check** — a deliberately data-starved regime (≈39 training
    events) that surfaces small-data artifacts.
 3. **Production-scale holdout** — independent of the backtest split; the
