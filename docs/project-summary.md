@@ -241,6 +241,53 @@ closure illustrates the validation discipline.
 | Read-only diagnostics pipeline | Exports per-(player, event) predictions, feature values, permutation importances, and calibration bins. The evidence layer every ceiling-test direction was judged on. |
 | Test-suite Redis hygiene | The `/predictions` endpoint's board cache opened the real module-global Redis client during endpoint tests; the pooled connection lingered past its event loop and GC reaped it mid-suite, escalated by `filterwarnings=["error"]` into a non-deterministic failure. Fixed by closing `redis_client` in the app lifespan shutdown — correct production hygiene that also closes the connection in the right loop on each `TestClient` exit. Suite is now a deterministic 268 passed. |
 
+### 2.6 Historical-archive data-scaling program (2026-06-28 → 07-01) — CLOSED at 2018–2023
+
+The first program to improve the model with **more data** rather than a new
+feature. DataGolf's `get-schedule` 400s for pre-2024 years, so the training set
+was capped at ~6.5k–9k examples; the `historical-raw-data` archive (event-list +
+per-event rounds, full SG sub-categories back to ~2013) is reachable behind an
+opt-in `archive_enabled` provider flag. Extended one validated window at a time,
+each gated by the standard two-regime discipline (10-event production backtest +
+30-event holdout, block-bootstrap CIs, holdout make-cut Brier decisive). The
+`v2_field_relative` hash (`bc91c96027e8`) was held fixed throughout — this is a
+training-data change, not a feature change.
+
+| Phase | Window | Examples | 30-event holdout make-cut Brier | Verdict |
+|---|---|---|---|---|
+| 1 | +2021–2023 | 9,373 → 22,917 | 0.21457 → **0.20260** (−0.012) | **PROMOTED** → `golf_v1 @ a212ed166088` |
+| 2 | +2018–2020 | 22,917 → 35,804 | 0.21007 → **0.20672** (−0.0034) | **PROMOTED** → `golf_v1 @ d69cf2a7323f` (active) |
+| 3 | +2015–2017 | 35,804 → 48,234 | 0.20672 → **0.21034** (+0.0036 WORSE) | **REJECTED — program closed** |
+
+- **Phases 1–2** cleared both checks: make-cut Brier and ranking improved
+  (Phase 1 Spearman +0.093→+0.263, mean winner rank 46.9→34.0). Diminishing but
+  real — Phase 2's make-cut gain (−0.0034) was a quarter of Phase 1's (−0.012).
+- **Phase 3 (2015–2017) is the closure.** 10-event: make-cut essentially flat
+  (+0.0003, ~10× smaller than prior phases) with a **ranking regression**
+  (Spearman +0.291→+0.214). 30-event holdout (the decisive check that carried
+  Phases 1–2): make-cut Brier **regressed +0.0036** and every market plus ranking
+  got worse. Checks disagree, holdout fails → not promoted.
+- **Finding:** *the archive program is complete at 2018–2023. Pre-2018 data adds
+  no incremental value beyond recency-weighting attenuation* — with a 365-day
+  half-life, 2015–2017 examples sit at near-zero weight at their as-of dates while
+  their staler SG baselines and different course/field conditions add noise that
+  slightly hurts make-cut and ordering. The monotonic decline of the make-cut gain
+  (−0.012 → −0.0034 → +0.0036) is exactly the attenuation ceiling.
+- **Reusable infra kept:** `archive_enabled` provider (event-list + per-event
+  rounds fallback, year-correct fields around the reused-`event_id` collision);
+  a **per-event rounds index** memoisation that cut field extraction from
+  O(players×events) to O(events) (~60s → ~0.3s/event), which is what made
+  archive-scale builds and backtests feasible; opt-in `use_historical_archive` /
+  `archive_seasons` plumbing (default off → serving unchanged). Ops note: run
+  archive builds/backtests one per process under `ulimit -v` (a two-arm
+  single-process battery OOM-restarted the 3.8 GB container); immutable
+  `event_rows` cache in Redis (~30-day TTL) makes re-runs instant once DataGolf's
+  rate limit resets (cumulative session fetching can trip a multi-hour lockout).
+
+**ACTIVE MODEL = `golf_v1 @ d69cf2a7323f`** (v2 feature set, archive 2018–2023,
+35,804 training examples, hash `bc91c96027e8`). Registry lineage:
+136a5aca11d2 → a212ed166088 → **d69cf2a7323f**.
+
 ---
 
 ## 3. Architecture and operations
@@ -452,5 +499,8 @@ finding worth recording rather than a place the work happened to stop.
 
 ---
 
-*Snapshot date: 2026-06-23. Active model: `golf_v1 @ 136a5aca11d2`. The research
-program is complete; reopen only on a new data class (Section 3.5).*
+*Snapshot date: 2026-07-01. Active model: `golf_v1 @ d69cf2a7323f` (v2 feature
+set, historical archive 2018–2023, 35,804 training examples). The feature/
+hyperparameter research program is complete (Sections 2.2–2.4); the
+historical-archive data-scaling program is complete at 2018–2023 (Section 2.6).
+Reopen only on a new data class (Section 3.5).*
