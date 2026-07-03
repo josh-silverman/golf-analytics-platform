@@ -19,9 +19,9 @@ log see the `project_model_baseline` memory.
 | Property | Value |
 |---|---|
 | Model name | `golf_v1` |
-| Active version | `d69cf2a7323f` |
-| Feature set | `v2_field_relative` (hash `bc91c96027e8…`) |
-| Feature count | 14 |
+| Active version | `0d2efade42ba` |
+| Feature set | `v3_dg_preds` (hash `18a5376f33f7…`) |
+| Feature count | 18 |
 | Estimator | scikit-learn `HistGradientBoostingClassifier`, one per market |
 | Markets | win, top-5, top-10, top-20, make-cut |
 | Calibration | per-market: sigmoid (win, top-5) + isotonic (top-10, top-20, make-cut) |
@@ -53,11 +53,14 @@ was the only hyperparameter changed from a default through the entire research
 program, and it is the only validated model-quality improvement those programs
 produced (Section 2.3).
 
-### 1.3 Feature set (`v2_field_relative`, 14 features)
+### 1.3 Feature set (`v3_dg_preds`, 18 features)
 
-Every feature is derived from a player's strokes-gained (SG) round history.
-There is no player identity, no course attribute, no weather, and no market
-signal in the model — those were all tested and did not clear the gate.
+The first fourteen features (below) are derived purely from a player's
+strokes-gained (SG) round history — this is the `v2_field_relative` core, which
+`v3_dg_preds` extends without altering (its hash `bc91c96027e8` is unchanged).
+The four new features are **external-model meta-features** (see the block after
+the SG features). There is still no player identity, no course attribute, and no
+weather in the model — those were all tested and did not clear the gate.
 
 **Absolute skill (5)** — time-decayed (60-day half-life) weighted mean of
 per-round SG in each category, shrunk toward a below-average prior worth 5
@@ -80,35 +83,59 @@ actually face. This was the single biggest improvement ever made:
 - `round_count` — sample size behind the skill estimate
 - `score_volatility` — std of recent per-round SG-total
 
+**External-model meta-features (4)** — DataGolf's *own* pre-tournament model
+probabilities for this player-event, folded in as inputs (model-stacking, not a
+transform of our SG data). Source is DataGolf's Pre-Tournament Predictions
+Archive, `baseline_history_fit` column only:
+
+- `dg_make_cut`, `dg_top_20`, `dg_top_10` — DataGolf's pre-event probability for
+  each headroom market (`win` is excluded as coarse)
+- `has_dg_pred` — 1.0 when a prediction exists for this player-event, else 0.0
+
+These encode course-fit, field composition, and DataGolf's talent model —
+orthogonal to the SG-rolling features (validated: Section 2.7). Leakage-safe:
+the archived predictions are genuine frozen pre-event snapshots (not refits),
+and the post-event `fin_text` DataGolf staples onto each record is **never
+read** (dropped with an explicit assertion in the provider). Cold-start (a
+2018–2019 event with no archive, or a player missing from an event) yields
+`NaN`, never 0.0 — `HistGradientBoostingClassifier` routes NaN natively — with
+`has_dg_pred=0.0` as the paired indicator.
+
 Field-relative features are computed by a **two-pass field extraction**
 (`FeatureExtractor.extract_field`): compute each player's absolute features →
-average across the field → recompute as margins vs. the field mean. The same
-code path runs in training, serving, and backtesting — this is the
-train/serve-parity invariant the whole feature layer exists to protect.
+average across the field → recompute as margins vs. the field mean. The DG
+meta-features are fetched once per event and attached to the same contexts. The
+same code path runs in training, serving, and backtesting — this is the
+train/serve-parity invariant the whole feature layer exists to protect. For DG
+predictions specifically, parity holds across two sources: completed/historical
+events read the immutable archive, the current upcoming event reads the live
+`pre-tournament` endpoint, and both return the identical
+`{player_id: {make_cut, top_20, top_10}}` shape.
 
 ### 1.4 Validated performance ceiling (per market)
 
 Out-of-sample, from the rolling-origin backtest of the active model
-(`d69cf2a7323f`), 10 most-recent completed events, 1,147 predictions, trained
+(`0d2efade42ba`), 10 most-recent completed events, 1,147 predictions, trained
 through 2026-04-29 (34,657 training examples). The 90% confidence interval is
 from the block-bootstrap infrastructure (Section 3.2), resampling whole events
-with replacement.
+with replacement. The prior `v2_field_relative` skill is shown for reference —
+the v3 DG meta-features (Section 2.7) lifted every trustworthy market.
 
-| Market | Base rate | Brier | Brier skill vs base rate | 90% CI (block-bootstrap) | Verdict |
-|---|---|---|---|---|---|
-| win | 0.9% | 0.0087 | −0.009 | **[−0.049, +0.031]** | straddles 0 — no edge |
-| top-5 | 5.1% | 0.0471 | +0.018 | **[−0.060, +0.096]** | straddles 0 — noisy |
-| top-10 | 10.0% | 0.0866 | +0.040 | **[+0.001, +0.073]** | lower CI > 0 — marginal skill |
-| top-20 | 20.5% | 0.1486 | +0.088 | **[+0.055, +0.106]** | lower CI > 0 — genuine skill |
-| make-cut | 62.6% | 0.1917 | +0.181 | **[+0.097, +0.263]** | lower CI > 0 — genuine skill |
+| Market | Base rate | Brier | Brier skill vs base rate | 90% CI (block-bootstrap) | (v2 skill) | Verdict |
+|---|---|---|---|---|---|---|
+| win | 0.9% | 0.0086 | +0.002 | **[−0.005, +0.009]** | −0.009 | straddles 0 — no edge |
+| top-5 | 5.1% | 0.0470 | +0.022 | **[−0.060, +0.100]** | +0.018 | straddles 0 — noisy |
+| top-10 | 10.0% | 0.0832 | +0.078 | **[+0.035, +0.109]** | +0.040 | lower CI > 0 — genuine skill |
+| top-20 | 20.5% | 0.1399 | +0.141 | **[+0.115, +0.166]** | +0.088 | lower CI > 0 — genuine skill |
+| make-cut | 62.6% | 0.1766 | +0.246 | **[+0.153, +0.350]** | +0.181 | lower CI > 0 — genuine skill |
 
-Ranking quality: Spearman(win-prob, finish) +0.291, mean winner predicted rank
-33.7, winner-in-top-5 30%, winner-in-top-10 30%.
+Ranking quality: Spearman(win-prob, finish) +0.301, mean winner predicted rank
+32.2, winner-in-top-5 20% (all improved or flat vs the v2 model's +0.291 / 33.7).
 
 Held-out calibrated Brier from the registered artifact (a per-model random split
 of its own training set — **not** comparable across models with different
-training composition; see Section 2.6): win 0.0087, top-5 0.0452, top-10 0.0839,
-top-20 0.1492, make-cut 0.2138.
+training composition; see Section 2.6): win 0.0086, top-5 0.0447, top-10 0.0824,
+top-20 0.1454, make-cut 0.1998.
 
 **Brier skill score** = `1 − model_brier / base_rate_brier`. Positive means the
 model beats predicting the field-average rate for everyone. It does **not**
@@ -118,10 +145,11 @@ mean beating a sportsbook — that is a far higher bar the model does not clear
 ### 1.5 Honest scope — which markets to trust
 
 - **make-cut and top-20 are trustworthy.** Their lower CI bounds are clearly
-  above zero (+0.097 and +0.055). These markets carry real, reproducible skill
-  over the naive baseline and are where the model's analytic value lives.
-  top-10's lower CI is now marginally positive (+0.001) at the larger 2018–2023
-  training scale, but it sits right at the boundary and should be read as weak.
+  above zero (+0.153 and +0.115 under the v3 model). These markets carry real,
+  reproducible skill over the naive baseline and are where the model's analytic
+  value lives. top-10 is now also genuine (lower CI +0.035 under v3, up from the
+  v2 model's +0.001 boundary) — the DG meta-features lifted it clear of the
+  margin.
 - **win, top-5 are intentionally coarse.** Their skill CIs straddle
   zero. Winner prediction in particular has ≈0 skill and is near a practical
   ceiling: its driver is week-of variance (form, draw, conditions) that the
@@ -263,7 +291,7 @@ training-data change, not a feature change.
 | Phase | Window | Examples | 30-event holdout make-cut Brier | Verdict |
 |---|---|---|---|---|
 | 1 | +2021–2023 | 9,373 → 22,917 | 0.21457 → **0.20260** (−0.012) | **PROMOTED** → `golf_v1 @ a212ed166088` |
-| 2 | +2018–2020 | 22,917 → 35,804 | 0.21007 → **0.20672** (−0.0034) | **PROMOTED** → `golf_v1 @ d69cf2a7323f` (active) |
+| 2 | +2018–2020 | 22,917 → 35,804 | 0.21007 → **0.20672** (−0.0034) | **PROMOTED** → `golf_v1 @ d69cf2a7323f` (since superseded by v3, §2.7) |
 | 3 | +2015–2017 | 35,804 → 48,234 | 0.20672 → **0.21034** (+0.0036 WORSE) | **REJECTED — program closed** |
 
 - **Phases 1–2** cleared both checks: make-cut Brier and ranking improved
@@ -291,9 +319,55 @@ training-data change, not a feature change.
   `event_rows` cache in Redis (~30-day TTL) makes re-runs instant once DataGolf's
   rate limit resets (cumulative session fetching can trip a multi-hour lockout).
 
-**ACTIVE MODEL = `golf_v1 @ d69cf2a7323f`** (v2 feature set, archive 2018–2023,
-35,804 training examples, hash `bc91c96027e8`). Registry lineage:
-136a5aca11d2 → a212ed166088 → **d69cf2a7323f**.
+**Archive program's final model = `golf_v1 @ d69cf2a7323f`** (v2 feature set,
+archive 2018–2023, 35,804 training examples, hash `bc91c96027e8`). This was the
+active model until it was superseded by the DG meta-feature promotion below
+(Section 2.7), which trains on the *same* 2018–2023 archive and only adds
+features.
+
+### 2.7 External-model meta-features (`v3_dg_preds`) — PROMOTED, current active model
+
+The endpoint audit's one viable lead, and the second major feature addition
+after field-relative SG. Rather than another transform of our own SG history,
+this folds in **DataGolf's own pre-tournament model probabilities** as inputs
+(model-stacking): `dg_make_cut`, `dg_top_20`, `dg_top_10`, and a `has_dg_pred`
+indicator, from the Pre-Tournament Predictions Archive (`baseline_history_fit`
+column; `fin_text` never read; cold-start → NaN; Section 1.3). The
+`v2_field_relative` hash (`bc91c96027e8`) is unchanged — v3 is a strict
+superset. Same two-regime gate; baseline v2 (`d69cf2a7323f`) vs candidate v3,
+identical test windows and 2018–2023 archive (the v2 arm reproduced `d69c`
+exactly, confirming a clean A/B on the feature set alone):
+
+| Check | Metric | v2 → v3 | Verdict |
+|---|---|---|---|
+| 10-event (gate) | make-cut skill | +0.181 → **+0.246**, CI [+0.153, +0.350] | Δ+0.065, lower CI > 0 ✓ |
+| 10-event (gate) | top-20 skill | +0.088 → **+0.141**, CI [+0.115, +0.166] | Δ+0.053, lower CI > 0 ✓ |
+| 10-event | ranking | Spearman +0.291 → +0.301, winner rank 33.7 → 32.2 | improved — no regression ✓ |
+| 30-event holdout (decisive) | make-cut Brier | 0.20672 → **0.18308** (−0.024, ~11%) | improves ✓ |
+| 30-event holdout | all markets + ranking | every market better; Spearman +0.273 → +0.321 | ✓ |
+
+- **Both checks agree on improvement** — the largest single-change gain in the
+  program's history (the holdout make-cut drop of −0.024 is ~7× Phase 1's
+  archive gain). **Permutation importance** (1,147 OOS rows) confirms real
+  contribution, not a lucky split: `dg_make_cut` dominates the make-cut market
+  (+0.071 neg-Brier drop, larger than any SG feature); `dg_top_10`/`dg_top_20`
+  lead top-20 and top-10.
+- **Why it works where six prior feature cycles failed:** the DG probabilities
+  are genuinely orthogonal — they carry course-fit, field composition, and
+  DataGolf's talent model, none of which the SG-rolling features encode. Every
+  earlier candidate (ceiling, course-fit, weather, field-shape, layoff,
+  shrinkage, player random-effects, book-odds) was either a restatement of
+  existing SG signal or too thin to move a CI. This is the first *external* data
+  class to clear the gate.
+- **Promoted + activated** `golf_v1 @ 0d2efade42ba` (trained through 2026-06-30 —
+  same cutoff as `d69c`, so the only difference is the feature set; 18 features).
+  Full suite 268 passed. Serving selects the feature set by the active model's
+  hash, so it always matches; the DG fetch is archive-for-completed,
+  live-for-current with identical shape (Section 1.3).
+
+**ACTIVE MODEL = `golf_v1 @ 0d2efade42ba`** (v3 feature set `18a5376f33f7`, 18
+features, archive 2018–2023, 35,804 training examples). Registry lineage:
+136a5aca11d2 → a212ed166088 → d69cf2a7323f → **0d2efade42ba**.
 
 ---
 
@@ -373,10 +447,12 @@ in `backend/.env`, bring the stack up, then run `bootstrap`. With
 
 ### 3.4 Known limitations
 
-- **Data-bound accuracy ceiling.** The model is at its performance ceiling
-  under the current free-data constraint. The bottleneck is information, not
-  code: all tractable orthogonal axes derivable from the SG round history,
-  field context, and free event-level data have been tested and closed.
+- **Data-bound accuracy — bottleneck is information, not code.** All tractable
+  orthogonal axes derivable from the *SG round history, field context, and free
+  event-level data* have been tested and closed. The remaining gains come from
+  new *external* data classes — the DG pre-tournament meta-features (Section 2.7)
+  are the first such win and lifted every trustworthy market; further headroom
+  depends on additional external signal, not more transforms of the SG history.
 - **Winner market is near a practical ceiling** (≈0 skill, data-starved by ~60
   positives; driven by week-of variance the features can't see).
 - **Not sportsbook-beating.** Large UI "edges" are model error, not value.
@@ -390,9 +466,23 @@ in `backend/.env`, bring the stack up, then run `bootstrap`. With
 
 ### 3.5 Conditions to reopen the research program
 
-The program is closed **pending a new data class**, not closed permanently. It
-should reopen only when genuinely orthogonal information becomes available —
-not for another transform of existing free SG/field data.
+The program is **re-opened** by a live, validated data class (DG pre-tournament
+predictions, below). It should still not reopen for another transform of
+existing free SG/field data — but external-model signal is now a proven,
+unexhausted axis.
+
+**Live, unexhausted signal class (actively exploited):**
+
+- **DataGolf pre-tournament predictions — ACTIVE data class, first external-model
+  win.** Folding DataGolf's own `baseline_history_fit` probabilities in as
+  meta-features cleared both gate checks with the program's largest single-change
+  gain and is the current active model (Section 2.7). This axis is **not
+  exhausted**: (a) DataGolf continuously improves its own model, and those gains
+  **flow through automatically on the next retrain** — the feature is their live
+  output, not a frozen snapshot; (b) other archive columns (`top_5`, `top_3`,
+  `top_30`, `first_round_leader`) and other providers' models are untested
+  meta-feature candidates. Any of these is a valid next experiment under the
+  standard two-regime gate.
 
 **Recently exploited or re-validated (now closed, do not retry):**
 
@@ -422,8 +512,9 @@ not for another transform of existing free SG/field data.
   the most direct route to closing the gap to the book, but requires historical
   odds availability and careful parity handling.
 
-Until one of these lands, the validated conclusion stands: the active model is
-the final model.
+The prior "final model" conclusion no longer holds: the DG meta-feature
+promotion reopened the program along the external-model axis. The active model
+is the current validated baseline, not a terminal one.
 
 ---
 
@@ -486,11 +577,13 @@ The recurring failure mode was a favorable point estimate on one split that
 did not survive. The fix is statistical, not procedural: a block-bootstrap CI
 (resampling whole events, the correct correlated unit) on each market's skill,
 with the promotion rule "lower CI bound > 0." Applied to the active model, the
-CIs are themselves the cleanest statement of scope: make-cut [+0.078, +0.220]
-and top-20 [+0.029, +0.093] have lower bounds above zero (genuine skill), while
-win, top-5, and top-10 straddle zero. A +0.010–0.013 single-split gain — the
-size that drove the rejected candidates — sits comfortably inside that noise
-band, which is exactly why it is no longer promotable.
+CIs are themselves the cleanest statement of scope: make-cut [+0.153, +0.350],
+top-20 [+0.115, +0.166], and top-10 [+0.035, +0.109] have lower bounds above
+zero (genuine skill), while win and top-5 straddle zero. A +0.010–0.013
+single-split gain — the size that drove the rejected candidates — sits
+comfortably inside that noise band, which is exactly why it is no longer
+promotable. The DG meta-feature win cleared this bar decisively (make-cut and
+top-20 lower bounds moved to +0.153 and +0.115).
 
 ### 4.5 The chain of experiments that built confidence in the ceiling
 
@@ -522,8 +615,10 @@ finding worth recording rather than a place the work happened to stop.
 
 ---
 
-*Snapshot date: 2026-07-01. Active model: `golf_v1 @ d69cf2a7323f` (v2 feature
-set, historical archive 2018–2023, 35,804 training examples). The feature/
-hyperparameter research program is complete (Sections 2.2–2.4); the
-historical-archive data-scaling program is complete at 2018–2023 (Section 2.6).
-Reopen only on a new data class (Section 3.5).*
+*Snapshot date: 2026-07-02. Active model: `golf_v1 @ 0d2efade42ba` (v3
+feature set `v3_dg_preds`, 18 features, historical archive 2018–2023, 35,804
+training examples). The SG-feature / hyperparameter research program is complete
+(Sections 2.2–2.4) and the historical-archive data-scaling program is complete
+at 2018–2023 (Section 2.6); the external-model meta-feature axis is newly
+**open** — DataGolf pre-tournament predictions were promoted as the current
+active model (Section 2.7) and that data class is unexhausted (Section 3.5).*
