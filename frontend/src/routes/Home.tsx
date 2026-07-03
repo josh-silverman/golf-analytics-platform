@@ -132,13 +132,13 @@ export function Home() {
           <span className="px-1.5 font-semibold text-fg">·</span>
           <span className="cursor-help text-fg-tertiary">Brier skill ⓘ</span>
           <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono text-accent">Make cut +0.16</span>
+          <span className="font-mono text-accent">Make cut +0.25</span>
           <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono text-accent">Top 20 +0.07</span>
+          <span className="font-mono text-accent">Top 20 +0.14</span>
           <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono">Top 10 +0.05</span>
+          <span className="font-mono">Top 10 +0.08</span>
           <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono">Top 5 +0.05</span>
+          <span className="font-mono">Top 5 +0.02</span>
           <span className="px-1.5 font-semibold text-fg">·</span>
           <span className="font-mono text-fg-tertiary">Win +0.00</span>
         </p>

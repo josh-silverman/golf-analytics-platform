@@ -162,8 +162,8 @@ function formatDate(iso: string | null): string {
 
 function RecentRoundsTable({ rounds }: { rounds: Round[] }) {
   return (
-    <div className="overflow-hidden rounded-lg border">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full min-w-[560px] text-sm">
         <thead>
           <tr className="bg-surface-2 text-left text-xs uppercase tracking-wider text-fg-tertiary">
             <th className="px-4 py-3">Date</th>
