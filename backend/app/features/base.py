@@ -69,12 +69,21 @@ class FeatureContext:
     Features must only read from this context — never from globals, a
     database connection, or the network. That discipline is what makes the
     training/inference computations bit-identical.
+
+    ``dg_pred`` carries this player's external pre-event DataGolf prediction
+    probabilities for the event being extracted (``{"make_cut": .., "top_20":
+    .., "top_10": ..}``), or ``None`` when there is no archive/live entry for
+    this (player, event) — a cold-start. It's populated by ``extract_field``
+    only when the feature set actually needs it and an event is supplied;
+    single-player extraction leaves it ``None``. Like ``field``, it's optional
+    context a feature reads if present and degrades gracefully without.
     """
 
     player_id: int
     as_of_date: date
     rounds: tuple[DatedRound, ...]
     field: FieldContext | None = None
+    dg_pred: dict[str, float] | None = None
 
 
 class Feature(ABC):

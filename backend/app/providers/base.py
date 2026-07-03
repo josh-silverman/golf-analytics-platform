@@ -43,6 +43,7 @@ class Capability(StrEnum):
     BETTING_LINES = "betting_lines"
     DFS_DATA = "dfs_data"
     SKILL_RATINGS = "skill_ratings"
+    PRETOURNAMENT_PREDS = "pretournament_preds"
 
 
 class DataProvider(ABC):
@@ -164,3 +165,21 @@ class DataProvider(ABC):
         declares :attr:`Capability.BETTING_LINES` with live data.
         """
         return None
+
+    async def get_pretournament_preds(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> dict[int, dict[str, float]]:
+        """External pre-event model probabilities for an event's field.
+
+        Returns ``{player_id: {"make_cut": p, "top_20": p, "top_10": p}}`` — a
+        provider's own pre-tournament predictions, used as meta-features. The
+        default returns ``{}`` (no external signal), so feature sets that use
+        these features cold-start to NaN on any provider that doesn't override
+        this. Override if the provider declares
+        :attr:`Capability.PRETOURNAMENT_PREDS`.
+        """
+        return {}

@@ -45,6 +45,7 @@ from app.domain.enums import EntryStatus, TournamentStatus
 from app.ml.calibration import fit_calibrated, reliability_bins
 from app.ml.trainer import LABEL_TO_OUTCOME_KEY, GBDTTrainer
 from app.ml.training import TrainingDataBuilder, labels_from_entry
+from app.services.features import EventRef
 from app.services.predictions import coherent_outcomes
 
 if TYPE_CHECKING:
@@ -327,8 +328,13 @@ async def run_backtest(
         field = await catalog.get_tournament_field(tournament.id)
         # Field-aware extraction over the whole field once — same path the
         # prediction service uses, so the backtest scores what production serves.
+        # Test events are completed → external DG preds come from the archive.
         extractions = await extractor.extract_field(
-            [entry.player_id for entry in field], as_of
+            [entry.player_id for entry in field],
+            as_of,
+            event=EventRef(
+                event_id=tournament.id, season=tournament.season, live=False
+            ),
         )
 
         # Served probabilities per player for this event.

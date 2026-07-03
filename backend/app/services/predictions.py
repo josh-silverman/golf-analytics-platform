@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from app.domain.enums import EntryStatus
+from app.domain.enums import EntryStatus, TournamentStatus
+from app.services.features import EventRef
 
 if TYPE_CHECKING:
     from datetime import date
@@ -208,8 +209,17 @@ class PredictionService:
             actual_by_player[entry.player_id] = (entry.final_position, made)
         # Field-aware extraction over the whole field once, so field-relative
         # features compare each player to the actual field (and match training).
+        # External DG predictions: the archive has completed events; an upcoming/
+        # in-progress event isn't archived yet, so read the live endpoint for it.
+        is_completed = tournament.status == TournamentStatus.COMPLETED
         extractions = await self._extractor.extract_field(
-            [entry.player_id for entry in field], as_of
+            [entry.player_id for entry in field],
+            as_of,
+            event=EventRef(
+                event_id=tournament.id,
+                season=tournament.season,
+                live=not is_completed,
+            ),
         )
         # First pass: per-player coherent probabilities, keeping the player so we
         # can rebuild outcomes after the field-level normalization step.

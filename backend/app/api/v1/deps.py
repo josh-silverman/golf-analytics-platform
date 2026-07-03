@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from fastapi import Depends
 
 from app.config import get_settings
+from app.features.feature_sets import v2_field_relative, v3_dg_preds
 from app.ml.base import ConstantModel
 from app.ml.registry import ModelRegistry
 from app.providers.factory import get_data_provider
@@ -23,8 +24,28 @@ from app.services.features import FeatureExtractor
 from app.services.predictions import PredictionService
 
 if TYPE_CHECKING:
+    from app.features.base import FeatureSet
     from app.ml.base import Model
     from app.providers.base import DataProvider
+
+
+def _feature_set_for_active_model() -> FeatureSet:
+    """The feature set matching the active golf model's ``feature_set_hash``.
+
+    The extractor must compute exactly the features the active model was
+    trained against, or serving silently defaults the missing ones and skews
+    predictions. Falls back to ``v2_field_relative`` when no model is active or
+    the hash is unrecognised, so a fresh environment behaves exactly as before.
+    """
+    factories = (v2_field_relative, v3_dg_preds)
+    by_hash = {factory().hash: factory for factory in factories}
+    registry = get_model_registry()
+    active = registry.get_active(get_settings().active_model_name)
+    if active is not None:
+        factory = by_hash.get(active.feature_set_hash)
+        if factory is not None:
+            return factory()
+    return v2_field_relative()
 
 
 # Outputs the fallback model serves when no real model has been registered.
@@ -52,7 +73,7 @@ def get_catalog_service(
 def get_feature_extractor(
     provider: DataProvider = Depends(_provider_dep),  # noqa: B008 — FastAPI DI
 ) -> FeatureExtractor:
-    return FeatureExtractor(provider)
+    return FeatureExtractor(provider, feature_set=_feature_set_for_active_model())
 
 
 @lru_cache(maxsize=1)

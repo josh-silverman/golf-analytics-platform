@@ -177,7 +177,7 @@ class _SkillExtractor:
         return _Extraction(values={"skill": float(player_id)})
 
     async def extract_field(
-        self, player_ids: list[int], as_of: date
+        self, player_ids: list[int], as_of: date, *, event: object | None = None
     ) -> dict[int, _Extraction]:
         return {
             pid: await self.extract(pid, as_of)

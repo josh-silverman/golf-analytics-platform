@@ -48,6 +48,24 @@ _ROUNDS_WINDOW_DAYS = 730
 
 
 @dataclass(frozen=True)
+class EventRef:
+    """Identifies the event a field extraction is for, so external per-event
+    signals (DataGolf pre-tournament predictions) can be fetched and joined.
+
+    ``season`` is the calendar year the DataGolf archive is keyed by. ``live``
+    selects the source: ``False`` reads the immutable archive for a completed/
+    historical event (training, backtest, completed-event serving); ``True``
+    reads the live ``pre-tournament`` endpoint for the current upcoming event
+    (which isn't archived yet). Both yield the same ``{player_id: {make_cut,
+    top_20, top_10}}`` shape, preserving train/serve parity.
+    """
+
+    event_id: int
+    season: int
+    live: bool = False
+
+
+@dataclass(frozen=True)
 class FeatureExtraction:
     """One extraction's output plus the provenance the caller needs to log."""
 
@@ -71,6 +89,11 @@ class FeatureExtractor:
         self._feature_set = feature_set or v2_field_relative()
         # Build the registry once — topological sort is cached.
         self._registry = FeatureRegistry(self._feature_set.features)
+        # Only feature sets that carry external DataGolf-prediction features pay
+        # the per-event fetch; v2 and single-player extraction never do.
+        self._needs_dg_preds = any(
+            getattr(f, "needs_dg_preds", False) for f in self._feature_set.features
+        )
 
     @property
     def feature_set(self) -> FeatureSet:
@@ -136,7 +159,11 @@ class FeatureExtractor:
         return self._build_extraction(player_id, as_of, dated, values)
 
     async def extract_field(
-        self, player_ids: Sequence[int], as_of: date
+        self,
+        player_ids: Sequence[int],
+        as_of: date,
+        *,
+        event: EventRef | None = None,
     ) -> dict[int, FeatureExtraction]:
         """Field-aware extraction for a whole tournament field.
 
@@ -151,8 +178,23 @@ class FeatureExtractor:
         which is what keeps field-relative features identical in train and
         serve. Returns ``{player_id: FeatureExtraction}``; duplicate ids are
         computed once.
+
+        ``event`` supplies the identity needed to fetch external per-event
+        DataGolf predictions when the feature set uses them; it's ignored for
+        feature sets that don't (e.g. ``v2_field_relative``). The same
+        ``FeatureContext.dg_pred`` is attached in both passes since those
+        features don't depend on the field aggregate.
         """
         unique_ids = list(dict.fromkeys(player_ids))
+
+        # External DataGolf predictions for this event, keyed by player_id
+        # (== dg_id). Empty dict when not needed or unavailable → every player
+        # cold-starts to NaN. Fetched once for the whole field.
+        dg_by_player: dict[int, dict[str, float]] = {}
+        if self._needs_dg_preds and event is not None:
+            dg_by_player = await self._provider.get_pretournament_preds(
+                event.event_id, event.season, live=event.live
+            )
 
         # Pass 1: absolute features + cached rounds per player.
         rounds_by_player: dict[int, tuple[DatedRound, ...]] = {}
@@ -160,7 +202,12 @@ class FeatureExtractor:
         for pid in unique_ids:
             dated = await self._dated_rounds(pid, as_of)
             rounds_by_player[pid] = dated
-            ctx = FeatureContext(player_id=pid, as_of_date=as_of, rounds=dated)
+            ctx = FeatureContext(
+                player_id=pid,
+                as_of_date=as_of,
+                rounds=dated,
+                dg_pred=dg_by_player.get(pid),
+            )
             pass1_values[pid] = self._registry.compute(ctx)
 
         # Aggregate: field mean of every (absolute) feature across the field.
@@ -171,7 +218,11 @@ class FeatureExtractor:
         for pid in unique_ids:
             dated = rounds_by_player[pid]
             ctx = FeatureContext(
-                player_id=pid, as_of_date=as_of, rounds=dated, field=field
+                player_id=pid,
+                as_of_date=as_of,
+                rounds=dated,
+                field=field,
+                dg_pred=dg_by_player.get(pid),
             )
             values = self._registry.compute(ctx)
             result[pid] = self._build_extraction(pid, as_of, dated, values)

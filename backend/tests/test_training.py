@@ -155,7 +155,7 @@ class _StubExtractor:
         return _ExtractionStub(values={"sg_total_rating": 1.0})
 
     async def extract_field(
-        self, player_ids: list[int], as_of: date
+        self, player_ids: list[int], as_of: date, *, event: object | None = None
     ) -> dict[int, _ExtractionStub]:
         return {pid: await self.extract(pid, as_of) for pid in dict.fromkeys(player_ids)}
 

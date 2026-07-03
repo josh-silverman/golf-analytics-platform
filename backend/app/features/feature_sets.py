@@ -10,6 +10,12 @@ captures it.
 from __future__ import annotations
 
 from app.features.base import FeatureSet
+from app.features.dg_preds import (
+    DGMakeCutProb,
+    DGTop10Prob,
+    DGTop20Prob,
+    HasDGPred,
+)
 from app.features.player import (
     FieldRelativeSGApproach,
     FieldRelativeSGAroundTheGreen,
@@ -83,5 +89,30 @@ def v2_field_relative() -> FeatureSet:
             FieldStrength(),
             RoundCount(),
             ScoreVolatility(),
+        ],
+    )
+
+
+def v3_dg_preds() -> FeatureSet:
+    """v2 plus DataGolf's own pre-event model probabilities as meta-features.
+
+    Extends ``v2_field_relative`` with four external-signal features
+    (``dg_make_cut``, ``dg_top_20``, ``dg_top_10``, ``has_dg_pred``) sourced
+    from DataGolf's Pre-Tournament Predictions Archive (``baseline_history_fit``
+    column, ``fin_text`` never read). These target the make-cut/top-20 markets
+    with genuine headroom and are orthogonal to the SG-rolling features — see
+    ``app.features.dg_preds``. Requires field/event-aware extraction with an
+    event supplied (``FeatureExtractor.extract_field(..., event=...)``); without
+    it the DG features fall back to their cold-start NaN.
+    """
+    base = v2_field_relative()
+    return FeatureSet(
+        name="v3_dg_preds",
+        features=[
+            *base.features,
+            DGMakeCutProb(),
+            DGTop20Prob(),
+            DGTop10Prob(),
+            HasDGPred(),
         ],
     )

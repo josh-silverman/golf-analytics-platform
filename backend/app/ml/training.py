@@ -20,6 +20,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from app.domain.enums import EntryStatus, TournamentStatus
+from app.services.features import EventRef
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -206,8 +207,15 @@ class TrainingDataBuilder:
         if not field:
             return []
         as_of = tournament.start_date - timedelta(days=1)
+        # Completed/historical event → external DG predictions come from the
+        # immutable archive (live=False). Ignored by feature sets that don't
+        # use them.
         extractions = await self._extractor.extract_field(
-            [entry.player_id for entry in field], as_of
+            [entry.player_id for entry in field],
+            as_of,
+            event=EventRef(
+                event_id=tournament.id, season=tournament.season, live=False
+            ),
         )
         out: list[TrainingExample] = []
         for entry in field:

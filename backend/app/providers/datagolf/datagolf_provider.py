@@ -592,6 +592,10 @@ class DataGolfProvider(DataProvider):
         # once *per player* (O(players × events)) — the dominant cost of a
         # field/training extraction. Keyed (event_id, year) like _event_rows.
         self._event_rounds_index_cache: dict[tuple[int, int], dict[int, list[Round]]] = {}
+        # DataGolf pre-tournament predictions per (event_id, year), keyed by
+        # player_id. Immutable archives are also mirrored to Redis (below);
+        # this L1 collapses the once-per-field-extraction fetch to a dict hit.
+        self._dg_preds_cache: dict[tuple[int, int], dict[int, dict[str, float]]] = {}
         # Optional Redis L2 for those immutable per-event archives, so they
         # survive process restarts and the daily as-of cache-key roll. Absent
         # (None) in tests/offline → L1-only, identical to the previous behaviour.
@@ -641,6 +645,7 @@ class DataGolfProvider(DataProvider):
             Capability.HISTORICAL_ODDS,
             Capability.BETTING_LINES,
             Capability.LIVE_DATA,
+            Capability.PRETOURNAMENT_PREDS,
         }
 
     # -----------------------------------------------------------------------
@@ -1308,6 +1313,164 @@ class DataGolfProvider(DataProvider):
             body.get("projections", body) if isinstance(body, dict) else body
         )
         return result
+
+    # -----------------------------------------------------------------------
+    # Pre-tournament predictions (meta-features) — /preds/pre-tournament[-archive]
+    #
+    # DataGolf's OWN pre-event model probabilities, used as inputs to our model.
+    # The ``baseline_history_fit`` column ONLY (the audit's pre-registered
+    # primary candidate). ``fin_text`` — the actual finish DataGolf staples onto
+    # each archived record — is post-event and MUST NEVER be read; it is dropped
+    # explicitly below. Keyed by player_id (== dg_id) to match every other join.
+    # -----------------------------------------------------------------------
+
+    # Markets we surface as features — the ones with genuine headroom. ``win``
+    # (coarse) and the archive-only ``top_3``/``top_30``/``first_round_leader``
+    # are intentionally excluded from the feature payload.
+    _DG_PRED_MARKETS: tuple[str, ...] = ("make_cut", "top_20", "top_10")
+
+    # ``fin_text`` is the actual result; reading it would leak the outcome into
+    # a pre-event feature. Named here so the drop is explicit and asserted.
+    _DG_PRED_FORBIDDEN_KEY = "fin_text"
+
+    async def get_pretournament_preds(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> dict[int, dict[str, float]]:
+        """Pre-event ``baseline_history_fit`` probabilities keyed by player_id.
+
+        ``live=False`` reads the immutable Pre-Tournament Predictions Archive
+        for a completed/historical event (training, backtest, completed-event
+        serving); ``live=True`` reads the live ``pre-tournament`` endpoint for
+        the current upcoming event (not yet archived). Both return the same
+        ``{player_id: {"make_cut", "top_20", "top_10"}}`` shape.
+
+        Returns ``{}`` when the event has no predictions (2018–2019, or an
+        un-archived event) so callers cold-start those players to NaN. Values
+        are probabilities in ``[0, 1]``. ``fin_text`` is never read.
+        """
+        if live:
+            rows = await self._fetch_dg_pred_rows(live=True)
+            return self._parse_dg_pred_rows(rows)
+
+        cache_key = (event_id, year)
+        cached = self._dg_preds_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        redis_key = f"pga:datagolf:dg_preds:{event_id}:{year}"
+        l2 = await self._redis_get_json(redis_key)
+        if l2 is not None:
+            # Redis JSON keys are strings — restore int player_id keys.
+            parsed = {int(k): v for k, v in l2.items()}
+            self._dg_preds_cache[cache_key] = parsed
+            return parsed
+
+        rows = await self._fetch_dg_pred_rows(live=False, event_id=event_id, year=year)
+        preds = self._parse_dg_pred_rows(rows)
+        self._dg_preds_cache[cache_key] = preds
+        # Only persist real archives; an empty result may be a not-yet-archived
+        # event that must be re-checked, not pinned empty.
+        if preds:
+            await self._redis_set_json(redis_key, preds, _EVENT_ROWS_TTL_S)
+        return preds
+
+    async def _fetch_dg_pred_rows(
+        self,
+        *,
+        live: bool,
+        event_id: int | None = None,
+        year: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch raw ``baseline_history_fit`` rows (archive or live). ``[]`` on
+        any 400/404/shape error so a training sweep degrades to cold-start.
+        """
+        try:
+            if live:
+                r = await self._http.get(
+                    "/preds/pre-tournament",
+                    params={"tour": "pga", "odds_format": "percent"},
+                )
+            else:
+                r = await self._http.get(
+                    "/preds/pre-tournament-archive",
+                    params={
+                        "tour": "pga",
+                        "event_id": event_id,
+                        "year": year,
+                        "odds_format": "percent",
+                    },
+                )
+            if r.status_code in (400, 404):
+                return []
+            r.raise_for_status()
+            body: Any = r.json()
+        except (httpx.HTTPError, ValueError):
+            return []
+        if not isinstance(body, dict):
+            return []
+        rows = body.get("baseline_history_fit", [])
+        return rows if isinstance(rows, list) else []
+
+    def _parse_dg_pred_rows(
+        self, rows: list[Any]
+    ) -> dict[int, dict[str, float]]:
+        """Map raw rows to ``{player_id: {market: prob}}``, dropping fin_text.
+
+        The forbidden post-event ``fin_text`` field is explicitly never copied
+        into the feature payload — asserted so a future refactor can't silently
+        start leaking it.
+        """
+        out: dict[int, dict[str, float]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            dg_id = row.get("dg_id")
+            if not dg_id:
+                continue
+            markets: dict[str, float] = {}
+            ok = True
+            for m in self._DG_PRED_MARKETS:
+                v = row.get(m)
+                if v is None:
+                    ok = False
+                    break
+                markets[m] = float(v)
+            # A row missing any target market is unusable → cold-start that
+            # player rather than impute a partial vector.
+            if not ok:
+                continue
+            # Leakage guard: the actual result must never enter the features.
+            assert self._DG_PRED_FORBIDDEN_KEY not in markets  # noqa: S101
+            out[int(dg_id)] = markets
+        return out
+
+    async def _redis_get_json(self, key: str) -> dict[str, Any] | None:
+        """Read a cached JSON object from Redis; ``None`` on miss/any error."""
+        if self._redis is None:
+            return None
+        try:
+            raw = await self._redis.get(key)
+            if raw is None:
+                return None
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001 — cache is best-effort, never block
+            return None
+
+    async def _redis_set_json(
+        self, key: str, value: dict[Any, Any], ttl: int
+    ) -> None:
+        """Best-effort durable cache of a JSON-serialisable object."""
+        if self._redis is None:
+            return
+        try:
+            await self._redis.setex(key, ttl, json.dumps(value, default=str))
+        except Exception:  # noqa: BLE001 — best-effort
+            return
 
     # -----------------------------------------------------------------------
     # Real sportsbook odds  —  GET /betting-tools/outrights

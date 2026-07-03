@@ -339,3 +339,21 @@ class CachingProviderWrapper(DataProvider):
         payload = result.model_dump() if result is not None else None
         await self._redis.setex(key, _TTL["betting"], json.dumps(payload, default=str))
         return result
+
+    async def get_pretournament_preds(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> dict[int, dict[str, float]]:
+        """Delegate — the underlying DataGolf provider handles its own caching.
+
+        Archive predictions are immutable and cached in Redis inside the
+        provider (like the per-event rounds archive); the live current-event
+        predictions carry their own short TTL there. Wrapping them again here
+        would only duplicate that, so this is a transparent pass-through.
+        """
+        return await self._provider.get_pretournament_preds(
+            event_id, year, live=live
+        )
