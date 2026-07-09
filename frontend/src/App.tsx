@@ -1,6 +1,7 @@
 import { Link, NavLink, Navigate, Route, Routes } from 'react-router'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { BettingEdge } from './routes/BettingEdge'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
@@ -41,6 +42,9 @@ export default function App() {
           <NavLink to="/leaderboard" className={navClass}>
             Leaderboard
           </NavLink>
+          <NavLink to="/edge" className={navClass}>
+            Betting Edge
+          </NavLink>
         </div>
       </nav>
 
@@ -50,8 +54,8 @@ export default function App() {
           <Route path="/leaderboard" element={<ErrorBoundary><Leaderboard /></ErrorBoundary>} />
           <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
+          <Route path="/edge" element={<ErrorBoundary><BettingEdge /></ErrorBoundary>} />
           {/* Roadmap views — gated until live. */}
-          <Route path="/edge" element={<ComingSoon title="Betting Edge" />} />
           <Route path="/benchmark" element={<ComingSoon title="Benchmark" />} />
           <Route path="/diagnostics" element={<ComingSoon title="Diagnostics" />} />
           {/* Removed (e.g. /tournaments) or unknown paths land on the hub. */}

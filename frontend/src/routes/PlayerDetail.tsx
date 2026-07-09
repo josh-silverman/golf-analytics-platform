@@ -76,11 +76,6 @@ export function PlayerDetail() {
               Turned pro: <span className="font-mono text-fg">{player.turned_pro}</span>
             </span>
           )}
-          {player.dg_id && (
-            <span>
-              DG ID: <span className="font-mono text-fg-tertiary">{player.dg_id}</span>
-            </span>
-          )}
           <span>{rounds.length} rounds loaded</span>
         </div>
       </header>

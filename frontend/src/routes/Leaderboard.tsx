@@ -279,29 +279,6 @@ export function Leaderboard() {
         )}
 
         {predictions && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
-            <span>
-              Model: <span className="font-mono text-fg-secondary">{predictions.model_name}</span>
-            </span>
-            <span>
-              Version:{' '}
-              {predictions.model_version_id ? (
-                <span className="font-mono text-fg-secondary">{predictions.model_version_id}</span>
-              ) : (
-                <span className="text-warning">fallback (no trained model registered)</span>
-              )}
-            </span>
-            <span>
-              Features:{' '}
-              <span className="font-mono text-fg-secondary">
-                {predictions.feature_set_hash.slice(0, 12)}
-              </span>
-            </span>
-            <span>As of: {predictions.as_of}</span>
-          </div>
-        )}
-
-        {predictions && (
           <p className="text-xs italic text-fg-tertiary">
             Pre-event predictions — not updated during play.
           </p>

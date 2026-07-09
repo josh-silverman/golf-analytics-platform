@@ -110,15 +110,6 @@ describe('Leaderboard', () => {
     })
   })
 
-  it('shows model name and version in header', async () => {
-    mockFetch()
-    renderLeaderboard(makeClient())
-    await waitFor(() => {
-      expect(screen.getByText('golf_v1')).toBeInTheDocument()
-    })
-    expect(screen.getByText('v-abc123')).toBeInTheDocument()
-  })
-
   it('shows tournament name after load', async () => {
     mockFetch()
     renderLeaderboard(makeClient())
@@ -143,12 +134,4 @@ describe('Leaderboard', () => {
     })
   })
 
-  it('shows fallback warning when no model version', async () => {
-    const noModel = { ...PREDICTIONS_FIXTURE, model_version_id: null }
-    mockFetch({ predictions: noModel })
-    renderLeaderboard(makeClient())
-    await waitFor(() => {
-      expect(screen.getByText(/fallback/i)).toBeInTheDocument()
-    })
-  })
 })

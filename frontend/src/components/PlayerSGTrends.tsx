@@ -238,7 +238,7 @@ export function PlayerSGTrends({ rounds }: { rounds: Round[] }) {
 
       {rounds.length > 0 && (
         <section>
-          <h2 className="mb-3 text-base font-semibold">Career Averages ({rounds.length} rounds)</h2>
+          <h2 className="mb-3 text-base font-semibold">Recent Averages ({rounds.length} rounds)</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {SG_CATEGORIES.map(({ key, label, color }) => {
               const vals = rounds.map((r) => r[key] as number)

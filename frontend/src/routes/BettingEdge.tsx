@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import {
   OUTCOME_KEYS,
@@ -36,6 +36,34 @@ function formatKelly(k: number): string {
   if (k === 0) return '—'
   return `${(k * 100).toFixed(1)}%`
 }
+
+// ---------------------------------------------------------------------------
+// Signal classification helpers
+// ---------------------------------------------------------------------------
+
+// A line reads as +EV when the model probability exceeds the fair book-implied
+// probability by a small buffer. Used for the row badge and the header count so
+// the two always agree.
+function isPositive(line: BettingLine): boolean {
+  return line.edge >= 0.005
+}
+
+// The most actionable divergences: the model probability is high enough that the
+// edge is likely informative (≥20%) AND the edge is large enough to matter (≥+3%).
+// A small edge on a 4% longshot is mostly noise; these are not.
+function isHighConfidence(line: BettingLine): boolean {
+  return line.model_prob >= 0.2 && line.edge >= 0.03
+}
+
+// Minimum model-probability filter options for the table. Default is ≥10% so the
+// view immediately surfaces meaningful divergences instead of longshot noise,
+// while "All" restores the full list.
+const PROB_THRESHOLDS: { label: string; value: number }[] = [
+  { label: 'All', value: 0 },
+  { label: '≥10%', value: 0.1 },
+  { label: '≥20%', value: 0.2 },
+  { label: '≥30%', value: 0.3 },
+]
 
 // ---------------------------------------------------------------------------
 // Edge bar chart (custom SVG visualisation)
@@ -105,6 +133,12 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
         const y = PADDING.top + i * CHART_ROW_HEIGHT
         const barWidth = Math.abs(line.edge) * scale
         const positive = line.edge >= 0.005
+        const highConf = isHighConfidence(line)
+
+        // High-confidence lines (≥20% model prob AND ≥+3% edge) render brighter and
+        // fully opaque with a thin outline so they stand out from noisier +EV bars.
+        const fill = highConf ? '#4ADE80' : positive ? '#34A65F' : '#EF4444'
+        const opacity = highConf ? 1 : positive ? 0.85 : 0.45
 
         return (
           <g key={line.player_id}>
@@ -115,6 +149,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
               textAnchor="end"
               className={`fill-fg text-[11px] ${positive ? 'font-semibold' : ''}`}
             >
+              {highConf ? '★ ' : ''}
               {line.player_name.length > 22
                 ? line.player_name.slice(0, 21) + '…'
                 : line.player_name}
@@ -127,8 +162,10 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
               width={Math.max(barWidth, 2)}
               height={BAR_HEIGHT}
               rx={2}
-              fill={positive ? '#34A65F' : '#EF4444'}
-              opacity={positive ? 0.85 : 0.45}
+              fill={fill}
+              opacity={opacity}
+              stroke={highConf ? '#4ADE80' : 'none'}
+              strokeWidth={highConf ? 1 : 0}
             />
 
             {/* edge value label */}
@@ -194,6 +231,36 @@ function MarketPicker({
 }
 
 // ---------------------------------------------------------------------------
+// Minimum model-probability filter
+// ---------------------------------------------------------------------------
+
+function ProbabilityFilter({
+  value,
+  onChange,
+}: {
+  value: number
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {PROB_THRESHOLDS.map((t) => (
+        <button
+          key={t.value}
+          onClick={() => onChange(t.value)}
+          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+            t.value === value
+              ? 'bg-accent text-white'
+              : 'border bg-surface text-fg-secondary hover:text-fg'
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Lines table
 // ---------------------------------------------------------------------------
 
@@ -215,16 +282,29 @@ function LinesTable({ lines }: { lines: BettingLine[] }) {
         </thead>
         <tbody className="divide-y">
           {lines.map((line, idx) => {
-            const positive = line.edge >= 0.005
+            const positive = isPositive(line)
+            const highConf = isHighConfidence(line)
             return (
               <tr
                 key={line.player_id}
                 className={`transition-colors hover:bg-surface-2 ${
-                  positive ? 'bg-surface' : 'bg-surface opacity-60'
+                  highConf
+                    ? 'border-l-2 border-accent bg-accent/5'
+                    : positive
+                      ? 'bg-surface'
+                      : 'bg-surface opacity-60'
                 }`}
               >
                 <td className="px-4 py-2 text-right font-mono text-fg-tertiary">{idx + 1}</td>
                 <td className="px-4 py-2 font-medium text-fg">
+                  {highConf && (
+                    <span
+                      className="mr-1 text-accent"
+                      title="High-confidence signal: ≥20% model probability and ≥+3% edge"
+                    >
+                      ★
+                    </span>
+                  )}
                   {line.player_name}
                   {positive && (
                     <span className="ml-2 rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
@@ -271,15 +351,38 @@ function LinesTable({ lines }: { lines: BettingLine[] }) {
 // Reliability note — honest, per-market framing of how much to trust the edge
 // ---------------------------------------------------------------------------
 
-function ReliabilityNote({ outcomeKey }: { outcomeKey: OutcomeKey }) {
-  const { tier, note } = OUTCOME_RELIABILITY[outcomeKey]
+function ReliabilityNote({
+  outcomeKey,
+  oddsSource,
+}: {
+  outcomeKey: OutcomeKey
+  oddsSource: string
+}) {
+  const base = OUTCOME_RELIABILITY[outcomeKey]
+
+  // The hardcoded map assumes make-cut has no live book market (tier 'synthetic').
+  // The live board can override that: when odds_source is 'datagolf' the lines are a
+  // real sportsbook consensus, so we promote the market out of the synthetic tier and
+  // describe the edge as a genuine model-vs-market comparison instead of a vig artifact.
+  // Symmetrically, a real-odds market that comes back synthetic is demoted. The badge
+  // therefore reflects the live odds source, not the stale assumption.
+  const liveOdds = oddsSource === 'datagolf'
+  const overrodeSynthetic = base.tier === 'synthetic' && liveOdds
+  const tier = overrodeSynthetic ? 'medium' : base.tier
+  const note = overrodeSynthetic
+    ? 'Best-calibrated market (+0.25 Brier skill), now priced against a live sportsbook consensus — divergences are a genuine model-vs-market comparison. Still a research signal, not guaranteed value.'
+    : base.note
+
   const style =
     tier === 'medium'
       ? 'border-accent/30 bg-accent/5 text-fg-secondary'
       : 'border-negative/30 bg-negative/5 text-fg-secondary'
   const badge =
     tier === 'medium'
-      ? { label: 'Best available market', cls: 'bg-accent/15 text-accent' }
+      ? {
+          label: liveOdds ? 'Live odds · best market' : 'Best available market',
+          cls: 'bg-accent/15 text-accent',
+        }
       : tier === 'synthetic'
         ? { label: 'Synthetic odds', cls: 'bg-negative/15 text-negative' }
         : { label: 'Low confidence', cls: 'bg-negative/15 text-negative' }
@@ -293,11 +396,6 @@ function ReliabilityNote({ outcomeKey }: { outcomeKey: OutcomeKey }) {
         <span className="font-medium text-fg">{OUTCOME_LABELS[outcomeKey]} market</span>
       </div>
       <p className="mt-1.5 leading-relaxed">{note}</p>
-      <p className="mt-1.5 leading-relaxed text-fg-tertiary">
-        This model improves on a naive base-rate baseline but does not beat a sharp sportsbook.
-        Read this board as where the model <em>disagrees</em> with the market — a research signal,
-        not guaranteed +EV. Large edges are most often model error, not value.
-      </p>
     </div>
   )
 }
@@ -307,7 +405,9 @@ function ReliabilityNote({ outcomeKey }: { outcomeKey: OutcomeKey }) {
 // ---------------------------------------------------------------------------
 
 export function BettingEdge() {
-  const [outcomeKey, setOutcomeKey] = useState<OutcomeKey>('top_20_prob')
+  const [outcomeKey, setOutcomeKey] = useState<OutcomeKey>('make_cut_prob')
+  // Default to ≥10% so the table opens on meaningful divergences, not longshot noise.
+  const [minProb, setMinProb] = useState<number>(0.1)
 
   const { data: currentTournament, isLoading: tournamentLoading } = useCurrentTournament()
   const tournamentId = currentTournament?.id ?? null
@@ -319,10 +419,23 @@ export function BettingEdge() {
     error,
   } = useBettingEdge(tournamentId, outcomeKey)
 
-  // Compute max absolute edge for chart scale.
+  // Apply the minimum-probability filter, then sort by edge descending so the
+  // largest positive divergences sit on top and negatives fall to the bottom.
+  const filteredLines = useMemo(() => {
+    if (!board) return []
+    return board.lines
+      .filter((l) => l.model_prob >= minProb)
+      .sort((a, b) => b.edge - a.edge)
+  }, [board, minProb])
+
+  // Header count reflects the filtered set, using the same +EV predicate as the
+  // row badges so the number always matches the badges the user can see.
+  const filteredPositive = filteredLines.filter(isPositive).length
+
+  // Compute max absolute edge for chart scale (from the filtered set).
   const maxEdge =
-    board && board.lines.length > 0
-      ? Math.max(...board.lines.map((l) => Math.abs(l.edge)))
+    filteredLines.length > 0
+      ? Math.max(...filteredLines.map((l) => Math.abs(l.edge)))
       : 0.1
 
   return (
@@ -335,35 +448,23 @@ export function BettingEdge() {
             {new Date(currentTournament.start_date).toLocaleDateString()}
           </p>
         )}
+        <p className="mt-2 text-xs leading-relaxed text-fg-tertiary">
+          Where the model diverges from the market — model probabilities vs. book-implied odds
+          for the current field (research, not a guaranteed +EV signal). Make Cut and Top 20 carry
+          validated skill; Win is intentionally coarse.
+        </p>
         {board && (
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-fg-tertiary">
             <span>
-              Odds:{' '}
-              {board.odds_source === 'datagolf' ? (
-                <span className="font-mono text-positive">Live sportsbook consensus</span>
-              ) : (
-                <span className="font-mono text-accent">Synthetic (model)</span>
-              )}
-            </span>
-            <span>
-              Model: <span className="font-mono">Calibrated classifier (golf_v1)</span>
-            </span>
-            <span>
-              Sizing:{' '}
-              <span className="font-mono">½-Kelly</span>
-            </span>
-            <span>
               +EV lines:{' '}
-              <span className="font-mono text-positive">{board.n_positive_ev}</span> /{' '}
-              {board.lines.length}
+              <span className="font-mono text-positive">{filteredPositive}</span> /{' '}
+              {filteredLines.length}
+              {minProb > 0 && (
+                <span className="text-fg-tertiary"> (≥{Math.round(minProb * 100)}% filter)</span>
+              )}
             </span>
           </div>
         )}
-        <p className="mt-2 text-xs text-fg-tertiary">
-          {board?.odds_source === 'datagolf'
-            ? 'Odds are a median consensus across sportsbooks (via DataGolf), de-vigged by field normalization. Edge = model probability − fair book-implied probability.'
-            : 'No live odds feed configured — odds are synthetic lines from model probabilities with a 10% vig margin. Edge = model probability − book implied probability after vig removal.'}
-        </p>
       </header>
 
       {(tournamentLoading || boardLoading) && (
@@ -382,7 +483,7 @@ export function BettingEdge() {
 
       {board && (
         <>
-          {/* Market selector */}
+          {/* Market selector — ordered by validated skill (Make Cut → … → Win) */}
           <section className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">Market</p>
             <MarketPicker value={outcomeKey} onChange={setOutcomeKey} />
@@ -391,25 +492,47 @@ export function BettingEdge() {
           {/* Honest reliability caveat — the model improves on a naive baseline
               but does not beat a sharp sportsbook, so this board is a model-vs-
               market divergence view, not a guaranteed +EV signal. */}
-          <ReliabilityNote outcomeKey={outcomeKey} />
+          <ReliabilityNote outcomeKey={outcomeKey} oddsSource={board.odds_source} />
 
-          {/* Edge bar chart */}
-          <section className="space-y-3">
+          {/* Minimum model-probability filter — drops longshot noise from the view. */}
+          <section className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-              Edge Distribution (top 20 players)
+              Min. model probability
             </p>
-            <div className="overflow-x-auto rounded-lg border bg-surface p-4">
-              <EdgeBarChart lines={board.lines} maxEdge={maxEdge} />
-            </div>
+            <ProbabilityFilter value={minProb} onChange={setMinProb} />
+            <p className="text-[11px] italic text-fg-tertiary">
+              Tip: filter to ≥20% model probability to focus on the most reliable divergences. A
+              small edge on a low-probability longshot is mostly noise. ★ marks the most actionable
+              signals (≥20% model probability and ≥+3% edge).
+            </p>
           </section>
 
-          {/* Full table */}
-          <section className="space-y-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-              All Lines — sorted by EV
+          {filteredLines.length === 0 ? (
+            <p className="rounded-lg border border-negative/30 bg-negative/5 px-4 py-6 text-center text-sm text-fg-secondary">
+              No players meet the ≥{Math.round(minProb * 100)}% model-probability threshold for this
+              market. Lower the filter to see more lines.
             </p>
-            <LinesTable lines={board.lines} />
-          </section>
+          ) : (
+            <>
+              {/* Edge bar chart */}
+              <section className="space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+                  Edge Distribution (top 20 by edge)
+                </p>
+                <div className="overflow-x-auto rounded-lg border bg-surface p-4">
+                  <EdgeBarChart lines={filteredLines} maxEdge={maxEdge} />
+                </div>
+              </section>
+
+              {/* Full table */}
+              <section className="space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+                  All Lines — sorted by edge (high → low)
+                </p>
+                <LinesTable lines={filteredLines} />
+              </section>
+            </>
+          )}
         </>
       )}
     </main>

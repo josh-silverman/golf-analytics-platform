@@ -108,13 +108,15 @@ describe('BettingEdge', () => {
     })
   })
 
-  it('shows n_positive_ev count in the header', async () => {
+  it('shows the filtered +EV count in the header', async () => {
     mockFetch()
     renderEdge(makeClient())
     await waitFor(() => {
-      // The header line is "+EV lines: 2 / 2" — find the positive-coloured span
+      // Count is computed from the filtered lines with the same +EV predicate as the
+      // row badges. With the default ≥10% filter both fixture lines remain (0.18, 0.12),
+      // and only Rory (edge +0.04) is +EV → the first positive-coloured span reads "1".
       const positiveSpan = document.querySelector('.text-positive')
-      expect(positiveSpan?.textContent).toBe('2')
+      expect(positiveSpan?.textContent).toBe('1')
     })
   })
 

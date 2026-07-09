@@ -2,12 +2,16 @@ import { useQuery } from '@tanstack/react-query'
 
 export type OutcomeKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
 
+// Ordered by VALIDATED MODEL SKILL, not by market name. Make-cut (+0.246) and
+// top-20 (+0.141) carry genuine backtest skill and lead; top-10 follows; top-5
+// and win are intentionally coarse (skill ≈ 0) and come last. This order drives
+// the Betting Edge market picker so the trustworthy markets are surfaced first.
 export const OUTCOME_KEYS: OutcomeKey[] = [
-  'win_prob',
-  'top_5_prob',
-  'top_10_prob',
-  'top_20_prob',
   'make_cut_prob',
+  'top_20_prob',
+  'top_10_prob',
+  'top_5_prob',
+  'win_prob',
 ]
 
 export const OUTCOME_LABELS: Record<OutcomeKey, string> = {
@@ -87,7 +91,7 @@ async function fetchBettingEdge(
   return r.json() as Promise<BettingBoard>
 }
 
-export function useBettingEdge(tournamentId: number | null, outcomeKey: OutcomeKey = 'top_20_prob') {
+export function useBettingEdge(tournamentId: number | null, outcomeKey: OutcomeKey = 'make_cut_prob') {
   return useQuery({
     queryKey: ['betting', tournamentId, outcomeKey],
     queryFn: () => fetchBettingEdge(tournamentId!, outcomeKey),

@@ -123,25 +123,13 @@ export function Home() {
             title="Prediction Leaderboard"
             description="Win / top-N / make-cut probabilities for any tournament's field. Switch events, sort by market, search players, and click any name for their strokes-gained trends and current-event outlook."
           />
+          <FeatureCard
+            to="/edge"
+            category="Research"
+            title="Betting Edge"
+            description="Model probabilities vs. book-implied odds for the current event — a model-vs-market divergence view. Filter by minimum probability and focus on Make Cut and Top 20, where the model carries validated skill."
+          />
         </div>
-        <p
-          className="overflow-x-auto whitespace-nowrap text-xs text-fg-tertiary"
-          title="Out-of-sample Brier skill vs a base-rate baseline (higher = more reliable). Make-cut and Top-20 carry genuine skill; Win is intentionally coarse."
-        >
-          <span className="font-medium text-fg-secondary">Model reliability</span>
-          <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="cursor-help text-fg-tertiary">Brier skill ⓘ</span>
-          <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono text-accent">Make cut +0.25</span>
-          <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono text-accent">Top 20 +0.14</span>
-          <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono">Top 10 +0.08</span>
-          <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono">Top 5 +0.02</span>
-          <span className="px-1.5 font-semibold text-fg">·</span>
-          <span className="font-mono text-fg-tertiary">Win +0.00</span>
-        </p>
       </section>
 
       {/* ------------------------------------------------------------------ */}
