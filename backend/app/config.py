@@ -50,6 +50,24 @@ class Settings(BaseSettings):
             " ConstantModel is used when no version is marked active."
         ),
     )
+    serving_strategy: str = Field(
+        default="path_a",
+        description=(
+            "How the predictions endpoint sources probabilities. 'path_a'"
+            " (default, validated 2026-07): DataGolf-direct for covered players,"
+            " the SG-only model for cold-start. 'stacked': the active v3 model"
+            " over the whole field (the pre-Path-A behaviour). Head-to-head"
+            " validation showed path_a matches/exceeds stacked on every market"
+            " and resolves the win/top-5 loss."
+        ),
+    )
+    prediction_boards_path: str = Field(
+        default="./prediction_boards",
+        description=(
+            "Root directory for the forward out-of-sample prediction-board"
+            " archive (boards captured pre-event, graded once trained-before)."
+        ),
+    )
 
     # Observability
     sentry_dsn: str | None = Field(

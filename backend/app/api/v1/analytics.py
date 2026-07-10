@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.v1.deps import (
+    get_board_archive,
     get_catalog_service,
     get_model_registry,
     get_prediction_service,
@@ -15,6 +16,8 @@ from app.api.v1.schemas import (
     BenchmarkPayload,
     BenchmarkPlayerRow,
     CalibrationReportPayload,
+    ForwardMarketSkillPayload,
+    ForwardTrackRecordPayload,
     OutcomeCalibrationPayload,
     ReliabilityBinPayload,
     TrackRecordPayload,
@@ -22,7 +25,9 @@ from app.api.v1.schemas import (
 from app.config import get_settings
 from app.ml.calibration import CalibratedOutcomeModel, ReliabilityBin
 from app.ml.registry import ModelRegistry  # noqa: TC001 — FastAPI resolves at runtime
+from app.services.board_archive import BoardArchive  # noqa: TC001
 from app.services.catalog import CatalogService  # noqa: TC001
+from app.services.forward_track_record import compute_forward_track_record
 from app.services.predictions import PredictionService  # noqa: TC001
 from app.services.track_record import compute_track_record
 
@@ -90,6 +95,41 @@ def _bin_payload(b: ReliabilityBin) -> ReliabilityBinPayload:
         mean_predicted=b.mean_predicted,
         observed_frequency=b.observed_frequency,
         count=b.count,
+    )
+
+
+@router.get("/track-record/forward")
+async def get_forward_track_record(
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    archive: Annotated[BoardArchive, Depends(get_board_archive)],
+) -> ForwardTrackRecordPayload:
+    """Genuinely out-of-sample track record from captured pre-event boards.
+
+    Grades only boards whose model was trained strictly before the event, so —
+    unlike ``/track-record`` — it cannot be inflated by the active model having
+    seen these events in training. Accumulates forward from the first captured
+    pre-event board; ``available`` is false until one completed OOS board exists.
+    """
+    tr = await compute_forward_track_record(archive=archive, catalog=catalog)
+    if tr is None:
+        return ForwardTrackRecordPayload(available=False)
+    return ForwardTrackRecordPayload(
+        available=True,
+        events=tr.events,
+        players_graded=tr.players_graded,
+        events_to_meaningful=tr.events_to_meaningful,
+        markets=[
+            ForwardMarketSkillPayload(
+                market=m.market,
+                n=m.n,
+                base_rate=m.base_rate,
+                brier=m.brier,
+                brier_skill=m.brier_skill,
+                ci_lower=m.ci_lower,
+                ci_upper=m.ci_upper,
+            )
+            for m in tr.markets
+        ],
     )
 
 

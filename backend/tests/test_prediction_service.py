@@ -235,6 +235,77 @@ async def test_predict_tournament_normalizes_win_probs_to_one() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Path A: DataGolf-direct for covered players, model for cold-start
+# ---------------------------------------------------------------------------
+
+
+class _StubPathAProvider:
+    """Provider stub exposing only the five-market DG-preds Path A needs."""
+
+    def __init__(self, dg: dict[int, dict[str, float]]) -> None:
+        self._dg = dg
+
+    async def get_pretournament_full_preds(
+        self, event_id: int, year: int, *, live: bool = False
+    ) -> dict[int, dict[str, float]]:
+        return dict(self._dg)
+
+
+def _path_a_service(dg: dict[int, dict[str, float]]) -> PredictionService:
+    from app.services.predictions import PathASource
+
+    return PredictionService(
+        catalog=_StubCatalog(),  # type: ignore[arg-type]
+        extractor=_StubExtractor(),  # type: ignore[arg-type]
+        model=_RankingModel(),  # cold-start model (win ∝ sg_total_rating)
+        model_name="golf_v1",
+        model_version_id="path_a",
+        path_a=PathASource(provider=_StubPathAProvider(dg)),  # type: ignore[arg-type]
+    )
+
+
+async def test_path_a_routes_covered_player_to_datagolf() -> None:
+    """A DG-covered player is served DataGolf's probabilities, not the model's.
+
+    Under the pure model, player 12 (highest SG) tops the board. Path A gives
+    only player 11 a DataGolf entry with a dominant win probability, so 11 must
+    now top the board — proving covered players are routed to DataGolf.
+    """
+    dg = {
+        11: {"win_prob": 0.30, "top_5_prob": 0.5, "top_10_prob": 0.6,
+             "top_20_prob": 0.8, "make_cut_prob": 0.95},
+    }
+    result = await _path_a_service(dg).predict_tournament(1, as_of=date(2026, 5, 30))
+    assert result is not None
+    assert result.outcomes[0].player_id == 11  # DG favorite, not the model's
+
+
+async def test_path_a_mixed_board_is_coherent_and_normalized() -> None:
+    """Mixed DG + cold-start board stays nested and field-normalized."""
+    dg = {
+        11: {"win_prob": 0.30, "top_5_prob": 0.5, "top_10_prob": 0.6,
+             "top_20_prob": 0.8, "make_cut_prob": 0.95},
+        12: {"win_prob": 0.02, "top_5_prob": 0.1, "top_10_prob": 0.2,
+             "top_20_prob": 0.4, "make_cut_prob": 0.7},
+        # player 10 has no DG entry → cold-start via the model
+    }
+    result = await _path_a_service(dg).predict_tournament(1, as_of=date(2026, 5, 30))
+    assert result is not None
+    for o in result.outcomes:
+        assert 0.0 <= o.win_prob <= o.top_5_prob <= o.top_10_prob <= o.top_20_prob
+        assert o.top_20_prob <= o.make_cut_prob <= 1.0
+    assert sum(o.win_prob for o in result.outcomes) == pytest.approx(1.0)
+
+
+async def test_path_a_empty_dg_serves_whole_field_from_model() -> None:
+    """With no DG coverage every player cold-starts to the model (graceful)."""
+    result = await _path_a_service({}).predict_tournament(1, as_of=date(2026, 5, 30))
+    assert result is not None
+    # Same as the pure-model path: highest-SG player (12) tops the board.
+    assert result.outcomes[0].player_id == 12
+
+
+# ---------------------------------------------------------------------------
 # Pure functions: coherence + field normalization
 # ---------------------------------------------------------------------------
 

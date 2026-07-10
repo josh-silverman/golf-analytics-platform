@@ -7,11 +7,20 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.v1.deps import get_prediction_service
+from app.api.v1.deps import (
+    get_board_archive,
+    get_catalog_service,
+    get_prediction_service,
+)
 from app.api.v1.schemas import PlayerOutcomePayload, TournamentPredictionsPayload
 from app.config import get_settings
-from app.services.catalog import reference_today
-from app.services.predictions import PredictionService  # noqa: TC001
+from app.domain.enums import TournamentStatus
+from app.services.board_archive import BoardArchive, snapshot_from_predictions  # noqa: TC001
+from app.services.catalog import CatalogService, reference_today  # noqa: TC001
+from app.services.predictions import (  # noqa: TC001
+    PredictionService,
+    TournamentPredictions,
+)
 
 router = APIRouter(tags=["predictions"], prefix="/predictions")
 
@@ -48,10 +57,45 @@ async def _store_board(cache_key: str, payload: TournamentPredictionsPayload) ->
         return
 
 
+async def _capture_board(
+    catalog: CatalogService,
+    archive: BoardArchive,
+    predictions: TournamentPredictions,
+) -> None:
+    """Immutably capture a pre-event board for the forward OOS track record.
+
+    No-op for completed events (their outcome is already known), when the
+    training cutoff is unknown (can't certify OOS), or when a snapshot already
+    exists. Never raises — archival must not break serving.
+    """
+    try:
+        if predictions.model_trained_through is None:
+            return
+        if not predictions.outcomes:
+            # No field yet (an event whose pairings aren't set) — don't pin an
+            # empty board; the first capture with a real field should win.
+            return
+        if archive.has(predictions.tournament_id, predictions.model_version_id):
+            return
+        tournament = await catalog.get_tournament(predictions.tournament_id)
+        if tournament is None or tournament.status == TournamentStatus.COMPLETED:
+            return
+        snapshot = snapshot_from_predictions(
+            predictions,
+            tournament_start_date=tournament.start_date,
+            model_trained_through=predictions.model_trained_through,
+        )
+        archive.persist(snapshot)
+    except Exception:  # noqa: BLE001 — best-effort; serving must never fail on this
+        return
+
+
 @router.get("/{tournament_id}")
 async def predict_tournament(
     tournament_id: int,
     service: Annotated[PredictionService, Depends(get_prediction_service)],
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     as_of: date | None = Query(default=None),  # noqa: B008
 ) -> TournamentPredictionsPayload:
     """Leaderboard of win/top-N/make-cut probabilities for a tournament.
@@ -74,6 +118,10 @@ async def predict_tournament(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Tournament {tournament_id} not found",
         )
+    # Forward track record: capture this board immutably the first time it's
+    # served for a not-yet-completed event, so the later grade is genuinely
+    # pre-event. Best-effort — never let archival break serving.
+    await _capture_board(catalog, board_archive, predictions)
     payload = TournamentPredictionsPayload(
         tournament_id=predictions.tournament_id,
         tournament_name=predictions.tournament_name,

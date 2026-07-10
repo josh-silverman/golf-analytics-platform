@@ -1,1 +1,4 @@
 diagnostics/
+
+# Forward prediction-board archive — runtime data, accumulates per event.
+prediction_boards/

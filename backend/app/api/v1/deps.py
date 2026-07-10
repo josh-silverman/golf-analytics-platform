@@ -19,11 +19,14 @@ from app.features.feature_sets import v2_field_relative, v3_dg_preds
 from app.ml.base import ConstantModel
 from app.ml.registry import ModelRegistry
 from app.providers.factory import get_data_provider
+from app.services.board_archive import BoardArchive
 from app.services.catalog import CatalogService
 from app.services.features import FeatureExtractor
-from app.services.predictions import PredictionService
+from app.services.predictions import PathASource, PredictionService
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from app.features.base import FeatureSet
     from app.ml.base import Model
     from app.providers.base import DataProvider
@@ -82,6 +85,12 @@ def get_model_registry() -> ModelRegistry:
     return ModelRegistry(Path(get_settings().model_registry_path))
 
 
+@lru_cache(maxsize=1)
+def get_board_archive() -> BoardArchive:
+    """Process-cached forward prediction-board archive."""
+    return BoardArchive(Path(get_settings().prediction_boards_path))
+
+
 def _resolve_active_model() -> tuple[Model, str, str | None]:
     """Return ``(model, name, version_id)`` for the active golf model.
 
@@ -96,17 +105,61 @@ def _resolve_active_model() -> tuple[Model, str, str | None]:
     return registry.load_artifact(active), name, active.version_id
 
 
+def _latest_v2_cold_start() -> tuple[Model, str | None, date | None] | None:
+    """Newest registered SG-only (v2) model, for Path A cold-start serving.
+
+    Selected by feature-set hash (``v2_field_relative``) rather than a pinned id
+    so a future v2 retrain flows through automatically. ``None`` when no v2 model
+    is registered → Path A can't cold-start and the caller falls back to stacked.
+    """
+    v2_hash = v2_field_relative().hash
+    registry = get_model_registry()
+    name = get_settings().active_model_name
+    candidates = [
+        v for v in registry.list_versions(name) if v.feature_set_hash == v2_hash
+    ]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda v: v.training_data_through)
+    return registry.load_artifact(best), best.version_id, best.training_data_through
+
+
 def get_prediction_service(
     catalog: CatalogService = Depends(get_catalog_service),  # noqa: B008
-    extractor: FeatureExtractor = Depends(get_feature_extractor),  # noqa: B008
+    provider: DataProvider = Depends(_provider_dep),  # noqa: B008
 ) -> PredictionService:
+    """Assemble the predictions service per the configured serving strategy.
+
+    Path A (default): DataGolf-direct for covered players + the SG-only v2 model
+    for cold-start, extracting only the 14 v2 features (no wasted DG-feature
+    fetch). Falls back to the stacked v3 path when Path A is disabled or no v2
+    cold-start model is registered.
+    """
+    strategy = get_settings().serving_strategy
+    if strategy == "path_a":
+        cold = _latest_v2_cold_start()
+        if cold is not None:
+            cold_model, cold_version, cold_through = cold
+            return PredictionService(
+                catalog=catalog,
+                extractor=FeatureExtractor(provider, feature_set=v2_field_relative()),
+                model=cold_model,
+                model_name=get_settings().active_model_name,
+                model_version_id=f"path_a@{cold_version}",
+                model_trained_through=cold_through,
+                path_a=PathASource(provider=provider),
+            )
+        # No v2 model registered → fall through to the stacked path below.
+
     model, name, version_id = _resolve_active_model()
+    active = get_model_registry().get_active(name)
     return PredictionService(
         catalog=catalog,
-        extractor=extractor,
+        extractor=FeatureExtractor(provider, feature_set=_feature_set_for_active_model()),
         model=model,
         model_name=name,
         model_version_id=version_id,
+        model_trained_through=active.training_data_through if active else None,
     )
 
 

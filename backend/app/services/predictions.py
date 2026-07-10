@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from datetime import date
 
     from app.ml.base import Model
+    from app.providers.base import DataProvider
     from app.services.catalog import CatalogService
     from app.services.features import FeatureExtractor
 
@@ -126,6 +127,27 @@ def normalize_field(
 
 
 @dataclass(frozen=True)
+class PathASource:
+    """Path A serving: DataGolf-direct for covered players, SG-only for cold-start.
+
+    When attached to a :class:`PredictionService`, each player's raw five-market
+    probabilities come from DataGolf's own pre-event predictions if DataGolf
+    covers them, and from the service's model (the v2 SG-only model) otherwise.
+    Both sources then flow through the *same* ``coherent_outcomes`` +
+    ``normalize_field`` steps, so the mixed-source board is coherent and
+    field-consistent by construction.
+
+    This is the "Path A" decision: on covered players DataGolf's probabilities
+    match or beat the stacked model on every market (and clearly beat it on
+    win/top-5), so we serve them directly rather than through a model that has
+    largely absorbed them; the SG-only model earns its keep only where DataGolf
+    has no coverage (cold-start).
+    """
+
+    provider: DataProvider  # supplies get_pretournament_full_preds for the event
+
+
+@dataclass(frozen=True)
 class PlayerOutcome:
     """One player's predicted outcome distribution for the tournament."""
 
@@ -153,6 +175,11 @@ class TournamentPredictions:
     model_version_id: str | None  # None when the fallback model is in use
     feature_set_hash: str
     outcomes: tuple[PlayerOutcome, ...]
+    # Training cutoff of the serving model — the date used to certify a captured
+    # board as out-of-sample (event started strictly after this). Under Path A
+    # this is the cold-start model's cutoff; the DG-direct part is inherently a
+    # frozen pre-event snapshot. ``None`` when unknown (e.g. fallback model).
+    model_trained_through: date | None = None
 
 
 class PredictionService:
@@ -166,12 +193,19 @@ class PredictionService:
         model: Model,
         model_name: str,
         model_version_id: str | None,
+        path_a: PathASource | None = None,
+        model_trained_through: date | None = None,
     ) -> None:
         self._catalog = catalog
         self._extractor = extractor
         self._model = model
         self._model_name = model_name
         self._model_version_id = model_version_id
+        self._model_trained_through = model_trained_through
+        # When set, covered players are served DataGolf-direct and ``model`` acts
+        # as the cold-start (SG-only) fallback. When None, ``model`` serves the
+        # whole field (the classic single-model path).
+        self._path_a = path_a
 
     async def predict_tournament(
         self,
@@ -221,6 +255,15 @@ class PredictionService:
                 live=not is_completed,
             ),
         )
+        # Path A: DataGolf's own five-market probabilities for the whole field,
+        # fetched once (archive for completed events, live for upcoming). Empty
+        # dict → every player cold-starts to the SG-only model.
+        dg_full: dict[int, dict[str, float]] = {}
+        if self._path_a is not None:
+            dg_full = await self._path_a.provider.get_pretournament_full_preds(
+                tournament.id, tournament.season, live=not is_completed
+            )
+
         # First pass: per-player coherent probabilities, keeping the player so we
         # can rebuild outcomes after the field-level normalization step.
         players: list[tuple[int, str]] = []
@@ -232,7 +275,12 @@ class PredictionService:
                 # than fail the whole request.
                 continue
             extraction = extractions[entry.player_id]
-            preds = self._model.predict(extraction.values)
+            if self._path_a is not None:
+                # Covered → DataGolf-direct; cold-start → SG-only model.
+                dg = dg_full.get(entry.player_id)
+                preds = dg if dg is not None else self._model.predict(extraction.values)
+            else:
+                preds = self._model.predict(extraction.values)
             players.append((player.id, player.full_name))
             coherent_rows.append(coherent_outcomes(preds))
 
@@ -270,6 +318,7 @@ class PredictionService:
             model_version_id=self._model_version_id,
             feature_set_hash=self._extractor.feature_set.hash,
             outcomes=tuple(outcomes),
+            model_trained_through=self._model_trained_through,
         )
 
 

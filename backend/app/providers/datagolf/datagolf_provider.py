@@ -596,6 +596,8 @@ class DataGolfProvider(DataProvider):
         # player_id. Immutable archives are also mirrored to Redis (below);
         # this L1 collapses the once-per-field-extraction fetch to a dict hit.
         self._dg_preds_cache: dict[tuple[int, int], dict[int, dict[str, float]]] = {}
+        # Path A: DataGolf's full five-market probabilities served directly.
+        self._dg_full_preds_cache: dict[tuple[int, int], dict[int, dict[str, float]]] = {}
         # Optional Redis L2 for those immutable per-event archives, so they
         # survive process restarts and the daily as-of cache-key roll. Absent
         # (None) in tests/offline → L1-only, identical to the previous behaviour.
@@ -1332,6 +1334,86 @@ class DataGolfProvider(DataProvider):
     # ``fin_text`` is the actual result; reading it would leak the outcome into
     # a pre-event feature. Named here so the drop is explicit and asserted.
     _DG_PRED_FORBIDDEN_KEY = "fin_text"
+
+    # Path A serving: DataGolf's full five-market probabilities served DIRECTLY
+    # to covered players (not as features). DG market name → our outcome key.
+    # ``win``/``top_5`` are included here (unlike the feature payload) precisely
+    # because DataGolf's own probabilities are stronger than ours on those two
+    # markets (the head-to-head loss Path A resolves).
+    _DG_FULL_MARKETS: dict[str, str] = {  # noqa: RUF012
+        "win": "win_prob",
+        "top_5": "top_5_prob",
+        "top_10": "top_10_prob",
+        "top_20": "top_20_prob",
+        "make_cut": "make_cut_prob",
+    }
+
+    async def get_pretournament_full_preds(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> dict[int, dict[str, float]]:
+        """All FIVE DataGolf markets keyed by player_id, in our outcome-key shape.
+
+        Used by Path A serving to hand DataGolf's own probabilities straight to
+        covered players. Same archive-vs-live source split and leakage discipline
+        as ``get_pretournament_preds`` (``fin_text`` never read); differs only in
+        surfacing win/top-5 and mapping to ``{win_prob, top_5_prob, top_10_prob,
+        top_20_prob, make_cut_prob}``. ``{}`` when the event has no predictions,
+        so callers cold-start those players. Values are probabilities in [0, 1].
+        """
+        if live:
+            rows = await self._fetch_dg_pred_rows(live=True)
+            return self._parse_dg_full_rows(rows)
+
+        cache_key = (event_id, year)
+        cached = self._dg_full_preds_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        redis_key = f"pga:datagolf:dg_full_preds:{event_id}:{year}"
+        l2 = await self._redis_get_json(redis_key)
+        if l2 is not None:
+            parsed = {int(k): v for k, v in l2.items()}
+            self._dg_full_preds_cache[cache_key] = parsed
+            return parsed
+
+        rows = await self._fetch_dg_pred_rows(live=False, event_id=event_id, year=year)
+        preds = self._parse_dg_full_rows(rows)
+        self._dg_full_preds_cache[cache_key] = preds
+        if preds:
+            await self._redis_set_json(redis_key, preds, _EVENT_ROWS_TTL_S)
+        return preds
+
+    def _parse_dg_full_rows(self, rows: list[Any]) -> dict[int, dict[str, float]]:
+        """Map raw rows to ``{player_id: {win_prob…make_cut_prob}}``, no fin_text.
+
+        A row missing any of the five markets is dropped (that player cold-starts
+        to the SG-only model) rather than served a partial board.
+        """
+        out: dict[int, dict[str, float]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            dg_id = row.get("dg_id")
+            if not dg_id:
+                continue
+            markets: dict[str, float] = {}
+            ok = True
+            for dg_name, our_key in self._DG_FULL_MARKETS.items():
+                v = row.get(dg_name)
+                if v is None:
+                    ok = False
+                    break
+                markets[our_key] = float(v)
+            if not ok:
+                continue
+            # Leakage guard, mirroring the feature path: the result never enters.
+            assert self._DG_PRED_FORBIDDEN_KEY not in markets  # noqa: S101
+            out[int(dg_id)] = markets
+        return out
 
     async def get_pretournament_preds(
         self,

@@ -85,6 +85,34 @@ class TrackRecordPayload(BaseModel):
     model_version_id: str | None = None
 
 
+class ForwardMarketSkillPayload(BaseModel):
+    """One market's out-of-sample Brier skill with its block-bootstrap CI."""
+
+    market: str
+    n: int
+    base_rate: float
+    brier: float
+    brier_skill: float
+    ci_lower: float
+    ci_upper: float
+
+
+class ForwardTrackRecordPayload(BaseModel):
+    """Genuinely out-of-sample accuracy accumulated from captured pre-event boards.
+
+    Distinct from ``TrackRecordPayload``: this grades *only* boards whose model
+    was trained strictly before the event, so it is free of the in-sample risk
+    the active-model report card carries. ``available`` is false until at least
+    one completed, OOS-qualifying board has been captured.
+    """
+
+    available: bool
+    events: int = 0
+    players_graded: int = 0
+    events_to_meaningful: int = 0
+    markets: list[ForwardMarketSkillPayload] = []
+
+
 class TournamentPredictionsPayload(BaseModel):
     """Body of ``GET /predictions/{tournament_id}``.
 

@@ -369,6 +369,39 @@ exactly, confirming a clean A/B on the feature set alone):
 features, archive 2018–2023, 35,804 training examples). Registry lineage:
 136a5aca11d2 → a212ed166088 → d69cf2a7323f → **0d2efade42ba**.
 
+### 2.8 Path A serving + forward out-of-sample track record (2026-07-10) — SHIPPED
+
+Two follow-ups, after a five-market head-to-head established that on DataGolf-
+covered players v3 *recovers* DataGolf's signal (ties on make-cut/top-20/top-10,
+loses on win/top-5, ~0.0004 Brier of orthogonal SG value) and an independent
+strategic review confirmed the accuracy program is complete.
+
+- **Path A serving (`serving_strategy=path_a`, now default).** The predictions
+  endpoint serves DataGolf's own five-market probabilities *directly* to covered
+  players (~95% of a field) and the v2 SG-only model (`d69cf2a7323f`) to
+  cold-start players; both pass through the same `coherent_outcomes` +
+  `normalize_field`. Validated on the **actual served pipeline** (not raw
+  benchmark rows) with a paired-delta bootstrap over a 27-event holdout: Path A
+  matches/exceeds v3 on every market and **resolves the win/top-5 loss** —
+  top-5 Δ+0.029 [CI +0.015,+0.044], top-10 Δ+0.011, top-20 Δ+0.007 (all CI-excl.
+  0), win +0.015, make-cut −0.001 (tie). Mixed-source boards verified coherent
+  and field-normalized. `stacked` restores the v3 whole-field path. The v3
+  artifact stays registered as the fallback; no model was retrained.
+- **Forward track record.** Every pre-event board is captured immutably at
+  serving time (`board_archive.py`), stamped with model version + training
+  cutoff; the grader (`forward_track_record.py`) admits only boards whose model
+  was trained *strictly before* the event — fixing the in-sample risk the
+  due-diligence review flagged in the active-model report card. Accumulates
+  forward from empty; ~20 completed OOS events (~half a season) before
+  make-cut/top-20 reach a stable CI. Exposed at `/analytics/track-record/forward`.
+
+The revised objective this serves: **not** accuracy parity with DataGolf through
+independent replication (shown unachievable on this data), but a full-coverage
+coherent calibrated product — DataGolf-grade where covered, best-effort SG-only
+where not — plus an honest accumulating forward record. The eighteen closed
+experiments (nine earlier ceiling closures + six rank-native + blow-up + course-
+fit + wave) stand as the documented evidence base for that conclusion.
+
 ---
 
 ## 3. Architecture and operations

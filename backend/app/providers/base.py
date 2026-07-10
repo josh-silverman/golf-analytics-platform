@@ -183,3 +183,20 @@ class DataProvider(ABC):
         :attr:`Capability.PRETOURNAMENT_PREDS`.
         """
         return {}
+
+    async def get_pretournament_full_preds(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> dict[int, dict[str, float]]:
+        """Full five-market pre-event probabilities for Path A direct serving.
+
+        Returns ``{player_id: {"win_prob", "top_5_prob", "top_10_prob",
+        "top_20_prob", "make_cut_prob"}}`` — the provider's own probabilities
+        served straight to covered players. Default ``{}`` (no external signal),
+        so Path A cold-starts every player to the SG-only model on a provider
+        that doesn't override this.
+        """
+        return {}

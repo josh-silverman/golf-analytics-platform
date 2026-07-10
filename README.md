@@ -47,6 +47,17 @@ top-5, top-10, top-20, and make-cut** — using [DataGolf](https://datagolf.com)
 data source (historical round-level strokes-gained, schedules, fields, and DataGolf's
 own pre-tournament projections).
 
+> **Objective, honestly revised (2026-07).** The original aim was accuracy *parity
+> with DataGolf via a genuinely different model*. The research below establishes that
+> this is not achievable on this data — on covered players an independent build cannot
+> beat DataGolf, and matching it requires consuming DataGolf's own outputs. The
+> objective was therefore redefined to what the evidence supports and what actually
+> delivers value: **(1)** a full-coverage, coherent, calibrated multi-market product
+> that serves DataGolf-grade probabilities where DataGolf covers and the best-effort
+> SG-only model where it doesn't; **(2)** the best available cold-start model for
+> uncovered players; and **(3)** an accumulating, genuinely out-of-sample forward
+> track record. Not "beat DataGolf" — *package the signal honestly and cover the gaps.*
+
 Three principles governed the work from the start:
 
 1. **Sharp, honestly-scoped accuracy** over impressive-looking dashboards. A market is
@@ -62,19 +73,30 @@ Three principles governed the work from the start:
 
 ## What the system is today
 
-- **Active model:** `golf_v1 @ 0d2efade42ba` — five independent
-  `HistGradientBoostingClassifier` heads (one per market) on an 18-feature set
-  (`v3_dg_preds`), each with its own probability calibration, trained on ~35,800
-  examples spanning the 2018–2023 historical archive plus 2024+ live events with
-  365-day recency weighting.
-- **What it does well:** make-cut and top-20 carry genuine, reproducible
-  out-of-sample skill (lower CI bounds clearly above zero); top-10 is genuine under
-  v3; predictions are coherent (win ≤ top-5 ≤ … ≤ make-cut) and field-normalized by
-  construction.
+- **Serving architecture — Path A (active).** The predictions endpoint serves
+  **DataGolf's own five-market probabilities directly** to covered players (~95% of a
+  field) and the **v2 SG-only model** to cold-start players DataGolf doesn't cover;
+  both flow through the same coherence + field-normalization. This was validated on the
+  actual served pipeline (paired-delta bootstrap over a 27-event holdout) to **match or
+  exceed** the previous stacked-v3 serving on every market and to **resolve the
+  win/top-5 loss** (top-5 +0.029 CI-excludes-zero; win +0.015; make-cut a tie).
+  Toggle via `serving_strategy` (`path_a` default, `stacked` for the old v3 path).
+- **Models in the registry.** `golf_v1 @ 0d2efade42ba` (v3, 18-feature stacked) remains
+  the registered active artifact and the `stacked` fallback; `golf_v1 @ d69cf2a7323f`
+  (v2, 14-feature SG-only, same 2026-06-30 cutoff) is the Path A cold-start model. Both
+  are five independent `HistGradientBoostingClassifier` heads with per-market
+  calibration, trained on ~35,800 examples (2018–2023 archive + 2024+, 365-day recency).
+- **What it does well:** make-cut and top-20 carry genuine, reproducible out-of-sample
+  skill (lower CI bounds clearly above zero); top-10 is genuine; predictions are
+  coherent (win ≤ top-5 ≤ … ≤ make-cut) and field-normalized by construction.
+- **Forward track record (running).** Every pre-event board is captured immutably at
+  serving time, stamped with the model version and its training cutoff; a grader scores
+  only boards whose model was trained *strictly before* the event — a genuinely
+  out-of-sample record. Exposed at `/analytics/track-record/forward`.
 - **What it honestly does not do:** beat a sharp sportsbook on any market, or predict
   winners with meaningful skill (that market is data-starved and dominated by
   week-of variance).
-- **Test suite:** 275 passing tests (backend), deterministic.
+- **Test suite:** 284 passing tests (backend), deterministic.
 
 Full identity and hyperparameters are in
 [`docs/project-summary.md` §1](docs/project-summary.md).
@@ -95,6 +117,7 @@ sequence, then a feature-engineering phase, then a long ceiling-finding program.
 | Jun 28 – Jul 1 | **Historical-archive data-scaling program.** Training set grows ~6.5k → 35.8k examples by adding the 2018–2023 archive, validated one window at a time. Closed at 2018–2023 (pre-2018 rejected). | First improvement from *more data* rather than a new feature. `golf_v1 @ d69cf2a7323f`. |
 | Jul 2 | **`v3_dg_preds` promoted → `golf_v1 @ 0d2efade42ba`** (current active). Folds DataGolf's own pre-tournament probabilities in as meta-features. | Largest single-change gain in the program's history — and the only *external* data class to clear the gate. |
 | Jul 9–10 | **Rank-native research track** + final feature-space audit (blow-up rate, course-fit interaction, tee-time wave). | All closed. Confirmed the SG-adjacent feature space is exhausted; produced the DataGolf-recovery finding below. |
+| Jul 10 | **Path A serving shipped** (DataGolf-direct + SG-only cold-start) and the **forward out-of-sample track record**, after an independent strategic review. | Turns the exhaustion finding into product: serve the signal where it lives, cover the gaps, and accumulate an honest forward record. |
 
 ---
 
@@ -221,17 +244,19 @@ win of the entire program), and the DG meta-features (v3).
 **A second, deeper research track (Jul 9–10)** stress-tested the ceiling from two more
 angles and confirmed it:
 
-- **Is the model "just DataGolf with extra steps"?** A DG-standalone head-to-head plus
-  paired-delta bootstrap found that on covered players, v3 ≈ DG-standalone on
-  make-cut/top-20/top-10 and *worse* on win/top-5, with the SG features carrying only
-  **~0.0004 Brier of orthogonal signal**. (See [Key discoveries](#key-discoveries).)
+- **Is the model "just DataGolf with extra steps"?** A five-market DG-standalone
+  head-to-head, confirmed with paired-delta bootstraps on identical rows, found that on
+  covered players v3 ties DataGolf on make-cut/top-20/top-10 and is *worse* on
+  win/top-5, with the SG features carrying only **~0.0004 Brier of orthogonal signal**.
+  Full table below.
 - **A rank-native architecture** (a strength-and-variance simulation replacing the five
   independent classifiers) was designed, an evaluation harness built and validated
-  against the DG-standalone baseline, and six experiments run (single-feature μ →
-  multi-feature μ → ranking-aware μ). All converged on the same wall: the SG features
-  have a hard ordering ceiling (~+0.30 Spearman) that never reaches DataGolf on the
-  ranking markets. The pre-registered kill criterion was invoked; the model is shelved
-  as a documented research result.
+  against the DG-standalone baseline, and **six experiments** run (single-feature μ →
+  multi-feature μ → ranking-aware μ, plus the harness and MVP checkpoints). All
+  converged on the same wall: the SG features have a hard ordering ceiling (~+0.30
+  Spearman) that never reaches DataGolf on the ranking markets (+0.29–0.37). The
+  pre-registered kill criterion was invoked; the model is shelved as a documented
+  research result.
 - **Three final feature candidates** — a double-bogey-or-worse **blow-up rate**, a
   **course-length × driver-distance interaction** (built on a real external
   69-course yardage table), and a **Round-1 tee-time wave** feature — were each
@@ -241,6 +266,32 @@ angles and confirmed it:
   draw is mirrored (every player gets one AM and one PM round before the cut), the
   effect **nets out** over every scoring window that matters — a genuine effect that
   is structurally un-exploitable as a pre-event feature.
+
+Counting them: **six rank-native experiments + blow-up rate + course-fit + wave = nine
+converging experiments**, on top of the nine earlier ceiling-test closures, all
+pointing at the same conclusion — the pre-tournament SG-adjacent feature space is
+exhausted.
+
+### Five-market head-to-head vs. DataGolf (the central finding)
+
+Out-of-sample on the DG-covered holdout (26 events, ~3,000 rows), Brier skill
+(Spearman), v3 vs. DataGolf's own `baseline_history_fit` used standalone. The
+"vs DG" column is the paired-delta verdict (positive = v3 better):
+
+| Market | v3 skill (Spearman) | DataGolf skill (Spearman) | v3 − DG (paired-delta) |
+|---|---|---|---|
+| win | −0.018 (+0.317) | +0.014 (+0.366) | **worse** (CI excludes 0) |
+| top-5 | +0.052 (+0.344) | +0.080 (+0.365) | **worse** (CI excludes 0) |
+| top-10 | +0.084 (+0.357) | +0.090 (+0.366) | tie (CI straddles 0) |
+| top-20 | +0.117 (+0.355) | +0.114 (+0.367) | tie (CI straddles 0) |
+| make-cut | +0.216 (+0.277) | +0.217 (+0.294) | tie (≈ −0.001, CI straddles 0) |
+
+**Reading:** on players DataGolf covers, v3 never *beats* DataGolf on any market — it
+ties on the three make-cut/top-20/top-10 markets (because it has largely absorbed
+DataGolf's own probabilities as features) and loses on win/top-5. DataGolf also leads
+on ranking (Spearman) across the board. The ML layer's defensible value is therefore
+**not** "more accurate than DataGolf," but the cold-start coverage and coherent
+calibrated product it wraps around the external signal.
 
 ---
 
@@ -369,6 +420,26 @@ target (a `fly.toml` exists; the project is not necessarily deployed).
 
 ---
 
+## What is closed vs. genuinely untested
+
+A precise ledger, so a reviewer knows exactly what ground has been covered. "Closed"
+means tested and reverted under the pre-registered gate (or shown structurally
+un-exploitable); "blocked" means the data doesn't exist or isn't leakage-safe;
+"untested" means a credible mechanism that has genuinely not been run.
+
+| Item | Status | Note |
+|---|---|---|
+| Field-relative SG, shrinkage prior, recency, `min_samples_leaf`, DG meta-features | **shipped** | The validated wins. |
+| History window, ceiling/upside, early course-fit, course residual, weather scalar, field-shape, layoff, empirical-Bayes shrinkage, player random-effects | **closed** | Nine earlier ceiling closures. |
+| Rank-native architecture (6 experiments) | **closed** | SG ordering ceiling ~+0.30 Spearman; kill criterion invoked. |
+| Blow-up rate (`doubles_or_worse`) | **closed** | Non-redundant with volatility but no out-of-sample signal. |
+| Course-length × driver interaction | **closed** | Real external yardage table built; failed on top-20. |
+| Round-1 tee-time wave | **closed** | Real ~0.25-stroke effect, but nets out over the mirrored draw. |
+| Cross-tour SG normalization (KFT / DP World) | **blocked** | DataGolf provides **zero** SG-categorized rounds for those tours. |
+| Player skill decompositions | **blocked** | Current-snapshot only; no point-in-time archive → leakage. |
+| **DFS salary / ownership** (DraftKings / FanDuel) | **untested** | Historical data exists (758 events, 2017+). Only ~0.41 rank-correlation with book odds, so *not* strictly redundant with the (closed) odds axis — but the likely mechanism is a noisier strength proxy, so the prior is low. The one remaining candidate with a real, if weak, mechanism. |
+| New external data classes (proprietary conditions, shot-level, etc.) | **untested** | Would reopen the program; none currently sourced. |
+
 ## Limitations and open research questions
 
 - **Data-bound accuracy.** The SG-adjacent feature space is exhausted. Further gains
@@ -396,17 +467,26 @@ target (a `fly.toml` exists; the project is not necessarily deployed).
 
 The research program concluded that the pre-tournament, SG-adjacent feature space is
 exhausted. The forward path is therefore not "more features" but a cleaner serving
-architecture plus product differentiation:
+architecture plus product differentiation. An independent strategic review
+(2026-07) confirmed this and prioritized the two items now **shipped**:
 
-- **Path A serving.** DataGolf-direct for covered players (since that's where the
-  signal demonstrably is), with the **v2 SG-only model as the cold-start fallback** for
-  players/events DataGolf doesn't cover. This makes the division of labor explicit and
-  honest.
-- **Product differentiation on top of the signal** — the leaderboard, finish-distribution
-  and player-trend views, the model-vs-market research lens, and an accumulating
-  *out-of-sample* track record (persisting each event's pre-event board at prediction
-  time so the on-site stat becomes a genuine forward record rather than an in-sample
-  one).
+- **✅ Path A serving (shipped, validated).** DataGolf-direct for covered players +
+  the v2 SG-only model for cold-start, validated on the actual served pipeline to
+  match/exceed the stacked path and resolve the win/top-5 loss. Also a served-accuracy
+  win: it strictly dominates the old v3 path on win/top-5. `serving_strategy=path_a` is
+  the default; `stacked` restores the v3 path. (A production *deploy* to Fly.io is a
+  separate ops action; the serving code and default are in place and test-green.)
+- **✅ Forward out-of-sample track record (shipped, running).** Boards captured
+  immutably pre-event, stamped with model version + training cutoff; graded only when
+  the model was trained strictly before the event. Replaces the in-sample-risk report
+  card the due-diligence review flagged. Starts empty and accumulates forward — roughly
+  **~20 completed OOS events (about half a PGA season)** before make-cut/top-20 reach a
+  stable block-bootstrap CI; win/top-5 need far more and may never certify at weekly
+  cadence. Exposed at `/analytics/track-record/forward`.
+- **Next (not started): cold-start accuracy.** The one place independent accuracy still
+  has headroom is the *uncovered* segment — cross-tour finish-based strength priors for
+  players DataGolf doesn't cover — evaluated on a cold-start-only slice. A single scoped
+  experiment, deferred to a later prompt.
 - **Reopen the modeling program only on a substantially new external data class** — not
   another incremental transform. The bar is deliberately high to avoid the
   evaluation-capital exhaustion the due-diligence review flagged.
@@ -423,7 +503,7 @@ backend/
     providers/       DataProvider interface · DataGolfProvider · MockDataProvider (contract-tested)
     services/        FeatureExtractor (train/serve parity), PredictionService, catalog
     api/ · db/ · cache/   FastAPI layer, SQLAlchemy models, Redis caching
-  tests/             275 passing tests
+  tests/             284 passing tests
 frontend/            React 19 + TypeScript (Vite) — leaderboard, player, betting-edge, diagnostics
 docs/
   project-summary.md         the consolidated research record (primary source for this README)
@@ -439,7 +519,7 @@ docs/
 
 ```bash
 make dev            # boot api + postgres + redis + frontend via docker compose
-make test-backend   # full pytest suite (275 tests)
+make test-backend   # full pytest suite (284 tests)
 make lint-backend   # ruff check + format --check
 make typecheck-backend
 
