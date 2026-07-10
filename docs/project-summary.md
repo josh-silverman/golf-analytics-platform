@@ -571,6 +571,22 @@ recorded as *structurally uninformative* (the feature was constant-zero in that
 regime's training) rather than claimed as either support or refutation — and
 the decision rested on the holdout, which was negative.
 
+**Lesson learned — document the *evidence*, not just the conclusion.** A later
+audit (2026-07) revisited the early closure of the `teetime` / `start_hole`
+fields, which had been dismissed by *inference* ("a weather proxy, no value
+without weather data") with no recorded test. A direct read-only check of the
+archive found the inference was wrong on one axis: AM starters score ~0.25
+strokes lower than PM starters in Rounds 1-2 (t≈4.5 across 278 events, a
+draw-randomised within-player natural experiment) — a real conditions effect the
+tee-time carries with no weather data at all. The start-hole half of the
+hypothesis (front vs back nine) *did* hold up as correctly closed (t≈0.3). The
+takeaway applied going forward: **a closure must record the specific evidence
+that produced it — the test run, the numbers, the split — not just a verdict.**
+An undocumented "closed by reasoning" cannot be correctly re-examined when a
+plausible mechanism surfaces later, and risks either burying real signal or
+re-litigating settled ground. Every closure in §2-3 above is now expected to
+carry its evidence inline for exactly this reason.
+
 ### 4.4 Block-bootstrap CIs as the promotion rule
 
 The recurring failure mode was a favorable point estimate on one split that
