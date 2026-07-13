@@ -69,7 +69,7 @@ const BENCHMARK_DG = {
   })),
 }
 
-function mockFetch(benchmark: typeof BENCHMARK_MOCK = BENCHMARK_MOCK) {
+function mockFetch(benchmark: typeof BENCHMARK_MOCK | typeof BENCHMARK_DG = BENCHMARK_MOCK) {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((url: string) => {
