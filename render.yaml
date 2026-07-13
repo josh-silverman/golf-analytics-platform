@@ -1,0 +1,50 @@
+# Render blueprint — free-tier deployment of the backend API + Redis cache.
+#
+# Setup (one time): Render dashboard → New → Blueprint → connect this repo.
+# Render prompts for the sync:false secrets (DATAGOLF_API_KEY) on first apply.
+#
+# Notes:
+# - The web service builds backend/Dockerfile; its final stage is the prod
+#   target, which is what a plain `docker build` produces.
+# - Free instances spin down after ~15 min idle; the first request after that
+#   takes ~1 min to cold-start. Acceptable for the demo/POC.
+# - The filesystem is ephemeral on the free plan, so the forward
+#   prediction-board archive resets on redeploy/restart. Redis-cached boards
+#   survive restarts; the OOS track record accrues only while the POC stays up.
+# - Postgres is intentionally absent: the serving path (Path A + model
+#   registry + DataGolf provider) never touches it, and the health check used
+#   here (/api/v1/healthz) is dependency-free.
+
+services:
+  - type: web
+    name: pga-analytics-api
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/healthz
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_FORMAT
+        value: json
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DATA_PROVIDER
+        value: datagolf
+      - key: DATAGOLF_API_KEY
+        sync: false # secret — pasted in the Render dashboard, never committed
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: pga-redis
+          property: connectionString
+
+  - type: keyvalue
+    name: pga-redis
+    plan: free
+    # Internal-only: no external IPs may reach the cache.
+    ipAllowList: []

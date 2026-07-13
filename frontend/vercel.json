@@ -5,7 +5,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://pga-analytics-api.fly.dev/api/:path*"
+      "destination": "https://pga-analytics-api.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",

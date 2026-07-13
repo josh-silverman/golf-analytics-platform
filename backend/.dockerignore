@@ -22,3 +22,7 @@ __pycache__
 
 # Throwaway analysis/diagnostic scripts — never ship to production
 diagnostics/
+
+# Runtime data — the forward board archive accumulates on the server; a
+# locally captured board must not be baked into the image.
+prediction_boards/
