@@ -49,8 +49,11 @@ USER appuser
 
 EXPOSE 8000
 
+# Exec uvicorn straight from the baked venv. `uv run` would re-resolve the
+# project at startup and needs a writable cache dir — the system user's home
+# is /nonexistent, so uv crashes (exit 2) before uvicorn ever starts.
 # workers = 2× vCPUs + 1 per Fly.io recommendation for I/O-heavy FastAPI apps
-CMD ["uv", "run", "uvicorn", "app.main:app", \
+CMD ["/app/.venv/bin/uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \
      "--workers", "2", \
      "--log-level", "info"]
