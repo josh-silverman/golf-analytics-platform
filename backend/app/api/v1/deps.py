@@ -19,7 +19,11 @@ from app.features.feature_sets import v2_field_relative, v3_dg_preds
 from app.ml.base import ConstantModel
 from app.ml.registry import ModelRegistry
 from app.providers.factory import get_data_provider
-from app.services.board_archive import BoardArchive
+from app.services.board_archive import (
+    BoardArchive,
+    FileBoardArchive,
+    RedisBoardArchive,
+)
 from app.services.catalog import CatalogService
 from app.services.features import FeatureExtractor
 from app.services.predictions import PathASource, PredictionService
@@ -87,8 +91,18 @@ def get_model_registry() -> ModelRegistry:
 
 @lru_cache(maxsize=1)
 def get_board_archive() -> BoardArchive:
-    """Process-cached forward prediction-board archive."""
-    return BoardArchive(Path(get_settings().prediction_boards_path))
+    """Process-cached forward prediction-board archive.
+
+    Redis-backed in production (the service disk is ephemeral and would drop the
+    archive on every redeploy); filesystem-backed otherwise, so dev and tests
+    stay dependency-free.
+    """
+    settings = get_settings()
+    if settings.board_archive_backend == "redis":
+        from app.cache.redis import redis_client
+
+        return RedisBoardArchive(redis_client)
+    return FileBoardArchive(Path(settings.prediction_boards_path))
 
 
 def _resolve_active_model() -> tuple[Model, str, str | None]:

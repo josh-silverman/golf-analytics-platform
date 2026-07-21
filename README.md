@@ -92,7 +92,12 @@ Three principles governed the work from the start:
 - **Forward track record (running).** Every pre-event board is captured immutably at
   serving time, stamped with the model version and its training cutoff; a grader scores
   only boards whose model was trained *strictly before* the event — a genuinely
-  out-of-sample record. Exposed at `/analytics/track-record/forward`.
+  out-of-sample record. Exposed at `/analytics/track-record/forward`. The archive is
+  Redis-backed in production (`BOARD_ARCHIVE_BACKEND=redis`) so it survives redeploys,
+  and an admin-gated backfill (`POST /analytics/track-record/forward/backfill`) seeds it
+  by replaying the served pipeline over events that completed before capture shipped —
+  leakage-free (as-of capped to the eve, DataGolf's pre-event archive, admitted only when
+  trained strictly before the event).
 - **What it honestly does not do:** beat a sharp sportsbook on any market, or predict
   winners with meaningful skill (that market is data-starved and dominated by
   week-of variance).
@@ -479,10 +484,12 @@ architecture plus product differentiation. An independent strategic review
 - **✅ Forward out-of-sample track record (shipped, running).** Boards captured
   immutably pre-event, stamped with model version + training cutoff; graded only when
   the model was trained strictly before the event. Replaces the in-sample-risk report
-  card the due-diligence review flagged. Starts empty and accumulates forward — roughly
-  **~20 completed OOS events (about half a PGA season)** before make-cut/top-20 reach a
-  stable block-bootstrap CI; win/top-5 need far more and may never certify at weekly
-  cadence. Exposed at `/analytics/track-record/forward`.
+  card the due-diligence review flagged. Redis-backed in production so it survives
+  redeploys, and seedable via an admin-gated, idempotent backfill that replays the
+  served pipeline over recent completed OOS events (leakage-free). Accumulates toward
+  roughly **~20 completed OOS events (about half a PGA season)** before make-cut/top-20
+  reach a stable block-bootstrap CI; win/top-5 need far more and may never certify at
+  weekly cadence. Exposed at `/analytics/track-record/forward`.
 - **Next (not started): cold-start accuracy.** The one place independent accuracy still
   has headroom is the *uncovered* segment — cross-tour finish-based strength priors for
   players DataGolf doesn't cover — evaluated on a cold-start-only slice. A single scoped
@@ -519,7 +526,7 @@ docs/
 
 ```bash
 make dev            # boot api + postgres + redis + frontend via docker compose
-make test-backend   # full pytest suite (284 tests)
+make test-backend   # full pytest suite (289 tests)
 make lint-backend   # ruff check + format --check
 make typecheck-backend
 

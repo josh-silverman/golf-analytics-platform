@@ -9,11 +9,42 @@ import pytest
 from app.domain.enums import EntryStatus, TournamentStatus
 from app.domain.models import Tournament, TournamentEntry
 from app.services.board_archive import (
-    BoardArchive,
     BoardSnapshot,
     BoardSnapshotOutcome,
+    FileBoardArchive,
+    RedisBoardArchive,
 )
 from app.services.forward_track_record import compute_forward_track_record
+
+
+class FakeRedis:
+    """In-memory stand-in for the async Redis client the archive uses.
+
+    Implements only the handful of ops ``RedisBoardArchive`` touches, with SET NX
+    semantics (returns ``True`` on a fresh key, ``None`` when it already exists —
+    matching redis-py) so the immutability guarantee is exercised for real.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, nx: bool = False) -> bool | None:
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        return True
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in self._store else 0
+
+    async def scan_iter(self, match: str = "*"):  # noqa: ANN201 — async generator
+        prefix = match.rstrip("*")
+        for key in list(self._store):
+            if key.startswith(prefix):
+                yield key
+
+    async def mget(self, keys: list[str]) -> list[str | None]:
+        return [self._store.get(k) for k in keys]
 
 
 def _snapshot(
@@ -23,6 +54,7 @@ def _snapshot(
     trained_through: str | None = "2026-05-01",
     start_date: str = "2026-06-01",
     outcomes: tuple[BoardSnapshotOutcome, ...] = (),
+    source: str = "captured",
 ) -> BoardSnapshot:
     return BoardSnapshot(
         tournament_id=tournament_id,
@@ -35,34 +67,57 @@ def _snapshot(
         as_of="2026-05-31",
         captured_at="2026-05-31T12:00:00+00:00",
         outcomes=outcomes,
+        source=source,
     )
 
 
-def test_persist_is_immutable_first_capture(tmp_path) -> None:
-    archive = BoardArchive(tmp_path)
-    assert archive.persist(_snapshot()) is True
-    assert archive.has(1, "path_a@v2")
+async def test_persist_is_immutable_first_capture(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    assert await archive.persist(_snapshot()) is True
+    assert await archive.has(1, "path_a@v2")
     # A second capture for the same (tournament, version) must NOT overwrite.
     second = _snapshot(start_date="2099-01-01")
-    assert archive.persist(second) is False
-    loaded = archive.list_all()
+    assert await archive.persist(second) is False
+    loaded = await archive.list_all()
     assert len(loaded) == 1
     assert loaded[0].tournament_start_date == "2026-06-01"  # the first capture
 
 
-def test_roundtrip_preserves_outcomes(tmp_path) -> None:
-    archive = BoardArchive(tmp_path)
+async def test_roundtrip_preserves_outcomes(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
     snap = _snapshot(
         outcomes=(
             BoardSnapshotOutcome(10, 0.1, 0.2, 0.3, 0.4, 0.9),
             BoardSnapshotOutcome(11, 0.02, 0.1, 0.2, 0.3, 0.7),
         )
     )
-    archive.persist(snap)
-    (loaded,) = archive.list_all()
+    await archive.persist(snap)
+    (loaded,) = await archive.list_all()
     assert len(loaded.outcomes) == 2
     assert loaded.outcomes[0].player_id == 10
     assert loaded.outcomes[0].make_cut_prob == pytest.approx(0.9)
+    assert loaded.source == "captured"  # default provenance round-trips
+
+
+async def test_redis_backend_is_immutable_and_roundtrips() -> None:
+    archive = RedisBoardArchive(FakeRedis())  # type: ignore[arg-type]
+    snap = _snapshot(
+        outcomes=(BoardSnapshotOutcome(10, 0.1, 0.2, 0.3, 0.4, 0.9),),
+    )
+    assert await archive.persist(snap) is True
+    assert await archive.has(1, "path_a@v2") is True
+    # SET NX blocks the overwrite, exactly like the filesystem existence check.
+    assert await archive.persist(_snapshot(start_date="2099-01-01")) is False
+    (loaded,) = await archive.list_all()
+    assert loaded.tournament_start_date == "2026-06-01"
+    assert loaded.outcomes[0].player_id == 10
+
+
+async def test_backfilled_source_round_trips(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(source="backfilled"))
+    (loaded,) = await archive.list_all()
+    assert loaded.source == "backfilled"
 
 
 def test_is_out_of_sample_requires_trained_before_event() -> None:
@@ -104,16 +159,16 @@ class _GradeCatalog:
 
 async def test_forward_grader_skips_in_sample_boards(tmp_path) -> None:
     """A board whose model trained after the event start is excluded."""
-    archive = BoardArchive(tmp_path)
-    archive.persist(_snapshot(trained_through="2026-07-01"))  # trained AFTER start
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(trained_through="2026-07-01"))  # trained AFTER start
     catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
     result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
     assert result is None  # nothing qualified as out-of-sample
 
 
 async def test_forward_grader_grades_out_of_sample_board(tmp_path) -> None:
-    archive = BoardArchive(tmp_path)
-    archive.persist(_snapshot(
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(
         trained_through="2026-05-01",  # strictly before the 06-01 start → OOS
         outcomes=(
             BoardSnapshotOutcome(10, 0.4, 0.7, 0.8, 0.9, 0.98),   # winner, high
@@ -133,8 +188,8 @@ async def test_forward_grader_grades_out_of_sample_board(tmp_path) -> None:
 
 
 async def test_forward_grader_ignores_incomplete_events(tmp_path) -> None:
-    archive = BoardArchive(tmp_path)
-    archive.persist(_snapshot(trained_through="2026-05-01"))
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(trained_through="2026-05-01"))
     catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.UPCOMING)
     result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
     assert result is None

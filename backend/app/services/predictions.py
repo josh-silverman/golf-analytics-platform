@@ -207,6 +207,18 @@ class PredictionService:
         # whole field (the classic single-model path).
         self._path_a = path_a
 
+    @property
+    def model_trained_through(self) -> date | None:
+        """Training cutoff of the served model — an event starting after this is
+        genuinely out-of-sample. Lets callers pre-filter without building a board.
+        """
+        return self._model_trained_through
+
+    @property
+    def model_version_id(self) -> str | None:
+        """Version id the served board is stamped with (e.g. ``path_a@<id>``)."""
+        return self._model_version_id
+
     async def predict_tournament(
         self,
         tournament_id: int,

@@ -75,7 +75,7 @@ async def _capture_board(
             # No field yet (an event whose pairings aren't set) — don't pin an
             # empty board; the first capture with a real field should win.
             return
-        if archive.has(predictions.tournament_id, predictions.model_version_id):
+        if await archive.has(predictions.tournament_id, predictions.model_version_id):
             return
         tournament = await catalog.get_tournament(predictions.tournament_id)
         if tournament is None or tournament.status == TournamentStatus.COMPLETED:
@@ -85,7 +85,7 @@ async def _capture_board(
             tournament_start_date=tournament.start_date,
             model_trained_through=predictions.model_trained_through,
         )
-        archive.persist(snapshot)
+        await archive.persist(snapshot)
     except Exception:  # noqa: BLE001 — best-effort; serving must never fail on this
         return
 

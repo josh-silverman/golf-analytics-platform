@@ -66,6 +66,24 @@ class Settings(BaseSettings):
         description=(
             "Root directory for the forward out-of-sample prediction-board"
             " archive (boards captured pre-event, graded once trained-before)."
+            " Used only when board_archive_backend='file'."
+        ),
+    )
+    board_archive_backend: Literal["file", "redis"] = Field(
+        default="file",
+        description=(
+            "Where forward prediction-board snapshots live. 'file' (default):"
+            " prediction_boards_path on local disk — fine for dev, but ephemeral"
+            " on hosts that reset the filesystem on redeploy. 'redis': the shared"
+            " Redis instance, so the forward track record survives redeploys."
+        ),
+    )
+    admin_api_token: str | None = Field(
+        default=None,
+        description=(
+            "Shared secret for the admin-only maintenance endpoints (e.g. the"
+            " forward track-record backfill). When unset those endpoints are"
+            " disabled (404). Set via the host's secret manager, never committed."
         ),
     )
 

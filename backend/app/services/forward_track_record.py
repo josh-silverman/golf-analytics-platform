@@ -76,7 +76,7 @@ async def compute_forward_track_record(
     catalog: CatalogService,
 ) -> ForwardTrackRecord | None:
     """Grade every completed, out-of-sample captured board. ``None`` if none yet."""
-    snapshots = archive.list_all()
+    snapshots = await archive.list_all()
     if not snapshots:
         return None
 

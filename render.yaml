@@ -9,8 +9,12 @@
 # - Free instances spin down after ~15 min idle; the first request after that
 #   takes ~1 min to cold-start. Acceptable for the demo/POC.
 # - The filesystem is ephemeral on the free plan, so the forward
-#   prediction-board archive resets on redeploy/restart. Redis-cached boards
-#   survive restarts; the OOS track record accrues only while the POC stays up.
+#   prediction-board archive is stored in Redis (BOARD_ARCHIVE_BACKEND=redis)
+#   rather than on disk — the OOS track record then survives redeploys/restarts,
+#   since the key-value service is separate from the web service's disk.
+# - Seed the forward record for events that completed before capture shipped by
+#   POSTing /api/v1/analytics/track-record/forward/backfill with the
+#   X-Admin-Token header (value = ADMIN_API_TOKEN). Idempotent; safe to re-run.
 # - Postgres is intentionally absent: the serving path (Path A + model
 #   registry + DataGolf provider) never touches it, and the health check used
 #   here (/api/v1/healthz) is dependency-free.
@@ -35,8 +39,12 @@ services:
         value: INFO
       - key: DATA_PROVIDER
         value: datagolf
+      - key: BOARD_ARCHIVE_BACKEND
+        value: redis # persist the forward board archive off the ephemeral disk
       - key: DATAGOLF_API_KEY
         sync: false # secret — pasted in the Render dashboard, never committed
+      - key: ADMIN_API_TOKEN
+        sync: false # secret — gates the forward track-record backfill endpoint
       - key: REDIS_URL
         fromService:
           type: keyvalue

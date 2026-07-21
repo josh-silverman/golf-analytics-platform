@@ -394,6 +394,16 @@ strategic review confirmed the accuracy program is complete.
   due-diligence review flagged in the active-model report card. Accumulates
   forward from empty; ~20 completed OOS events (~half a season) before
   make-cut/top-20 reach a stable CI. Exposed at `/analytics/track-record/forward`.
+  The archive has two interchangeable backends behind one async protocol
+  (`FileBoardArchive` for dev/tests, `RedisBoardArchive` for production via
+  `BOARD_ARCHIVE_BACKEND=redis`) so the record survives the free host's redeploys
+  instead of resetting with the ephemeral disk. Because live capture only records
+  events served before they complete, an admin-gated backfill
+  (`POST /analytics/track-record/forward/backfill`, `X-Admin-Token`) seeds the
+  record by replaying the exact served pipeline over recent completed OOS events
+  — as-of capped to the eve, DataGolf's pre-event archive, `fin_text` never read,
+  admitted only when trained strictly before the event, stamped `source:
+  backfilled`. Idempotent (immutable first-write-wins via `SET NX`).
 
 The revised objective this serves: **not** accuracy parity with DataGolf through
 independent replication (shown unachievable on this data), but a full-coverage
@@ -460,7 +470,7 @@ make down         # stop (keeps volumes)
 Backend tasks (inside the api container, or via the targets):
 
 ```bash
-make test-backend                                   # full pytest suite (268 tests)
+make test-backend                                   # full pytest suite (289 tests)
 make lint-backend                                   # ruff check + format --check
 make typecheck-backend                              # mypy
 

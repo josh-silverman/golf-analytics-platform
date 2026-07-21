@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.api.v1.deps import (
     get_board_archive,
@@ -16,6 +17,8 @@ from app.api.v1.schemas import (
     BenchmarkPayload,
     BenchmarkPlayerRow,
     CalibrationReportPayload,
+    ForwardBackfillEventPayload,
+    ForwardBackfillPayload,
     ForwardMarketSkillPayload,
     ForwardTrackRecordPayload,
     OutcomeCalibrationPayload,
@@ -23,13 +26,23 @@ from app.api.v1.schemas import (
     TrackRecordPayload,
 )
 from app.config import get_settings
+from app.domain.enums import TournamentStatus
 from app.ml.calibration import CalibratedOutcomeModel, ReliabilityBin
 from app.ml.registry import ModelRegistry  # noqa: TC001 — FastAPI resolves at runtime
-from app.services.board_archive import BoardArchive  # noqa: TC001
-from app.services.catalog import CatalogService  # noqa: TC001
+from app.services.board_archive import (  # noqa: TC001
+    BoardArchive,
+    snapshot_from_predictions,
+)
+from app.services.catalog import CatalogService, reference_today  # noqa: TC001
 from app.services.forward_track_record import compute_forward_track_record
 from app.services.predictions import PredictionService  # noqa: TC001
 from app.services.track_record import compute_track_record
+
+# A completed OOS event more than this many days before today is old enough that
+# re-checking it every backfill adds cost without value; the forward record is
+# about *recent* served accuracy. Bounds the per-run work regardless of how much
+# history the catalog returns.
+_BACKFILL_LOOKBACK_DAYS = 120
 
 router = APIRouter(tags=["analytics"], prefix="/analytics")
 
@@ -130,6 +143,86 @@ async def get_forward_track_record(
             )
             for m in tr.markets
         ],
+    )
+
+
+@router.post("/track-record/forward/backfill")
+async def backfill_forward_track_record(
+    service: Annotated[PredictionService, Depends(get_prediction_service)],
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+) -> ForwardBackfillPayload:
+    """Seed the forward record from recent completed out-of-sample events.
+
+    The live capture only records boards for events served *before* they
+    complete, so events that finished before capture shipped are missing. This
+    replays the exact served pipeline over each recent completed event — as-of
+    capped to the eve, DataGolf's pre-event archive, no result leakage — and
+    stores the resulting board immutably. Admitted only when the served model was
+    trained strictly before the event, so every backfilled board is genuinely
+    out-of-sample. Idempotent: an already-captured event is skipped.
+
+    Admin-gated: requires the ``X-Admin-Token`` header to match
+    ``settings.admin_api_token``. When that setting is unset the endpoint is
+    disabled and returns 404, so it never exists in an unconfigured deployment.
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    cutoff = service.model_trained_through
+    if cutoff is None:
+        # Served model has no known training cutoff → nothing can be certified OOS.
+        return ForwardBackfillPayload(examined=0, captured=0, skipped=0)
+
+    floor = reference_today() - timedelta(days=_BACKFILL_LOOKBACK_DAYS)
+    page = await catalog.list_tournaments(status=TournamentStatus.COMPLETED, limit=200)
+    # Only events that (a) started after the model's cutoff → genuinely OOS, and
+    # (b) are recent enough to matter. Newest first.
+    candidates = sorted(
+        (t for t in page.items if t.start_date > cutoff and t.start_date >= floor),
+        key=lambda t: t.start_date,
+        reverse=True,
+    )
+
+    captured: list[ForwardBackfillEventPayload] = []
+    skipped = 0
+    for t in candidates:
+        if service.model_version_id is not None and await archive.has(
+            t.id, service.model_version_id
+        ):
+            # Cheap pre-check before the expensive board build. persist()'s NX
+            # guarantee is the real correctness boundary; this just skips already-
+            # captured events on an idempotent re-run without rebuilding a board.
+            skipped += 1
+            continue
+        preds = await service.predict_tournament(t.id, as_of=reference_today())
+        if (
+            preds is None
+            or preds.model_trained_through is None
+            or not preds.outcomes
+            or preds.model_trained_through >= t.start_date
+            or await archive.has(t.id, preds.model_version_id)
+        ):
+            skipped += 1
+            continue
+        snapshot = snapshot_from_predictions(
+            preds,
+            tournament_start_date=t.start_date,
+            model_trained_through=preds.model_trained_through,
+            source="backfilled",
+        )
+        if await archive.persist(snapshot):
+            captured.append(ForwardBackfillEventPayload(tournament_id=t.id, name=t.name))
+        else:
+            skipped += 1
+
+    return ForwardBackfillPayload(
+        examined=len(candidates),
+        captured=len(captured),
+        skipped=skipped,
+        events=captured,
     )
 
 

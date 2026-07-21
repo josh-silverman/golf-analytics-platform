@@ -113,6 +113,29 @@ class ForwardTrackRecordPayload(BaseModel):
     markets: list[ForwardMarketSkillPayload] = []
 
 
+class ForwardBackfillEventPayload(BaseModel):
+    """One event whose pre-event board was captured by the backfill run."""
+
+    tournament_id: int
+    name: str
+
+
+class ForwardBackfillPayload(BaseModel):
+    """Result of the admin forward track-record backfill.
+
+    Reconstructs the pre-event board Path A *would have served* for each recent
+    completed, out-of-sample event (as-of capped to the eve, DataGolf's pre-event
+    archive — leakage-free) and captures it immutably, so the forward record has
+    real data from day one instead of accruing only from the next live event.
+    Idempotent: an event already captured is skipped, never overwritten.
+    """
+
+    examined: int
+    captured: int
+    skipped: int
+    events: list[ForwardBackfillEventPayload] = []
+
+
 class TournamentPredictionsPayload(BaseModel):
     """Body of ``GET /predictions/{tournament_id}``.
 
