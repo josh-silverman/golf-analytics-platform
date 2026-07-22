@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
+import { type ForwardMarketSkill, useForwardTrackRecord } from '../lib/api/forwardTrackRecord'
 import { usePredictions, type PlayerOutcome } from '../lib/api/predictions'
-import { useTrackRecord } from '../lib/api/trackRecord'
 import { useCurrentTournament, useTournaments } from '../lib/api/tournaments'
 import type { Tournament } from '../lib/api/types'
 
@@ -29,6 +29,28 @@ const COLUMNS: { key: SortKey; label: string; cellClass: string; barClass: strin
   { key: 'top_20_prob', label: 'Top 20', cellClass: 'text-accent font-semibold', barClass: 'bg-accent/25' },
   { key: 'make_cut_prob', label: 'Make Cut', cellClass: 'text-fg-secondary', barClass: 'bg-fg-secondary/20' },
 ]
+
+const MARKET_LABELS: Record<string, string> = {
+  make_cut_prob: 'Make cut',
+  top_20_prob: 'Top 20',
+  top_10_prob: 'Top 10',
+  top_5_prob: 'Top 5',
+  win_prob: 'Win',
+}
+
+// Skill-priority order, matching the Betting Edge market picker: make-cut and
+// top-20 carry the most genuine backtest skill, win/top-5 the least.
+const MARKET_ORDER = ['make_cut_prob', 'top_20_prob', 'top_10_prob', 'top_5_prob', 'win_prob']
+
+// Only surface markets whose 90% block-bootstrap CI clears zero — the same bar
+// the backend's own forward-record grader uses to call a market "skilled".
+// Below that, a positive skill score is indistinguishable from noise.
+function confirmedSkillMarkets(markets: ForwardMarketSkill[]): ForwardMarketSkill[] {
+  const confirmed = markets.filter((m) => m.ci_lower > 0)
+  return [...confirmed].sort(
+    (a, b) => MARKET_ORDER.indexOf(a.market) - MARKET_ORDER.indexOf(b.market)
+  )
+}
 
 const STATUS_BADGE: Record<string, string> = {
   upcoming: 'bg-warning/15 text-warning',
@@ -97,7 +119,7 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
 export function Leaderboard() {
   const { data: currentTournament, isLoading: currentLoading } = useCurrentTournament()
   const { data: tournamentsEnv } = useTournaments()
-  const { data: trackRecord } = useTrackRecord()
+  const { data: trackRecord } = useForwardTrackRecord()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Selected event: an explicit pick overrides; otherwise follow the current
@@ -284,35 +306,22 @@ export function Leaderboard() {
           </p>
         )}
 
-        {trackRecord?.available && (
+        {trackRecord?.available && confirmedSkillMarkets(trackRecord.markets).length > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
             <span className="font-medium text-fg-secondary">
-              Track record (last {trackRecord.events} events):
+              Forward out-of-sample track record ({trackRecord.events} event
+              {trackRecord.events === 1 ? '' : 's'} since training, {trackRecord.players_graded}{' '}
+              players graded):
             </span>
-            <span>
-              winner in top-10{' '}
-              <span className="font-mono text-fg-secondary">
-                {formatPct(trackRecord.winner_in_top10_rate)}
+            {confirmedSkillMarkets(trackRecord.markets).map((m, i) => (
+              <span key={m.market}>
+                {i > 0 && '· '}
+                {MARKET_LABELS[m.market]}{' '}
+                <span className="font-mono text-accent">
+                  +{(m.brier_skill * 100).toFixed(1)}% skill
+                </span>
               </span>
-            </span>
-            <span>
-              · top-20 hit rate{' '}
-              <span className="font-mono text-accent">
-                {formatPct(trackRecord.avg_top20_hit_rate)}
-              </span>
-            </span>
-            <span>
-              · make-cut accuracy{' '}
-              <span className="font-mono text-accent">
-                {formatPct(trackRecord.make_cut_accuracy)}
-              </span>
-            </span>
-            <span>
-              · avg winner rank{' '}
-              <span className="font-mono text-fg-secondary">
-                {trackRecord.mean_winner_rank.toFixed(0)}
-              </span>
-            </span>
+            ))}
           </div>
         )}
       </header>
