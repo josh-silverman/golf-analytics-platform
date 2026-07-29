@@ -52,8 +52,15 @@ EXPOSE 8000
 # Exec uvicorn straight from the baked venv. `uv run` would re-resolve the
 # project at startup and needs a writable cache dir — the system user's home
 # is /nonexistent, so uv crashes (exit 2) before uvicorn ever starts.
-# workers = 2× vCPUs + 1 per Fly.io recommendation for I/O-heavy FastAPI apps
+#
+# workers = 1: this runs on Render's free tier (512 MB RAM). Each worker
+# loads numpy/scikit-learn/the model registry at import time (~150 MB RSS);
+# 2 workers idled at ~390 MB, leaving so little headroom that a single board
+# build (147-player field extraction) could push the container past the 512 MB
+# cgroup limit and get OOM-killed — causing the intermittent crash-loop/502s
+# this was traced to. 1 worker idles at ~130 MB. Revisit if the plan is
+# upgraded past free tier.
 CMD ["/app/.venv/bin/uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--log-level", "info"]

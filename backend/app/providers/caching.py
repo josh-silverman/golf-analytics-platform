@@ -357,3 +357,23 @@ class CachingProviderWrapper(DataProvider):
         return await self._provider.get_pretournament_preds(
             event_id, year, live=live
         )
+
+    async def get_pretournament_full_preds(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> dict[int, dict[str, float]]:
+        """Delegate — same pass-through as ``get_pretournament_preds`` above.
+
+        Path A serving depends on this returning DataGolf's real probabilities;
+        without an override here, calls hit ``DataProvider``'s base default
+        (``{}``), which silently cold-starts every player to the SG-only model.
+        Confirmed in production by grading the 3M Open: DataGolf's own
+        probabilities beat the (bug-served) model on every market with skill
+        — make-cut skill +0.127 vs the served board's +0.007.
+        """
+        return await self._provider.get_pretournament_full_preds(
+            event_id, year, live=live
+        )
