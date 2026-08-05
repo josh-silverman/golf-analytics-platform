@@ -24,11 +24,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from app.domain.enums import EntryStatus
-from app.ml.backtest import _completed_tournaments
+from app.ml.backtest import _completed_tournaments, _served_probabilities_for_field
 from app.ml.calibration import fit_calibrated
 from app.ml.trainer import LABEL_TO_OUTCOME_KEY, GBDTTrainer
 from app.ml.training import TrainingData, TrainingDataBuilder, labels_from_entry
-from app.services.predictions import coherent_outcomes
 
 if TYPE_CHECKING:
     from datetime import date
@@ -95,8 +94,9 @@ async def run_diagnostics(
     """Train the baseline and record per-player predictions on the test window.
 
     Mirrors ``run_backtest`` exactly (same data split, same model, same
-    coherence step) so the rows describe the real backtested model — it simply
-    keeps every per-player prediction rather than reducing to aggregates.
+    coherence + field-normalization step) so the rows describe the real
+    backtested model — it simply keeps every per-player prediction rather
+    than reducing to aggregates.
     """
     base_trainer = base_trainer or GBDTTrainer()
 
@@ -119,11 +119,12 @@ async def run_diagnostics(
     for tournament in test:
         as_of = tournament.start_date - timedelta(days=1)
         tfield = await catalog.get_tournament_field(tournament.id)
-        extractions = await extractor.extract_field(
-            [e.player_id for e in tfield], as_of
-        )
+        extractions = await extractor.extract_field([e.player_id for e in tfield], as_of)
 
-        # Scored players + their coherent probabilities (same filter as backtest).
+        # Coherent, field-normalized probabilities for the whole field at once
+        # (same post-processing PredictionService/run_backtest apply), then
+        # filter to scored players (same filter as backtest).
+        served_by_player = _served_probabilities_for_field(model, extractions)
         scored: list[_Scored] = []
         for entry in tfield:
             if entry.status == EntryStatus.ACTIVE:
@@ -131,18 +132,21 @@ async def run_diagnostics(
             if entry.status == EntryStatus.MADE_CUT and entry.final_position is None:
                 continue
             ex = extractions[entry.player_id]
-            probs = dict(zip(_MARKETS, coherent_outcomes(model.predict(ex.values)), strict=True))
+            probs = served_by_player[entry.player_id]
             scored.append(
-                (entry.player_id, labels_from_entry(entry), entry.final_position,
-                 probs, dict(ex.values))
+                (
+                    entry.player_id,
+                    labels_from_entry(entry),
+                    entry.final_position,
+                    probs,
+                    dict(ex.values),
+                )
             )
 
         if not scored:
             continue
 
-        made_cut_positions = [
-            e.final_position for e in tfield if e.final_position is not None
-        ]
+        made_cut_positions = [e.final_position for e in tfield if e.final_position is not None]
         worst_placement = (max(made_cut_positions) if made_cut_positions else len(tfield)) + 1
         n_scored = len(scored)
 
@@ -168,9 +172,7 @@ async def run_diagnostics(
                     finishing_percentile=placement / n_scored,
                     rank_error=predicted_rank[i] - placement,
                     labels=labels,
-                    sq_error={
-                        m: (probs[m] - labels[_MARKET_TO_LABEL[m]]) ** 2 for m in _MARKETS
-                    },
+                    sq_error={m: (probs[m] - labels[_MARKET_TO_LABEL[m]]) ** 2 for m in _MARKETS},
                     features=feats,
                 )
             )
@@ -219,8 +221,12 @@ def _permutation_importances(
             continue
         try:
             result = permutation_importance(
-                estimator, x, y, scoring="neg_brier_score",
-                n_repeats=5, random_state=0,
+                estimator,
+                x,
+                y,
+                scoring="neg_brier_score",
+                n_repeats=5,
+                random_state=0,
             )
         except Exception:  # noqa: S112,BLE001 — importance is best-effort; skip a market that won't score
             continue

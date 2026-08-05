@@ -46,7 +46,7 @@ from app.ml.calibration import fit_calibrated, reliability_bins
 from app.ml.trainer import LABEL_TO_OUTCOME_KEY, GBDTTrainer
 from app.ml.training import TrainingDataBuilder, labels_from_entry
 from app.services.features import EventRef
-from app.services.predictions import coherent_outcomes
+from app.services.predictions import coherent_outcomes, normalize_field
 
 if TYPE_CHECKING:
     from datetime import date
@@ -54,10 +54,11 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from app.domain.models import Tournament
+    from app.ml.base import Model
     from app.ml.trainer import Trainer
     from app.providers.datagolf.datagolf_provider import DataGolfProvider
     from app.services.catalog import CatalogService
-    from app.services.features import FeatureExtractor
+    from app.services.features import FeatureExtraction, FeatureExtractor
 
 
 # Clip probabilities away from {0, 1} before taking logs so a confident miss
@@ -231,6 +232,28 @@ def _rankdata(x: NDArray[np.float64]) -> NDArray[np.float64]:
     return (sums / counts)[inv]
 
 
+def _served_probabilities_for_field(
+    model: Model, extractions: dict[int, FeatureExtraction]
+) -> dict[int, dict[str, float]]:
+    """Coherent, field-normalized probabilities for one event's field.
+
+    Applies the exact two-step post-processing ``PredictionService`` does
+    (``coherent_outcomes`` then ``normalize_field``) before scoring, so the
+    backtest reports numbers for what production actually serves rather than
+    the raw per-classifier probabilities production never shows a user —
+    those sum to well over 1.0 across a field (see ``normalize_field``'s
+    docstring), which distorts the win/top-5/top-10/top-20 Brier and skill
+    numbers most.
+    """
+    pids = list(extractions)
+    coherent_rows = [coherent_outcomes(model.predict(extractions[pid].values)) for pid in pids]
+    normalized_rows = normalize_field(coherent_rows)
+    return {
+        pid: dict(zip(LABEL_TO_OUTCOME_KEY.values(), row, strict=True))
+        for pid, row in zip(pids, normalized_rows, strict=True)
+    }
+
+
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
@@ -299,9 +322,7 @@ async def run_backtest(
     train_data = await builder.build(through=train_through)
     if len(train_data) == 0:
         raise ValueError("No training examples before the test window.")
-    fit = fit_calibrated(
-        base_trainer, train_data, holdout_fraction=holdout_fraction
-    )
+    fit = fit_calibrated(base_trainer, train_data, holdout_fraction=holdout_fraction)
     model = fit.model
     n_train_examples = len(train_data)
 
@@ -332,22 +353,12 @@ async def run_backtest(
         extractions = await extractor.extract_field(
             [entry.player_id for entry in field],
             as_of,
-            event=EventRef(
-                event_id=tournament.id, season=tournament.season, live=False
-            ),
+            event=EventRef(event_id=tournament.id, season=tournament.season, live=False),
         )
 
-        # Served probabilities per player for this event.
-        served_by_player = {
-            pid: dict(
-                zip(
-                    LABEL_TO_OUTCOME_KEY.values(),
-                    coherent_outcomes(model.predict(ex.values)),
-                    strict=True,
-                )
-            )
-            for pid, ex in extractions.items()
-        }
+        # Served probabilities per player for this event — coherent and
+        # field-normalized, matching what PredictionService actually serves.
+        served_by_player = _served_probabilities_for_field(model, extractions)
 
         # Per-event rows for ranking metrics.
         ev_win_probs: list[float] = []
@@ -357,19 +368,11 @@ async def run_backtest(
         n_scored = 0
         # Per-event-per-market y/p — appended to the grouped accumulators when
         # the event finishes, so the bootstrap unit is the event.
-        ev_y_by_outcome: dict[str, list[float]] = {
-            k: [] for k in LABEL_TO_OUTCOME_KEY.values()
-        }
-        ev_p_by_outcome: dict[str, list[float]] = {
-            k: [] for k in LABEL_TO_OUTCOME_KEY.values()
-        }
+        ev_y_by_outcome: dict[str, list[float]] = {k: [] for k in LABEL_TO_OUTCOME_KEY.values()}
+        ev_p_by_outcome: dict[str, list[float]] = {k: [] for k in LABEL_TO_OUTCOME_KEY.values()}
 
         # Worst placement used for missed-cut players in the ranking metric.
-        made_cut_positions = [
-            e.final_position
-            for e in field
-            if e.final_position is not None
-        ]
+        made_cut_positions = [e.final_position for e in field if e.final_position is not None]
         worst_placement = (max(made_cut_positions) if made_cut_positions else len(field)) + 1
 
         for entry in field:
@@ -387,9 +390,7 @@ async def run_backtest(
                 ev_p_by_outcome[outcome_key].append(served[outcome_key])
 
             placement = (
-                entry.final_position
-                if entry.final_position is not None
-                else worst_placement
+                entry.final_position if entry.final_position is not None else worst_placement
             )
             if labels["win"] == 1:
                 winner_player_id = entry.player_id
@@ -442,12 +443,8 @@ async def run_backtest(
     for outcome_key in LABEL_TO_OUTCOME_KEY.values():
         # Per-event arrays preserved through the loop so the block-bootstrap
         # can resample events; concatenate for the point-estimate metrics.
-        y_events_np = [
-            np.array(ev, dtype=np.float64) for ev in y_events_by_outcome[outcome_key]
-        ]
-        p_events_np = [
-            np.array(ev, dtype=np.float64) for ev in p_events_by_outcome[outcome_key]
-        ]
+        y_events_np = [np.array(ev, dtype=np.float64) for ev in y_events_by_outcome[outcome_key]]
+        p_events_np = [np.array(ev, dtype=np.float64) for ev in p_events_by_outcome[outcome_key]]
         if not y_events_np:
             continue
         y = np.concatenate(y_events_np)
@@ -460,8 +457,11 @@ async def run_backtest(
         # replacement so the inferential unit matches the data's correlation
         # structure (rows within an event share field/model/date).
         ci_lo, ci_hi = _bootstrap_skill_ci(
-            y_events_np, p_events_np,
-            n_reps=bootstrap_reps, ci=bootstrap_ci, seed=bootstrap_seed,
+            y_events_np,
+            p_events_np,
+            n_reps=bootstrap_reps,
+            ci=bootstrap_ci,
+            seed=bootstrap_seed,
         )
         outcome_metrics.append(
             OutcomeMetrics(

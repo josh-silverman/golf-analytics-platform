@@ -119,6 +119,27 @@ Three principles governed the work from the start:
 Full identity and hyperparameters are in
 [`docs/project-summary.md` §1](docs/project-summary.md).
 
+> **Methodology note (2026-08).** `run_backtest` (the harness behind
+> `app.cli.backtest` and `app.cli.diagnose`) applied per-market coherence to its
+> scored predictions but never the field-normalization step `PredictionService`
+> applies at serving time, so it was scoring probabilities no user of the live
+> product ever saw. Fixed in `app/ml/backtest.py`, with a regression test.
+> Scope of the fix, checked precisely: **make-cut is unaffected** (it has no
+> fixed field total, so normalization is a no-op on it in both the old and new
+> code); **ranking/Spearman numbers throughout this README are unaffected**
+> (normalization rescales every player in an event by the same factor per
+> market, which preserves rank order); **win, top-5, top-10, and top-20
+> Brier/skill/log-loss/ECE point estimates sourced from the backtest harness
+> were computed pre-fix and have not been rechecked** against the corrected
+> harness. The Path A-vs-stacked comparison above and the
+> [forward record](#forward-record) are unaffected: both were validated
+> against the actual served, already-normalized pipeline rather than the
+> backtest harness. The 3M Open grading in the forward record independently
+> corroborates the qualitative finding (DataGolf beats the served model on
+> every market that carries skill) using real served numbers, so the
+> conclusion looks right; the backtest harness's own point estimates for the
+> four affected markets are the ones still pending a re-run.
+
 ---
 
 ## Chronological timeline

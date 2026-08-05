@@ -17,10 +17,12 @@ from app.ml.backtest import (
     _ece,
     _log_loss,
     _rankdata,
+    _served_probabilities_for_field,
     _spearman,
     run_backtest,
 )
 from app.ml.trainer import GBDTTrainer, TrainerConfig
+from app.services.features import FeatureExtraction
 
 # Trainer sized for the tiny synthetic fixtures in this module: the production
 # default (min_samples_leaf=80) cannot split a few-hundred-row toy dataset, so
@@ -63,6 +65,71 @@ def test_spearman_no_variance_is_zero() -> None:
     assert _spearman(a, b) == 0.0
 
 
+# ---------------------------------------------------------------------------
+# Served-probability post-processing (coherence + field normalization)
+# ---------------------------------------------------------------------------
+
+
+class _ConstantOutcomeModel:
+    """Returns the same raw probability for every market for every player.
+
+    Deliberately picked so the raw per-market probabilities sum to far more
+    than 1.0 across a field of more than one or two players — production's
+    ``PredictionService`` never serves that (it rescales via
+    ``normalize_field``), so a correct backtest must not score it either.
+    """
+
+    def __init__(self, p: float) -> None:
+        self._p = p
+
+    def predict(self, features: dict[str, float]) -> dict[str, float]:  # noqa: ARG002
+        return {
+            "win_prob": self._p,
+            "top_5_prob": self._p,
+            "top_10_prob": self._p,
+            "top_20_prob": self._p,
+            "make_cut_prob": self._p,
+        }
+
+
+def _extraction(pid: int) -> FeatureExtraction:
+    return FeatureExtraction(
+        player_id=pid,
+        as_of=date(2026, 1, 1),
+        feature_set_name="x",
+        feature_set_hash="x",
+        n_rounds=0,
+        values={},
+    )
+
+
+def test_served_probabilities_for_field_are_field_normalized() -> None:
+    """Regression test: the backtest must score what production serves.
+
+    A 4-player field where every player's raw win_prob is 0.5 sums to 2.0 —
+    twice the field's true total of exactly one winner. Before this fix,
+    ``run_backtest`` scored these raw numbers directly (applying
+    ``coherent_outcomes`` but never ``normalize_field``), so every win/top-5/
+    top-10/top-20 Brier and skill number in the harness described
+    probabilities no user of the live product ever sees.
+    """
+    extractions = {pid: _extraction(pid) for pid in range(1, 5)}
+    served = _served_probabilities_for_field(
+        _ConstantOutcomeModel(0.5),  # type: ignore[arg-type]
+        extractions,
+    )
+
+    total_win = sum(o["win_prob"] for o in served.values())
+    assert total_win == pytest.approx(1.0, abs=1e-9)
+
+    # top-5's theoretical total is capped at the field size (4 < 5), and
+    # make_cut has no fixed total — both still land in valid [0, 1] ranges.
+    total_top5 = sum(o["top_5_prob"] for o in served.values())
+    assert total_top5 == pytest.approx(4.0, abs=1e-9)
+    for o in served.values():
+        assert 0.0 <= o["make_cut_prob"] <= 1.0
+
+
 def test_brier_perfect_and_worst() -> None:
     y = np.array([1.0, 0.0])
     assert _brier(y, np.array([1.0, 0.0])) == pytest.approx(0.0)
@@ -97,16 +164,25 @@ def test_ece_detects_miscalibration() -> None:
 
 def _player(pid: int) -> Player:
     return Player(
-        id=pid, dg_id=None, full_name=f"Player {pid}",
-        country="USA", dob=None, turned_pro=2020,
+        id=pid,
+        dg_id=None,
+        full_name=f"Player {pid}",
+        country="USA",
+        dob=None,
+        turned_pro=2020,
     )
 
 
 def _tournament(tid: int, start: date) -> Tournament:
     return Tournament(
-        id=tid, course_id=1, name=f"Event {tid}", season=start.year,
-        start_date=start, end_date=start + timedelta(days=3),
-        purse=1_000_000, field_strength=None,
+        id=tid,
+        course_id=1,
+        name=f"Event {tid}",
+        season=start.year,
+        start_date=start,
+        end_date=start + timedelta(days=3),
+        purse=1_000_000,
+        field_strength=None,
         status=TournamentStatus.COMPLETED,
     )
 
@@ -143,12 +219,14 @@ class _StubCatalog:
         self._players = {pid: _player(pid) for pid in range(1, n_players + 1)}
 
     async def list_tournaments(
-        self, *, season=None, status=None, cursor=None, limit=200,
+        self,
+        *,
+        season=None,
+        status=None,
+        cursor=None,
+        limit=200,
     ) -> Page[Tournament]:
-        items = [
-            t for t in self._tournaments
-            if status is None or t.status == status
-        ]
+        items = [t for t in self._tournaments if status is None or t.status == status]
         return Page(items=items, next_cursor=None, total=len(items))
 
     async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
@@ -179,10 +257,7 @@ class _SkillExtractor:
     async def extract_field(
         self, player_ids: list[int], as_of: date, *, event: object | None = None
     ) -> dict[int, _Extraction]:
-        return {
-            pid: await self.extract(pid, as_of)
-            for pid in dict.fromkeys(player_ids)
-        }
+        return {pid: await self.extract(pid, as_of) for pid in dict.fromkeys(player_ids)}
 
 
 async def test_run_backtest_report_shape_and_leakage() -> None:
@@ -205,7 +280,11 @@ async def test_run_backtest_report_shape_and_leakage() -> None:
     assert len(report.events) == 2
     # Every market should be scored.
     assert {o.outcome_key for o in report.outcomes} == {
-        "win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob",
+        "win_prob",
+        "top_5_prob",
+        "top_10_prob",
+        "top_20_prob",
+        "make_cut_prob",
     }
     # Metrics live in valid ranges.
     for o in report.outcomes:
