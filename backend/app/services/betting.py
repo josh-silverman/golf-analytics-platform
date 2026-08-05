@@ -2,7 +2,7 @@
 
 The core loop a sports bettor runs:
 
-1. Estimate the true probability of an outcome (our MC simulation).
+1. Estimate the true probability of an outcome (the served model's board).
 2. Obtain the book's implied probability (convert American odds, removing vig).
 3. If true > implied, there is positive expected value (+EV).
 4. Size the bet using the (fractional) Kelly criterion.
@@ -16,8 +16,8 @@ the vig by *field normalization*: a book's implied probabilities across the
 field sum to more than the true total (1 winner, 5 top-5s, …); scaling them
 back to that theoretical total strips the margin without assuming a flat vig.
 Players the book doesn't price — and every market when no feed is configured —
-fall back to a synthetic line generated from our simulation probability with a
-realistic vig, so the board is always populated.
+fall back to a synthetic line generated from the model's own probability with
+a realistic vig, so the board is always populated.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class BettingLine:
 
     player_id: int
     player_name: str
-    # Our model's probability estimate (from MC simulation)
+    # Our model's probability estimate (the served board)
     model_prob: float
     # The book's implied probability (after removing vig)
     implied_prob: float
@@ -221,7 +221,7 @@ def build_betting_board(
     vig_margin: float = DEFAULT_VIG_MARGIN,
     real_odds: dict[int, int] | None = None,
 ) -> BettingBoard:
-    """Build a full betting board from MC simulation outcomes.
+    """Build a full betting board from the served model's outcomes.
 
     When ``real_odds`` (player_id → consensus American odds) is supplied, each
     matching player is priced against the de-vigged real line; everyone else

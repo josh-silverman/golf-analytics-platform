@@ -39,18 +39,6 @@ function FeatureCard({ to, category, title, description, badge }: FeatureCardPro
   )
 }
 
-interface PillProps {
-  label: string
-}
-
-function Pill({ label }: PillProps) {
-  return (
-    <span className="rounded border bg-surface px-2 py-0.5 font-mono text-[11px] text-fg-secondary">
-      {label}
-    </span>
-  )
-}
-
 export function Home() {
   const { data: health, isLoading: healthLoading, isError: healthError } = useHealthz()
   const { data: currentTournament, isLoading: tournamentLoading } = useCurrentTournament()
@@ -68,15 +56,6 @@ export function Home() {
           gradient-boosted outcome classification, and per-market probability
           calibration — all on live tour data.
         </p>
-        <div className="flex flex-wrap gap-2 pt-1">
-          <Pill label="FastAPI" />
-          <Pill label="scikit-learn" />
-          <Pill label="numpy" />
-          <Pill label="React" />
-          <Pill label="TanStack Query" />
-          <Pill label="Tailwind" />
-          <Pill label="Fly.io + Vercel" />
-        </div>
       </header>
 
       {/* ------------------------------------------------------------------ */}

@@ -251,14 +251,14 @@ class ScoreVolatility(Feature):
     """Round-to-round scoring volatility — the player's own variance estimate.
 
     Standard deviation of the player's recent per-round SG-total. Because
-    SG-total is a field-relative round score, its spread is exactly the
-    round-score variance the Monte Carlo engine needs: a streaky player (high
-    volatility) both wins and misses cuts more often than a metronome at the
-    same skill mean. The simulation reads this as each player's ``score_std``.
+    SG-total is a field-relative round score, its spread captures how streaky
+    a player is: a high-volatility player both wins and misses cuts more often
+    than a metronome at the same skill mean, which is signal the GBDT
+    classifiers can use directly as an input feature.
 
-    Returns 0.0 when there are too few rounds to estimate a stable spread; the
-    engine reads 0.0 as "unknown" and falls back to the field-default σ, so a
-    thin history never produces a degenerate (near-zero variance) simulation.
+    Returns 0.0 when there are too few rounds to estimate a stable spread,
+    which the classifiers see as any other feature value rather than a
+    special "unknown" marker — a thin history just reads as zero volatility.
     """
 
     name = "score_volatility"

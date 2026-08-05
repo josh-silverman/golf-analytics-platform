@@ -580,7 +580,7 @@ backend/
     api/ · db/ · cache/   FastAPI layer, SQLAlchemy models, Redis caching
   tests/             289 passing tests
   scripts/           one-off analyst scripts behind tournament-analyses/ (see scripts/README.md)
-frontend/            React 19 + TypeScript (Vite) — leaderboard, player, betting-edge, diagnostics
+frontend/            React 19 + TypeScript (Vite) — leaderboard, player detail, betting-edge
 tournament-analyses/ weekly forward-record reports, graded against actual results
 docs/
   project-summary.md         the consolidated research record (primary source for this README)

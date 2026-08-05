@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
@@ -14,8 +14,6 @@ from app.api.v1.deps import (
     get_prediction_service,
 )
 from app.api.v1.schemas import (
-    BenchmarkPayload,
-    BenchmarkPlayerRow,
     CalibrationReportPayload,
     ForwardBackfillEventPayload,
     ForwardBackfillPayload,
@@ -96,9 +94,7 @@ async def get_track_record(
     }
     with contextlib.suppress(Exception):
         await redis_client.setex(key, _TRACK_RECORD_TTL_S, json.dumps(data))
-    return TrackRecordPayload(
-        available=True, model_name=name, model_version_id=version, **data
-    )
+    return TrackRecordPayload(available=True, model_name=name, model_version_id=version, **data)
 
 
 def _bin_payload(b: ReliabilityBin) -> ReliabilityBinPayload:
@@ -265,96 +261,4 @@ async def get_calibration(
             )
             for o in report.outcomes
         ],
-    )
-
-
-@router.get("/benchmark/{tournament_id}")
-async def get_benchmark(
-    tournament_id: int,
-    service: Annotated[PredictionService, Depends(get_prediction_service)],
-    registry: Annotated[ModelRegistry, Depends(get_model_registry)],
-) -> BenchmarkPayload:
-    """Head-to-head: our model vs. DataGolf's published projections.
-
-    When ``DATA_PROVIDER=mock`` the response sets ``dg_available=False`` and
-    all ``dg_*`` fields are null — the frontend shows a "Connect DataGolf API"
-    callout.
-
-    When ``DATA_PROVIDER=datagolf`` the response fetches DataGolf's
-    ``/preds/get-projections`` for the current field and aligns players by
-    ``dg_id`` so the comparison is apples-to-apples.
-    """
-    from app.services.catalog import reference_today
-
-    settings = get_settings()
-    model_name = settings.active_model_name
-    active = registry.get_active(model_name)
-    model_version_id = active.version_id if active else None
-
-    # Our predictions
-    today = reference_today()
-    predictions = await service.predict_tournament(tournament_id, as_of=today)
-    if predictions is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tournament {tournament_id} not found",
-        )
-
-    # DataGolf projections — only when using the real provider
-    dg_available = settings.data_provider == "datagolf"
-    dg_last_updated: str | None = None
-    dg_by_dg_id: dict[int, dict[str, Any]] = {}
-
-    if dg_available:
-        try:
-            from app.providers.datagolf.datagolf_provider import DataGolfProvider
-            from app.providers.factory import get_data_provider
-
-            provider = get_data_provider()
-            # Unwrap CachingProviderWrapper if present
-            raw_provider = getattr(provider, "_provider", provider)
-            if isinstance(raw_provider, DataGolfProvider):
-                projections = await raw_provider.get_dg_projections()
-                for proj in projections:
-                    dg_id = proj.get("dg_id")
-                    if dg_id:
-                        dg_by_dg_id[int(dg_id)] = proj
-                if projections and isinstance(projections[0], dict):
-                    dg_last_updated = projections[0].get("last_updated")
-        except Exception:
-            dg_available = False
-
-    rows: list[BenchmarkPlayerRow] = []
-    for outcome in predictions.outcomes:
-        dg = dg_by_dg_id.get(outcome.player_id) if dg_available else None
-        dg_win = (dg["win"] / 100.0) if dg and "win" in dg else None
-        dg_top10 = (dg["top_10"] / 100.0) if dg and "top_10" in dg else None
-        dg_cut = (dg["make_cut"] / 100.0) if dg and "make_cut" in dg else None
-        win_diff = (outcome.win_prob - dg_win) if dg_win is not None else None
-
-        rows.append(
-            BenchmarkPlayerRow(
-                player_id=outcome.player_id,
-                player_name=outcome.player_name,
-                our_win_prob=outcome.win_prob,
-                our_top_10_prob=outcome.top_10_prob,
-                our_make_cut_prob=outcome.make_cut_prob,
-                dg_win_prob=dg_win,
-                dg_top_10_prob=dg_top10,
-                dg_make_cut_prob=dg_cut,
-                win_diff=win_diff,
-            )
-        )
-
-    # Sort: biggest absolute divergence first (most interesting comparisons up top)
-    rows.sort(key=lambda r: abs(r.win_diff) if r.win_diff is not None else 0.0, reverse=True)
-
-    return BenchmarkPayload(
-        tournament_id=tournament_id,
-        tournament_name=predictions.tournament_name,
-        model_name=model_name,
-        model_version_id=model_version_id,
-        dg_available=dg_available,
-        dg_last_updated=dg_last_updated,
-        rows=rows,
     )

@@ -14,11 +14,13 @@ a fresh laptop, in CI, and in the deploy image. Swapping in an
 ``XGBoostTrainer`` later is a new ``Trainer`` subclass — nothing downstream
 of ``Model.predict`` changes.
 
-Prediction targets. Decision 4 (doc 01 §3) ultimately prefers a skill →
-simulation model (Approach C); that is the Phase 3 simulation engine. The
-per-outcome classifiers here are the Phase 2 stepping stone that makes the
-leaderboard real. When the Monte Carlo engine lands, it derives coherent
-probabilities from a skill model and supersedes these marginals.
+Prediction targets. Decision 4 (doc 01 §3) originally preferred a skill →
+simulation model (Approach C, a Phase 3 Monte Carlo engine); it was built,
+then removed once the per-outcome classifiers here proved sufficient with
+``coherent_outcomes`` + ``normalize_field`` (``app.services.predictions``)
+patching the marginals into a coherent, field-normalized set. That
+post-processed classifier design is the current, permanent architecture, not
+a stepping stone awaiting a successor.
 """
 
 from __future__ import annotations

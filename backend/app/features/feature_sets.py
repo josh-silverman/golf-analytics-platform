@@ -63,9 +63,8 @@ def v2_field_relative() -> FeatureSet:
       * ``field_strength`` (the field's mean SG-total) to scale confidence to
         the event's quality;
       * ``round_count`` so thin skill estimates can be discounted;
-      * ``score_volatility`` (round-to-round SG-total spread) — the per-player
-        variance the Monte Carlo simulation needs to model streaky vs. steady
-        players, also exposed to the classifier.
+      * ``score_volatility`` (round-to-round SG-total spread) — how streaky
+        vs. steady a player is, exposed directly as a classifier input.
 
     These are the levers that let the model separate winners from the pack —
     win/top-N probability is inherently a relative quantity. Requires
