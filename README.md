@@ -5,6 +5,18 @@ model for PGA Tour outcome prediction on top of the [DataGolf](https://datagolf.
 API — and, just as importantly, in **rigorously establishing where its predictive
 ceiling is** and refusing to ship features that don't beat it out-of-sample.
 
+> **[Live demo →](https://pinpoint-golf-gray.vercel.app)** — real predictions on the
+> live PGA Tour schedule, served by the model described below. The backend runs on a
+> free-tier instance that spins down after ~15 minutes idle: waking it takes **~40s**,
+> and if the event you pick hasn't had its board built recently, the first request for
+> it can take **a minute or two more** (DataGolf fetches are rate-limited). Every board
+> is then cached for 6h, so it's fast on every request after that.
+
+<p align="center">
+  <img src="docs/img/leaderboard.png" alt="Leaderboard for the upcoming Wyndham Championship: 147 players ranked by top-20 probability, with win/top-5/top-10/top-20/make-cut columns and a field-summary strip above the table." width="49%">
+  <img src="docs/img/report-card.png" alt="Leaderboard for a completed event (Genesis Scottish Open) showing the model's pre-event board graded against actual results: a report card (winner's predicted rank, top-20 hits, make-cut accuracy) and a Finish column added to the table." width="49%">
+</p>
+
 This README is the project's definitive technical history. It documents the full
 evolution — every major model version, the feature-engineering wins, the long list
 of experiments that **failed and were reverted**, the validation methodology and how
@@ -417,11 +429,16 @@ protect.
   distribution; the betting view is explicitly a model-vs-market *research* lens, not a
   +EV claim.
 
+<p align="center">
+  <img src="docs/img/betting-edge.png" alt="Betting Edge view for the Wyndham Championship: model probability vs. de-vigged sportsbook consensus for the make-cut market, with a market picker, a minimum-probability filter, and an edge-distribution chart across the field." width="70%">
+</p>
+
 **Stack:** Python 3.12 · FastAPI · scikit-learn `HistGradientBoostingClassifier` ·
 Redis · PostgreSQL · React 19 + TypeScript (Vite). A deliberate constraint — no
 OpenMP-based libraries (XGBoost/LightGBM) — keeps the dependency surface small and
-shaped several modeling choices. Docker Compose for local dev; Fly.io as the deploy
-target (a `fly.toml` exists; the project is not necessarily deployed).
+shaped several modeling choices. Docker Compose for local dev; **live in production**
+on Render (backend, free tier, `render.yaml`) + Vercel (frontend) — see the demo link
+above. A `fly.toml` also exists from an earlier deploy target but isn't the live path.
 
 ---
 
@@ -479,8 +496,7 @@ architecture plus product differentiation. An independent strategic review
   the v2 SG-only model for cold-start, validated on the actual served pipeline to
   match/exceed the stacked path and resolve the win/top-5 loss. Also a served-accuracy
   win: it strictly dominates the old v3 path on win/top-5. `serving_strategy=path_a` is
-  the default; `stacked` restores the v3 path. (A production *deploy* to Fly.io is a
-  separate ops action; the serving code and default are in place and test-green.)
+  the default; `stacked` restores the v3 path. Live in production on the demo above.
 - **✅ Forward out-of-sample track record (shipped, running).** Boards captured
   immutably pre-event, stamped with model version + training cutoff; graded only when
   the model was trained strictly before the event. Replaces the in-sample-risk report
