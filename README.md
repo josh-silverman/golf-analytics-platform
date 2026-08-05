@@ -5,7 +5,7 @@ model for PGA Tour outcome prediction on top of the [DataGolf](https://datagolf.
 API — and, just as importantly, in **rigorously establishing where its predictive
 ceiling is** and refusing to ship features that don't beat it out-of-sample.
 
-> **[Live demo →](https://pinpoint-golf-gray.vercel.app)** — real predictions on the
+> **[Live demo →](https://pinpoint-golf-gray.vercel.app)**: real predictions on the
 > live PGA Tour schedule, served by the model described below. The backend runs on a
 > free-tier instance that spins down after ~15 minutes idle: waking it takes **~40s**,
 > and if the event you pick hasn't had its board built recently, the first request for
@@ -45,6 +45,7 @@ probably near its ceiling" from an assumption into a measured finding.
 - [Current architecture](#current-architecture)
 - [Limitations and open research questions](#limitations-and-open-research-questions)
 - [Roadmap — Path A](#roadmap--path-a)
+- [Forward record](#forward-record)
 - [Repository layout](#repository-layout)
 - [Running it](#running-it)
 - [License](#license)
@@ -113,7 +114,7 @@ Three principles governed the work from the start:
 - **What it honestly does not do:** beat a sharp sportsbook on any market, or predict
   winners with meaningful skill (that market is data-starved and dominated by
   week-of variance).
-- **Test suite:** 284 passing tests (backend), deterministic.
+- **Test suite:** 289 passing tests (backend), deterministic.
 
 Full identity and hyperparameters are in
 [`docs/project-summary.md` §1](docs/project-summary.md).
@@ -516,6 +517,36 @@ architecture plus product differentiation. An independent strategic review
 
 ---
 
+## Forward record
+
+The forward out-of-sample track record above is machine-graded and aggregated. The
+underlying weekly work is published event-by-event in
+[`tournament-analyses/`](tournament-analyses/): the served board, DataGolf's raw
+probabilities, and the de-vigged sportsbook line for that event, with the top
+divergences and a written call. Once an event completes, a companion `-results.md`
+grades the published picks against what actually happened. It's the raw analyst
+record behind the numbers above, and every number in it traces back to the served
+pipeline.
+
+The 3M Open grading is the sharpest example so far: it caught a real serving bug
+(the board wasn't yet defaulting to DataGolf-direct for covered players) by grading
+both boards against the actual result and finding DataGolf beat the served model on
+every market that carries skill:
+
+| Market | DG raw Brier | Served v2 Brier | Base Brier | DG skill | v2 skill |
+|--------|--------------|-----------------|------------|----------|----------|
+| Top 5 | 0.0338 | 0.0349 | 0.0402 | **+0.159** | +0.131 |
+| Top 10 | 0.0668 | 0.0702 | 0.0769 | **+0.131** | +0.087 |
+| Top 20 | 0.1151 | 0.1237 | 0.1350 | **+0.147** | +0.084 |
+| Make cut | 0.2170 | 0.2467 | 0.2485 | **+0.127** | **+0.007** |
+
+Make-cut is the product's own claimed strongest market. The served board that week
+was close to the base rate on it, +0.007 skill against DataGolf's +0.127. See the
+[full results](tournament-analyses/2026-07-27-3m-open-results.md) for the pick-by-pick
+scorecard and how the bug was fixed.
+
+---
+
 ## Repository layout
 
 ```
@@ -526,8 +557,10 @@ backend/
     providers/       DataProvider interface · DataGolfProvider · MockDataProvider (contract-tested)
     services/        FeatureExtractor (train/serve parity), PredictionService, catalog
     api/ · db/ · cache/   FastAPI layer, SQLAlchemy models, Redis caching
-  tests/             284 passing tests
+  tests/             289 passing tests
+  scripts/           one-off analyst scripts behind tournament-analyses/ (see scripts/README.md)
 frontend/            React 19 + TypeScript (Vite) — leaderboard, player, betting-edge, diagnostics
+tournament-analyses/ weekly forward-record reports, graded against actual results
 docs/
   project-summary.md         the consolidated research record (primary source for this README)
   project-brief.md           how to judge proposed work against settled results

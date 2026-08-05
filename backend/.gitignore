@@ -2,3 +2,6 @@ diagnostics/
 
 # Forward prediction-board archive — runtime data, accumulates per event.
 prediction_boards/
+
+# One-off analyst scripts' JSON dumps — regenerated per run, not committed.
+scripts/output/

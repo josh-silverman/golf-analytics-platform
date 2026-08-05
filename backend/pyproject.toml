@@ -55,6 +55,15 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*" = ["S101", "S106"]  # asserts + dummy secrets are fine in tests
+# One-off, read-only analyst scripts backing tournament-analyses/ (see
+# scripts/README.md) — not part of the maintained app surface, so the
+# formatting/style bar that applies to app/ doesn't apply here.
+"scripts/**/*" = [
+    "E501",   # long printed report lines are more readable un-wrapped
+    "UP031",  # %-formatting reads fine in a quick print statement
+    "SIM115", # short-lived scripts don't need a context-managed file handle
+    "N806",   # single-letter locals (P, T) are fine in a throwaway script
+]
 
 [tool.mypy]
 python_version = "3.12"
