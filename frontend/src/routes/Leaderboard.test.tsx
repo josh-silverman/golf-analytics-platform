@@ -62,9 +62,41 @@ const PREDICTIONS_FIXTURE = {
   ],
 }
 
+// Mirrors the live API shape when there are too few graded events (< 3) to
+// bootstrap a CI: the block-bootstrap returns nan, which FastAPI's encoder
+// maps to JSON null — win_prob here is representative of a market that's
+// still provisional; make_cut_prob is representative of one that's confirmed.
+const TRACK_RECORD_PROVISIONAL_FIXTURE = {
+  available: true,
+  events: 2,
+  players_graded: 286,
+  events_to_meaningful: 18,
+  markets: [
+    {
+      market: 'win_prob',
+      n: 286,
+      base_rate: 0.007,
+      brier: 0.0069,
+      brier_skill: 0.003,
+      ci_lower: null,
+      ci_upper: null,
+    },
+    {
+      market: 'make_cut_prob',
+      n: 286,
+      base_rate: 0.486,
+      brier: 0.2287,
+      brier_skill: 0.0843,
+      ci_lower: null,
+      ci_upper: null,
+    },
+  ],
+}
+
 function mockFetch({
   tournament = TOURNAMENT_FIXTURE as typeof TOURNAMENT_FIXTURE | null,
   predictions = PREDICTIONS_FIXTURE as typeof PREDICTIONS_FIXTURE | null,
+  trackRecord = null as typeof TRACK_RECORD_PROVISIONAL_FIXTURE | null,
 } = {}) {
   vi.stubGlobal(
     'fetch',
@@ -80,6 +112,12 @@ function mockFetch({
           return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
         }
         return Promise.resolve({ ok: true, status: 200, json: async () => predictions })
+      }
+      if (url.includes('track-record/forward')) {
+        if (trackRecord == null) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ available: false }) })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => trackRecord })
       }
       return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
     }),
@@ -132,6 +170,18 @@ describe('Leaderboard', () => {
     await waitFor(() => {
       expect(screen.getByText(/Error:/i)).toBeInTheDocument()
     })
+  })
+
+  it('renders provisional markets when the CI is null instead of hiding the widget', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_PROVISIONAL_FIXTURE })
+    renderLeaderboard(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+    })
+    // Both markets in the fixture have ci_lower: null, so both should render
+    // as provisional rather than being filtered out.
+    expect(screen.getAllByText('(provisional)')).toHaveLength(2)
+    expect(screen.getByText(/~18 more to a stable interval/i)).toBeInTheDocument()
   })
 
 })

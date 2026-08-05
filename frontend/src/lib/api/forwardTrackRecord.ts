@@ -6,8 +6,11 @@ export interface ForwardMarketSkill {
   base_rate: number
   brier: number
   brier_skill: number
-  ci_lower: number
-  ci_upper: number
+  // null when the block-bootstrap has too few events to produce a CI (< 3
+  // events) — the backend reports the skill point estimate regardless, so the
+  // UI must not assume a CI exists.
+  ci_lower: number | null
+  ci_upper: number | null
 }
 
 export interface ForwardTrackRecord {

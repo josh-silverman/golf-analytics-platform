@@ -86,15 +86,21 @@ class TrackRecordPayload(BaseModel):
 
 
 class ForwardMarketSkillPayload(BaseModel):
-    """One market's out-of-sample Brier skill with its block-bootstrap CI."""
+    """One market's out-of-sample Brier skill with its block-bootstrap CI.
+
+    ``ci_lower``/``ci_upper`` are ``None`` when there are too few graded events
+    (< 3) to bootstrap a CI — FastAPI's encoder maps the underlying NaN to
+    JSON ``null``, so this type declares what the wire actually sends rather
+    than the ``float`` it was silently coerced through before.
+    """
 
     market: str
     n: int
     base_rate: float
     brier: float
     brier_skill: float
-    ci_lower: float
-    ci_upper: float
+    ci_lower: float | None
+    ci_upper: float | None
 
 
 class ForwardTrackRecordPayload(BaseModel):

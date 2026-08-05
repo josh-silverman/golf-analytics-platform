@@ -42,14 +42,23 @@ const MARKET_LABELS: Record<string, string> = {
 // top-20 carry the most genuine backtest skill, win/top-5 the least.
 const MARKET_ORDER = ['make_cut_prob', 'top_20_prob', 'top_10_prob', 'top_5_prob', 'win_prob']
 
-// Only surface markets whose 90% block-bootstrap CI clears zero — the same bar
-// the backend's own forward-record grader uses to call a market "skilled".
-// Below that, a positive skill score is indistinguishable from noise.
-function confirmedSkillMarkets(markets: ForwardMarketSkill[]): ForwardMarketSkill[] {
-  const confirmed = markets.filter((m) => m.ci_lower > 0)
-  return [...confirmed].sort(
-    (a, b) => MARKET_ORDER.indexOf(a.market) - MARKET_ORDER.indexOf(b.market)
-  )
+// A market is "confirmed" once its 90% block-bootstrap CI clears zero — the
+// same bar the backend's own forward-record grader uses to call it skilled.
+// Below that (or before there are enough events to bootstrap a CI at all,
+// when ci_lower is null) the point estimate is shown but marked provisional,
+// rather than hidden — with 2-3 events so far, showing nothing looks like the
+// feature is broken instead of like the record is still accumulating.
+type DisplayMarketSkill = ForwardMarketSkill & { confirmed: boolean }
+
+function orderedSkillMarkets(markets: ForwardMarketSkill[]): DisplayMarketSkill[] {
+  return [...markets]
+    .sort((a, b) => MARKET_ORDER.indexOf(a.market) - MARKET_ORDER.indexOf(b.market))
+    .map((m) => ({ ...m, confirmed: m.ci_lower != null && m.ci_lower > 0 }))
+}
+
+function formatSkill(skill: number): string {
+  const sign = skill >= 0 ? '+' : ''
+  return `${sign}${(skill * 100).toFixed(1)}%`
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -306,20 +315,31 @@ export function Leaderboard() {
           </p>
         )}
 
-        {trackRecord?.available && confirmedSkillMarkets(trackRecord.markets).length > 0 && (
+        {trackRecord?.available && trackRecord.markets.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
             <span className="font-medium text-fg-secondary">
               Forward out-of-sample track record ({trackRecord.events} event
               {trackRecord.events === 1 ? '' : 's'} since training, {trackRecord.players_graded}{' '}
-              players graded):
+              players graded
+              {trackRecord.events_to_meaningful > 0 &&
+                ` · ~${trackRecord.events_to_meaningful} more to a stable interval`}
+              ):
             </span>
-            {confirmedSkillMarkets(trackRecord.markets).map((m, i) => (
+            {orderedSkillMarkets(trackRecord.markets).map((m, i) => (
               <span key={m.market}>
                 {i > 0 && '· '}
                 {MARKET_LABELS[m.market]}{' '}
-                <span className="font-mono text-accent">
-                  +{(m.brier_skill * 100).toFixed(1)}% skill
+                <span
+                  className={`font-mono ${m.confirmed ? 'text-accent' : 'text-fg-tertiary'}`}
+                  title={
+                    m.confirmed
+                      ? 'Skill confirmed — the 90% block-bootstrap CI clears zero.'
+                      : 'Provisional — not enough graded events yet for a confidence interval that clears zero.'
+                  }
+                >
+                  {formatSkill(m.brier_skill)} skill
                 </span>
+                {!m.confirmed && <span className="italic"> (provisional)</span>}
               </span>
             ))}
           </div>
