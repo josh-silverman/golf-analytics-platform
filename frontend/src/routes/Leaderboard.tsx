@@ -76,6 +76,10 @@ const STATUS_LABEL: Record<string, string> = {
 // Dropdown ordering: live first, then soonest upcoming, then most-recent done.
 const _STATUS_ORDER: Record<string, number> = { in_progress: 0, upcoming: 1, completed: 2 }
 
+// Cap on how many completed events the dropdown offers, most-recent first, so
+// it doesn't grow unbounded as the schedule accumulates.
+const MAX_COMPLETED_EVENTS = 25
+
 function eventLabel(t: Tournament): string {
   const d = new Date(t.start_date).toLocaleDateString(undefined, {
     month: 'short',
@@ -147,14 +151,23 @@ export function Leaderboard() {
   } = usePredictions(effectiveId)
 
   // Event options for the switcher; falls back to just the current event when
-  // the full list isn't available.
+  // the full list isn't available. DataGolf only carries the current week's
+  // field, so an upcoming event that isn't "current" has no field to predict
+  // yet — offering it leads to either an empty board or a very slow first
+  // build. Filtered to in-progress/completed events plus whichever one is
+  // current; completed events are further capped to the most recent
+  // MAX_COMPLETED_EVENTS so the dropdown (and its slow-cold-load surface)
+  // stays bounded.
   const eventOptions = useMemo(() => {
     const list = Array.isArray(tournamentsEnv?.data)
       ? tournamentsEnv.data
       : currentTournament
         ? [currentTournament]
         : []
-    return [...list].sort((a, b) => {
+    const selectable = list.filter(
+      (t) => t.status !== 'upcoming' || t.id === currentTournament?.id,
+    )
+    const sorted = [...selectable].sort((a, b) => {
       const sa = _STATUS_ORDER[a.status] ?? 9
       const sb = _STATUS_ORDER[b.status] ?? 9
       if (sa !== sb) return sa - sb
@@ -162,10 +175,23 @@ export function Leaderboard() {
       const tb = +new Date(b.start_date)
       return a.status === 'upcoming' ? ta - tb : tb - ta
     })
+    const live = sorted.filter((t) => t.status !== 'completed')
+    const completed = sorted.filter((t) => t.status === 'completed').slice(0, MAX_COMPLETED_EVENTS)
+    return [...live, ...completed]
   }, [tournamentsEnv, currentTournament])
 
+  // The trimmed eventOptions may not include the selected event (e.g. a
+  // bookmarked link to an older completed event beyond the dropdown's cap),
+  // so fall back to the full fetched list before falling back to
+  // currentTournament — showing the wrong event's name/status badge would be
+  // worse than a slightly bigger lookup.
   const selectedTournament =
-    eventOptions.find((t) => t.id === effectiveId) ?? currentTournament ?? null
+    eventOptions.find((t) => t.id === effectiveId) ??
+    (Array.isArray(tournamentsEnv?.data) ? tournamentsEnv.data : []).find(
+      (t) => t.id === effectiveId,
+    ) ??
+    currentTournament ??
+    null
 
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const s = searchParams.get('sort') as SortKey | null
@@ -366,7 +392,14 @@ export function Leaderboard() {
         </p>
       )}
 
-      {predictions && (
+      {predictions && predictions.outcomes.length === 0 && (
+        <p className="text-fg-secondary">
+          No field published for this event yet. DataGolf only carries the current
+          week&rsquo;s field, so this board is empty until the event is closer.
+        </p>
+      )}
+
+      {predictions && predictions.outcomes.length > 0 && (
         <>
           {/* How to read this board — reflects the model's real strengths. */}
           <div className="rounded-lg border border-border/70 bg-surface px-4 py-3 text-xs leading-relaxed text-fg-secondary">

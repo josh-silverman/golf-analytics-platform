@@ -184,4 +184,16 @@ describe('Leaderboard', () => {
     expect(screen.getByText(/~18 more to a stable interval/i)).toBeInTheDocument()
   })
 
+  it('shows an empty-field message instead of a blank table when outcomes is empty', async () => {
+    // Matches what an upcoming event that isn't DataGolf's current week
+    // returns live: a valid board with zero outcomes.
+    mockFetch({ predictions: { ...PREDICTIONS_FIXTURE, outcomes: [] } })
+    renderLeaderboard(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/No field published for this event yet/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Rory Birdie')).not.toBeInTheDocument()
+    expect(screen.queryByText('How to read this board')).not.toBeInTheDocument()
+  })
+
 })
