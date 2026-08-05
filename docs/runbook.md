@@ -253,12 +253,12 @@ fly ssh console -C "python -m app.cli.train --name golf_v2 --no-activate"
 | Endpoint | What it checks |
 |----------|---------------|
 | `GET /api/v1/healthz` | Liveness — app is running |
-| `GET /api/v1/readyz` | Readiness — DB + Redis reachable |
+| `GET /api/v1/readyz` | Readiness — Redis reachable + an active model loads from the registry |
 | `GET /api/v1/meta/data-freshness` | Provider last-sync timestamps |
 
 ```bash
-curl https://pga-analytics-api.fly.dev/api/v1/healthz
-curl https://pga-analytics-api.fly.dev/api/v1/readyz
+curl https://pga-analytics-api.onrender.com/api/v1/healthz
+curl https://pga-analytics-api.onrender.com/api/v1/readyz
 ```
 
 ---

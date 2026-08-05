@@ -149,7 +149,7 @@ Route Map
 
 ```
 GET    /api/v1/healthz                                        # liveness
-GET    /api/v1/readyz                                         # readiness (db + redis)
+GET    /api/v1/readyz                                         # readiness (redis + active model)
 GET    /api/v1/meta/data-freshness                            # when did we last sync
 
 # Players

@@ -1,13 +1,13 @@
-from collections.abc import AsyncIterator
-from unittest.mock import AsyncMock
+from datetime import date, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.deps import get_model_registry
 from app.cache.redis import get_redis
-from app.db.session import get_session
+from app.ml.registry import ModelRegistry, ModelVersion
 
 
 def test_healthz_returns_ok(client: TestClient) -> None:
@@ -16,14 +16,22 @@ def test_healthz_returns_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def _override_deps(app: FastAPI, *, db_ok: bool, redis_ok: bool) -> None:
-    async def fake_session() -> AsyncIterator[AsyncSession]:
-        session = AsyncMock(spec=AsyncSession)
-        if db_ok:
-            session.execute = AsyncMock(return_value=None)
-        else:
-            session.execute = AsyncMock(side_effect=ConnectionError("db down"))
-        yield session
+def _fake_active_version() -> ModelVersion:
+    return ModelVersion(
+        name="golf_v1",
+        version_id="deadbeef1234",
+        feature_set_hash="x",
+        training_data_through=date(2026, 1, 1),
+        hyperparameters={},
+        metrics={},
+        trained_at=datetime(2026, 1, 1),
+        artifact_relpath="golf_v1/deadbeef1234/artifact.pkl",
+    )
+
+
+def _override_deps(app: FastAPI, *, model_ok: bool, redis_ok: bool) -> None:
+    registry = MagicMock(spec=ModelRegistry)
+    registry.get_active.return_value = _fake_active_version() if model_ok else None
 
     async def fake_redis() -> Redis:
         redis = AsyncMock(spec=Redis)
@@ -33,34 +41,34 @@ def _override_deps(app: FastAPI, *, db_ok: bool, redis_ok: bool) -> None:
             redis.ping = AsyncMock(side_effect=ConnectionError("redis down"))
         return redis
 
-    app.dependency_overrides[get_session] = fake_session
+    app.dependency_overrides[get_model_registry] = lambda: registry
     app.dependency_overrides[get_redis] = fake_redis
 
 
 def test_readyz_returns_ready_when_all_dependencies_healthy(
     app: FastAPI, client: TestClient
 ) -> None:
-    _override_deps(app, db_ok=True, redis_ok=True)
+    _override_deps(app, model_ok=True, redis_ok=True)
     response = client.get("/api/v1/readyz")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ready"
-    assert body["checks"] == {"db": "ok", "redis": "ok"}
+    assert body["checks"] == {"redis": "ok", "model": "ok"}
 
 
-def test_readyz_returns_not_ready_when_db_fails(app: FastAPI, client: TestClient) -> None:
-    _override_deps(app, db_ok=False, redis_ok=True)
+def test_readyz_returns_not_ready_when_no_active_model(app: FastAPI, client: TestClient) -> None:
+    _override_deps(app, model_ok=False, redis_ok=True)
     response = client.get("/api/v1/readyz")
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "not_ready"
-    assert body["checks"] == {"db": "error", "redis": "ok"}
+    assert body["checks"] == {"redis": "ok", "model": "error"}
 
 
 def test_readyz_returns_not_ready_when_redis_fails(app: FastAPI, client: TestClient) -> None:
-    _override_deps(app, db_ok=True, redis_ok=False)
+    _override_deps(app, model_ok=True, redis_ok=False)
     response = client.get("/api/v1/readyz")
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "not_ready"
-    assert body["checks"] == {"db": "ok", "redis": "error"}
+    assert body["checks"] == {"redis": "error", "model": "ok"}
