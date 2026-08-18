@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
-import { type ForwardMarketSkill, useForwardTrackRecord } from '../lib/api/forwardTrackRecord'
+import {
+  type ForwardMarketSkill,
+  type ForwardTrackRecord,
+  useForwardTrackRecord,
+} from '../lib/api/forwardTrackRecord'
 import { usePredictions, type PlayerOutcome } from '../lib/api/predictions'
 import { useCurrentTournament, useTournaments } from '../lib/api/tournaments'
 import type { Tournament } from '../lib/api/types'
@@ -54,6 +58,46 @@ function orderedSkillMarkets(markets: ForwardMarketSkill[]): DisplayMarketSkill[
   return [...markets]
     .sort((a, b) => MARKET_ORDER.indexOf(a.market) - MARKET_ORDER.indexOf(b.market))
     .map((m) => ({ ...m, confirmed: m.ci_lower != null && m.ci_lower > 0 }))
+}
+
+// A one-line plain-language summary above the detailed per-market breakdown.
+// Only claims what the data supports: "beaten the base rate" is exactly the
+// ``confirmed`` bar above (CI lower clears zero), and markets that haven't
+// cleared it are named as still-accumulating rather than as failing.
+function summarizeTrackRecord(markets: DisplayMarketSkill[], events: number): string {
+  const eventWord = `${events} event${events === 1 ? '' : 's'}`
+  const confirmed = markets.filter((m) => m.confirmed).map((m) => MARKET_LABELS[m.market])
+  const provisional = markets.filter((m) => !m.confirmed).map((m) => MARKET_LABELS[m.market])
+
+  if (confirmed.length === 0) {
+    return `Too early to call: ${eventWord} isn't enough yet to confirm skill on any market.`
+  }
+  const beat = confirmed.join(' and ')
+  if (provisional.length === 0) {
+    return `Model has beaten the base rate on ${beat} over the last ${eventWord}.`
+  }
+  const pending = provisional.join(' and ')
+  const verb = provisional.length === 1 ? "hasn't" : "haven't"
+  return (
+    `Model has beaten the base rate on ${beat} over the last ${eventWord}; ` +
+    `${pending} ${verb} accumulated enough samples yet to call.`
+  )
+}
+
+// The record spans the 2026-07-29 Path A fix. Boards served before it
+// cold-started the whole field but carry the same model version id, so when the
+// graded set mixes regimes the aggregate is not measuring one system. Say so
+// rather than let the headline number imply otherwise. Returns null when every
+// graded board came from the same regime, which is the normal case over time.
+function regimeCaveat(tr: ForwardTrackRecord): string | null {
+  const pathA = tr.events_path_a ?? 0
+  const cold = tr.events_cold_start_only ?? 0
+  const unknown = tr.events_regime_unknown ?? 0
+  const parts: string[] = []
+  if (cold > 0) parts.push(`${cold} served cold-start only`)
+  if (unknown > 0) parts.push(`${unknown} of unrecorded coverage`)
+  if (parts.length === 0) return null
+  return `Includes ${parts.join(' and ')} out of ${pathA + cold + unknown}, so this pools more than one serving configuration.`
 }
 
 function formatSkill(skill: number): string {
@@ -342,33 +386,41 @@ export function Leaderboard() {
         )}
 
         {trackRecord?.available && trackRecord.markets.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
-            <span className="font-medium text-fg-secondary">
-              Forward out-of-sample track record ({trackRecord.events} event
-              {trackRecord.events === 1 ? '' : 's'} since training, {trackRecord.players_graded}{' '}
-              players graded
-              {trackRecord.events_to_meaningful > 0 &&
-                ` · ~${trackRecord.events_to_meaningful} more to a stable interval`}
-              ):
-            </span>
-            {orderedSkillMarkets(trackRecord.markets).map((m, i) => (
-              <span key={m.market}>
-                {i > 0 && '· '}
-                {MARKET_LABELS[m.market]}{' '}
-                <span
-                  className={`font-mono ${m.confirmed ? 'text-accent' : 'text-fg-tertiary'}`}
-                  title={
-                    m.confirmed
-                      ? 'Skill confirmed — the 90% block-bootstrap CI clears zero.'
-                      : 'Provisional — not enough graded events yet for a confidence interval that clears zero.'
-                  }
-                >
-                  {formatSkill(m.brier_skill)} skill
-                </span>
-                {!m.confirmed && <span className="italic"> (provisional)</span>}
+          <>
+            <p className="text-xs text-fg-secondary">
+              {summarizeTrackRecord(orderedSkillMarkets(trackRecord.markets), trackRecord.events)}
+            </p>
+            {regimeCaveat(trackRecord) && (
+              <p className="text-xs italic text-fg-tertiary">{regimeCaveat(trackRecord)}</p>
+            )}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
+              <span className="font-medium text-fg-secondary">
+                Forward out-of-sample track record ({trackRecord.events} event
+                {trackRecord.events === 1 ? '' : 's'} since training, {trackRecord.players_graded}{' '}
+                players graded
+                {trackRecord.events_to_meaningful > 0 &&
+                  ` · ~${trackRecord.events_to_meaningful} more to a stable interval`}
+                ):
               </span>
-            ))}
-          </div>
+              {orderedSkillMarkets(trackRecord.markets).map((m, i) => (
+                <span key={m.market}>
+                  {i > 0 && '· '}
+                  {MARKET_LABELS[m.market]}{' '}
+                  <span
+                    className={`font-mono ${m.confirmed ? 'text-accent' : 'text-fg-tertiary'}`}
+                    title={
+                      m.confirmed
+                        ? 'Skill confirmed — the 90% block-bootstrap CI clears zero.'
+                        : 'Provisional — not enough graded events yet for a confidence interval that clears zero.'
+                    }
+                  >
+                    {formatSkill(m.brier_skill)} skill
+                  </span>
+                  {!m.confirmed && <span className="italic"> (provisional)</span>}
+                </span>
+              ))}
+            </div>
+          </>
         )}
       </header>
 

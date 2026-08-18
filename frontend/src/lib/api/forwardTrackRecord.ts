@@ -19,6 +19,13 @@ export interface ForwardTrackRecord {
   players_graded: number
   events_to_meaningful: number
   markets: ForwardMarketSkill[]
+  // Serving-regime split of the graded events. Boards served before the
+  // 2026-07-29 Path A fix cold-started every player but carry the same
+  // `path_a@…` model version id as healthy ones, so a record that mixes them
+  // is not measuring one system. Optional: an older backend omits these.
+  events_path_a?: number
+  events_cold_start_only?: number
+  events_regime_unknown?: number
 }
 
 async function fetchForwardTrackRecord(): Promise<ForwardTrackRecord> {

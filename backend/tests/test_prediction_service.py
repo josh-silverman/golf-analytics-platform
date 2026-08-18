@@ -30,19 +30,20 @@ _TOURNAMENT = Tournament(
 )
 
 _PLAYERS = [
-    Player(id=10, dg_id=None, full_name="Alice Ace", country="USA",
-           dob=None, turned_pro=2018),
-    Player(id=11, dg_id=None, full_name="Bob Birdie", country="USA",
-           dob=None, turned_pro=2019),
-    Player(id=12, dg_id=None, full_name="Cara Chip", country="GBR",
-           dob=None, turned_pro=2020),
+    Player(id=10, dg_id=None, full_name="Alice Ace", country="USA", dob=None, turned_pro=2018),
+    Player(id=11, dg_id=None, full_name="Bob Birdie", country="USA", dob=None, turned_pro=2019),
+    Player(id=12, dg_id=None, full_name="Cara Chip", country="GBR", dob=None, turned_pro=2020),
 ]
 
 _FIELD = [
     TournamentEntry(
-        id=i, tournament_id=1, player_id=p.id,
-        status=EntryStatus.ACTIVE, final_position=None,
-        final_score_to_par=None, official_money_cents=None,
+        id=i,
+        tournament_id=1,
+        player_id=p.id,
+        status=EntryStatus.ACTIVE,
+        final_position=None,
+        final_score_to_par=None,
+        official_money_cents=None,
     )
     for i, p in enumerate(_PLAYERS, start=1)
 ]
@@ -68,9 +69,7 @@ class _StubCatalog:
     async def get_tournament(self, tournament_id: int) -> Tournament | None:
         return self._tournament if tournament_id == 1 else None
 
-    async def get_tournament_field(
-        self, tournament_id: int
-    ) -> list[TournamentEntry]:
+    async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
         return list(_FIELD) if tournament_id == 1 else []
 
     async def get_player(self, player_id: int) -> Player | None:
@@ -179,9 +178,15 @@ async def test_predict_tournament_records_as_of() -> None:
 
 async def test_predict_tournament_with_fallback_model_reports_null_version() -> None:
     service = _make_service(
-        model=ConstantModel({"win_prob": 0.005, "top_5_prob": 0.05,
-                             "top_10_prob": 0.10, "top_20_prob": 0.20,
-                             "make_cut_prob": 0.65}),
+        model=ConstantModel(
+            {
+                "win_prob": 0.005,
+                "top_5_prob": 0.05,
+                "top_10_prob": 0.10,
+                "top_20_prob": 0.20,
+                "make_cut_prob": 0.65,
+            }
+        ),
         model_version_id=None,
     )
     result = await service.predict_tournament(1, as_of=date(2026, 5, 30))
@@ -222,10 +227,15 @@ async def test_predict_tournament_outcomes_are_coherent_after_normalization() ->
 async def test_predict_tournament_normalizes_win_probs_to_one() -> None:
     """The served field's win probabilities sum to ~1.0 (exactly one winner)."""
     service = _make_service(
-        model=ConstantModel({
-            "win_prob": 0.047, "top_5_prob": 0.012, "top_10_prob": 0.033,
-            "top_20_prob": 0.096, "make_cut_prob": 0.427,
-        }),
+        model=ConstantModel(
+            {
+                "win_prob": 0.047,
+                "top_5_prob": 0.012,
+                "top_10_prob": 0.033,
+                "top_20_prob": 0.096,
+                "make_cut_prob": 0.427,
+            }
+        ),
     )
     result = await service.predict_tournament(1, as_of=date(2026, 5, 30))
     assert result is not None
@@ -272,8 +282,13 @@ async def test_path_a_routes_covered_player_to_datagolf() -> None:
     now top the board — proving covered players are routed to DataGolf.
     """
     dg = {
-        11: {"win_prob": 0.30, "top_5_prob": 0.5, "top_10_prob": 0.6,
-             "top_20_prob": 0.8, "make_cut_prob": 0.95},
+        11: {
+            "win_prob": 0.30,
+            "top_5_prob": 0.5,
+            "top_10_prob": 0.6,
+            "top_20_prob": 0.8,
+            "make_cut_prob": 0.95,
+        },
     }
     result = await _path_a_service(dg).predict_tournament(1, as_of=date(2026, 5, 30))
     assert result is not None
@@ -283,10 +298,20 @@ async def test_path_a_routes_covered_player_to_datagolf() -> None:
 async def test_path_a_mixed_board_is_coherent_and_normalized() -> None:
     """Mixed DG + cold-start board stays nested and field-normalized."""
     dg = {
-        11: {"win_prob": 0.30, "top_5_prob": 0.5, "top_10_prob": 0.6,
-             "top_20_prob": 0.8, "make_cut_prob": 0.95},
-        12: {"win_prob": 0.02, "top_5_prob": 0.1, "top_10_prob": 0.2,
-             "top_20_prob": 0.4, "make_cut_prob": 0.7},
+        11: {
+            "win_prob": 0.30,
+            "top_5_prob": 0.5,
+            "top_10_prob": 0.6,
+            "top_20_prob": 0.8,
+            "make_cut_prob": 0.95,
+        },
+        12: {
+            "win_prob": 0.02,
+            "top_5_prob": 0.1,
+            "top_10_prob": 0.2,
+            "top_20_prob": 0.4,
+            "make_cut_prob": 0.7,
+        },
         # player 10 has no DG entry → cold-start via the model
     }
     result = await _path_a_service(dg).predict_tournament(1, as_of=date(2026, 5, 30))
@@ -305,6 +330,53 @@ async def test_path_a_empty_dg_serves_whole_field_from_model() -> None:
     assert result.outcomes[0].player_id == 12
 
 
+async def test_path_a_records_how_many_players_datagolf_actually_covered() -> None:
+    """Coverage is recorded so a degraded board can be told from a healthy one.
+
+    Nothing else on the response distinguishes them: ``model_version_id`` is
+    fixed at construction time, before any DataGolf call, so a board that fell
+    back to cold-start for the whole field is otherwise identical in provenance
+    to one Path A really served.
+    """
+    dg = {
+        11: {
+            "win_prob": 0.30,
+            "top_5_prob": 0.5,
+            "top_10_prob": 0.6,
+            "top_20_prob": 0.8,
+            "make_cut_prob": 0.95,
+        },
+        12: {
+            "win_prob": 0.02,
+            "top_5_prob": 0.1,
+            "top_10_prob": 0.2,
+            "top_20_prob": 0.4,
+            "make_cut_prob": 0.7,
+        },
+    }
+    covered = await _path_a_service(dg).predict_tournament(1, as_of=date(2026, 5, 30))
+    assert covered is not None
+    assert covered.dg_direct_count == 2  # players 11 and 12; 10 cold-started
+
+    degraded = await _path_a_service({}).predict_tournament(1, as_of=date(2026, 5, 30))
+    assert degraded is not None
+    assert degraded.dg_direct_count == 0  # the shape of the shipped bug
+
+
+async def test_non_path_a_service_reports_no_dg_coverage_number() -> None:
+    """Under the stacked path the count is meaningless, so it must be None, not 0."""
+    service = PredictionService(
+        catalog=_StubCatalog(),  # type: ignore[arg-type]
+        extractor=_StubExtractor(),  # type: ignore[arg-type]
+        model=_RankingModel(),
+        model_name="golf_v1",
+        model_version_id="stacked",
+    )
+    result = await service.predict_tournament(1, as_of=date(2026, 5, 30))
+    assert result is not None
+    assert result.dg_direct_count is None
+
+
 # ---------------------------------------------------------------------------
 # Pure functions: coherence + field normalization
 # ---------------------------------------------------------------------------
@@ -312,15 +384,20 @@ async def test_path_a_empty_dg_serves_whole_field_from_model() -> None:
 
 class TestCoherentOutcomes:
     def test_lifts_incoherent_wider_buckets(self) -> None:
-        win, top5, top10, top20, cut = coherent_outcomes({
-            "win_prob": 0.047, "top_5_prob": 0.012, "top_10_prob": 0.033,
-            "top_20_prob": 0.096, "make_cut_prob": 0.427,
-        })
+        win, top5, top10, top20, cut = coherent_outcomes(
+            {
+                "win_prob": 0.047,
+                "top_5_prob": 0.012,
+                "top_10_prob": 0.033,
+                "top_20_prob": 0.096,
+                "make_cut_prob": 0.427,
+            }
+        )
         assert win == pytest.approx(0.047)
-        assert top5 == pytest.approx(0.047)   # lifted from 0.012
+        assert top5 == pytest.approx(0.047)  # lifted from 0.012
         assert top10 == pytest.approx(0.047)  # lifted from 0.033
         assert top20 == pytest.approx(0.096)  # already coherent
-        assert cut == pytest.approx(0.427)    # already coherent
+        assert cut == pytest.approx(0.427)  # already coherent
 
     def test_missing_keys_default_then_lift_to_win(self) -> None:
         assert coherent_outcomes({"win_prob": 0.10}) == pytest.approx(
@@ -328,9 +405,7 @@ class TestCoherentOutcomes:
         )
 
     def test_clamps_to_unit_interval(self) -> None:
-        win, top5, top10, top20, cut = coherent_outcomes(
-            {"win_prob": -0.5, "make_cut_prob": 2.0}
-        )
+        win, top5, top10, top20, cut = coherent_outcomes({"win_prob": -0.5, "make_cut_prob": 2.0})
         assert win == 0.0
         assert cut == 1.0
 

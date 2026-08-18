@@ -18,6 +18,9 @@ from app.domain.enums import EntryStatus, TournamentStatus
 from app.ml.backtest import _bootstrap_skill_ci, _brier
 
 if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
     from app.services.board_archive import BoardArchive
     from app.services.catalog import CatalogService
 
@@ -44,6 +47,16 @@ class ForwardTrackRecord:
     markets: tuple[MarketSkill, ...]
     # Events still needed before the strong markets reach a stable CI (heuristic).
     events_to_meaningful: int
+    # Graded events whose board was served with DataGolf-direct probabilities
+    # for most of the field, i.e. Path A actually running. Reported because the
+    # record spans the 2026-07-29 fix for the caching-wrapper bug that silently
+    # cold-started every player: boards from either side of it are stamped with
+    # the same "path_a@…" version id, so without this the aggregate pools two
+    # different serving systems under one number. ``None`` for boards captured
+    # before coverage was recorded at all, counted separately as "unknown".
+    events_path_a: int = 0
+    events_cold_start_only: int = 0
+    events_regime_unknown: int = 0
 
 
 # Heuristic: block-bootstrap CIs over events stabilise for the strong markets
@@ -51,6 +64,12 @@ class ForwardTrackRecord:
 # CI is too wide to certify skill; win/top-5 need far more and may never certify
 # at weekly cadence (data-starved).
 _MEANINGFUL_EVENTS = 20
+
+# Share of a field that must have been served DataGolf-direct before the board
+# counts as "Path A actually ran". DataGolf covers ~95% of a typical field, so a
+# healthy board sits far above this; the failure mode being separated out is the
+# degenerate one (nothing came back, whole field cold-started), which sits at 0.
+_PATH_A_COVERAGE_FLOOR = 0.5
 
 
 def _labels(final_position: int | None, status: EntryStatus) -> dict[str, int] | None:
@@ -85,6 +104,9 @@ async def compute_forward_track_record(
     p_by_event: dict[str, list[list[float]]] = {m: [] for m in _MARKETS}
     events = 0
     players = 0
+    path_a_events = 0
+    cold_start_events = 0
+    unknown_regime_events = 0
 
     for snap in snapshots:
         tournament = await catalog.get_tournament(snap.tournament_id)
@@ -94,9 +116,7 @@ async def compute_forward_track_record(
             continue  # model saw this event in training → not OOS, skip
 
         field = await catalog.get_tournament_field(snap.tournament_id)
-        label_by_player = {
-            e.player_id: _labels(e.final_position, e.status) for e in field
-        }
+        label_by_player = {e.player_id: _labels(e.final_position, e.status) for e in field}
         probs_by_player = {o.player_id: o for o in snap.outcomes}
 
         ev_y: dict[str, list[float]] = {m: [] for m in _MARKETS}
@@ -114,6 +134,13 @@ async def compute_forward_track_record(
             continue
         events += 1
         players += graded_here
+        share = snap.dg_direct_share
+        if share is None:
+            unknown_regime_events += 1
+        elif share >= _PATH_A_COVERAGE_FLOOR:
+            path_a_events += 1
+        else:
+            cold_start_events += 1
         for m in _MARKETS:
             y_by_event[m].append(ev_y[m])
             p_by_event[m].append(ev_p[m])
@@ -137,19 +164,20 @@ async def compute_forward_track_record(
             n_reps=2000,
             ci=0.90,
         )
-        markets.append(
-            MarketSkill(m, len(y_flat), base, brier, skill, lo, hi)
-        )
+        markets.append(MarketSkill(m, len(y_flat), base, brier, skill, lo, hi))
 
     return ForwardTrackRecord(
         events=events,
         players_graded=players,
         markets=tuple(markets),
         events_to_meaningful=max(0, _MEANINGFUL_EVENTS - events),
+        events_path_a=path_a_events,
+        events_cold_start_only=cold_start_events,
+        events_regime_unknown=unknown_regime_events,
     )
 
 
-def _np(values: list[float]):  # noqa: ANN202 — thin import-local helper
+def _np(values: list[float]) -> NDArray[np.float64]:
     import numpy as np
 
     return np.array(values, dtype=np.float64)

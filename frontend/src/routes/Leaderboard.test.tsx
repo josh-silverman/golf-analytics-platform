@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { ForwardTrackRecord } from '../lib/api/forwardTrackRecord'
 import { Leaderboard } from './Leaderboard'
 
 afterEach(cleanup)
@@ -93,10 +94,46 @@ const TRACK_RECORD_PROVISIONAL_FIXTURE = {
   ],
 }
 
+const TRACK_RECORD_MIXED_FIXTURE = {
+  available: true,
+  events: 12,
+  players_graded: 1500,
+  events_to_meaningful: 0,
+  markets: [
+    {
+      market: 'win_prob',
+      n: 1500,
+      base_rate: 0.007,
+      brier: 0.0069,
+      brier_skill: 0.003,
+      ci_lower: -0.01,
+      ci_upper: 0.02,
+    },
+    {
+      market: 'make_cut_prob',
+      n: 1500,
+      base_rate: 0.486,
+      brier: 0.2287,
+      brier_skill: 0.0843,
+      ci_lower: 0.031,
+      ci_upper: 0.14,
+    },
+    {
+      market: 'top_20_prob',
+      n: 1500,
+      base_rate: 0.136,
+      brier: 0.098,
+      brier_skill: 0.061,
+      ci_lower: 0.012,
+      ci_upper: 0.11,
+    },
+  ],
+}
+
 function mockFetch({
   tournament = TOURNAMENT_FIXTURE as typeof TOURNAMENT_FIXTURE | null,
   predictions = PREDICTIONS_FIXTURE as typeof PREDICTIONS_FIXTURE | null,
-  trackRecord = null as typeof TRACK_RECORD_PROVISIONAL_FIXTURE | null,
+  trackRecord = null as ForwardTrackRecord | null,
 } = {}) {
   vi.stubGlobal(
     'fetch',
@@ -182,6 +219,58 @@ describe('Leaderboard', () => {
     // as provisional rather than being filtered out.
     expect(screen.getAllByText('(provisional)')).toHaveLength(2)
     expect(screen.getByText(/~18 more to a stable interval/i)).toBeInTheDocument()
+    // Neither market has cleared its CI yet, so the one-line summary must not
+    // claim confirmed skill on anything.
+    expect(screen.getByText(/Too early to call/i)).toBeInTheDocument()
+  })
+
+  it('flags when the graded record mixes serving regimes', async () => {
+    // 1 real Path A board + 1 cold-start-only + 1 unrecorded: the aggregate is
+    // not measuring a single system and must say so.
+    mockFetch({
+      trackRecord: {
+        ...TRACK_RECORD_MIXED_FIXTURE,
+        events_path_a: 1,
+        events_cold_start_only: 1,
+        events_regime_unknown: 1,
+      },
+    })
+    renderLeaderboard(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText(/1 served cold-start only and 1 of unrecorded coverage out of 3/i),
+    ).toBeInTheDocument()
+  })
+
+  it('omits the regime caveat when every graded board ran Path A', async () => {
+    mockFetch({
+      trackRecord: {
+        ...TRACK_RECORD_MIXED_FIXTURE,
+        events_path_a: 12,
+        events_cold_start_only: 0,
+        events_regime_unknown: 0,
+      },
+    })
+    renderLeaderboard(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/serving configuration/i)).not.toBeInTheDocument()
+  })
+
+  it('summarizes confirmed vs. still-accumulating markets in plain language', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_MIXED_FIXTURE })
+    renderLeaderboard(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+    })
+    // make-cut and top-20 have ci_lower > 0 (confirmed); win does not.
+    expect(
+      screen.getByText(/Model has beaten the base rate on Make cut and Top 20/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Win hasn't accumulated enough samples yet to call/i)).toBeInTheDocument()
   })
 
   it('shows an empty-field message instead of a blank table when outcomes is empty', async () => {

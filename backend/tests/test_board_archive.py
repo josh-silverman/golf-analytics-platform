@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -13,6 +14,8 @@ from app.services.board_archive import (
     BoardSnapshotOutcome,
     FileBoardArchive,
     RedisBoardArchive,
+    _from_dict,
+    _to_json,
 )
 from app.services.forward_track_record import compute_forward_track_record
 
@@ -55,6 +58,7 @@ def _snapshot(
     start_date: str = "2026-06-01",
     outcomes: tuple[BoardSnapshotOutcome, ...] = (),
     source: str = "captured",
+    dg_direct_count: int | None = None,
 ) -> BoardSnapshot:
     return BoardSnapshot(
         tournament_id=tournament_id,
@@ -68,6 +72,7 @@ def _snapshot(
         captured_at="2026-05-31T12:00:00+00:00",
         outcomes=outcomes,
         source=source,
+        dg_direct_count=dg_direct_count,
     )
 
 
@@ -133,21 +138,45 @@ class _GradeCatalog:
 
     def __init__(self, *, start_date: date, status: TournamentStatus) -> None:
         self._t = Tournament(
-            id=1, course_id=1, name="The Demo", season=2026,
-            start_date=start_date, end_date=start_date, purse=None,
-            field_strength=None, status=status,
+            id=1,
+            course_id=1,
+            name="The Demo",
+            season=2026,
+            start_date=start_date,
+            end_date=start_date,
+            purse=None,
+            field_strength=None,
+            status=status,
         )
         # Player 10 won (pos 1), 11 made cut (pos 30), 12 missed cut.
         self._field = [
-            TournamentEntry(id=1, tournament_id=1, player_id=10,
-                            status=EntryStatus.MADE_CUT, final_position=1,
-                            final_score_to_par=None, official_money_cents=None),
-            TournamentEntry(id=2, tournament_id=1, player_id=11,
-                            status=EntryStatus.MADE_CUT, final_position=30,
-                            final_score_to_par=None, official_money_cents=None),
-            TournamentEntry(id=3, tournament_id=1, player_id=12,
-                            status=EntryStatus.MISSED_CUT, final_position=None,
-                            final_score_to_par=None, official_money_cents=None),
+            TournamentEntry(
+                id=1,
+                tournament_id=1,
+                player_id=10,
+                status=EntryStatus.MADE_CUT,
+                final_position=1,
+                final_score_to_par=None,
+                official_money_cents=None,
+            ),
+            TournamentEntry(
+                id=2,
+                tournament_id=1,
+                player_id=11,
+                status=EntryStatus.MADE_CUT,
+                final_position=30,
+                final_score_to_par=None,
+                official_money_cents=None,
+            ),
+            TournamentEntry(
+                id=3,
+                tournament_id=1,
+                player_id=12,
+                status=EntryStatus.MISSED_CUT,
+                final_position=None,
+                final_score_to_par=None,
+                official_money_cents=None,
+            ),
         ]
 
     async def get_tournament(self, tournament_id: int) -> Tournament | None:
@@ -168,14 +197,16 @@ async def test_forward_grader_skips_in_sample_boards(tmp_path) -> None:
 
 async def test_forward_grader_grades_out_of_sample_board(tmp_path) -> None:
     archive = FileBoardArchive(tmp_path)
-    await archive.persist(_snapshot(
-        trained_through="2026-05-01",  # strictly before the 06-01 start → OOS
-        outcomes=(
-            BoardSnapshotOutcome(10, 0.4, 0.7, 0.8, 0.9, 0.98),   # winner, high
-            BoardSnapshotOutcome(11, 0.02, 0.1, 0.3, 0.6, 0.85),  # made cut
-            BoardSnapshotOutcome(12, 0.01, 0.05, 0.1, 0.2, 0.40),  # missed cut
-        ),
-    ))
+    await archive.persist(
+        _snapshot(
+            trained_through="2026-05-01",  # strictly before the 06-01 start → OOS
+            outcomes=(
+                BoardSnapshotOutcome(10, 0.4, 0.7, 0.8, 0.9, 0.98),  # winner, high
+                BoardSnapshotOutcome(11, 0.02, 0.1, 0.3, 0.6, 0.85),  # made cut
+                BoardSnapshotOutcome(12, 0.01, 0.05, 0.1, 0.2, 0.40),  # missed cut
+            ),
+        )
+    )
     catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
     result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
     assert result is not None
@@ -193,3 +224,81 @@ async def test_forward_grader_ignores_incomplete_events(tmp_path) -> None:
     catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.UPCOMING)
     result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Serving-regime provenance
+#
+# ``model_version_id`` is stamped "path_a@<id>" whenever Path A is *configured*,
+# before any DataGolf call is made. A board where DataGolf returned nothing
+# (the caching-wrapper bug fixed 2026-07-29, an outage, an uncovered event)
+# therefore carries an identical label to a real Path A board while being a
+# completely different product. ``dg_direct_count`` is what tells them apart.
+# ---------------------------------------------------------------------------
+
+_THREE = (
+    BoardSnapshotOutcome(10, 0.4, 0.7, 0.8, 0.9, 0.98),
+    BoardSnapshotOutcome(11, 0.02, 0.1, 0.3, 0.6, 0.85),
+    BoardSnapshotOutcome(12, 0.01, 0.05, 0.1, 0.2, 0.40),
+)
+
+
+async def test_dg_direct_count_round_trips(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(outcomes=_THREE, dg_direct_count=3))
+    (loaded,) = await archive.list_all()
+    assert loaded.dg_direct_count == 3
+    assert loaded.dg_direct_share == 1.0
+
+
+def test_dg_direct_share_is_none_when_unrecorded() -> None:
+    """Boards captured before the field existed must not be assumed covered."""
+    assert _snapshot(outcomes=_THREE).dg_direct_share is None
+
+
+def test_dg_direct_share_is_zero_for_a_fully_cold_started_board() -> None:
+    """The exact shape of the bug: Path A configured, DataGolf contributed nothing."""
+    snap = _snapshot(outcomes=_THREE, dg_direct_count=0, version="path_a@d69cf2a7323f")
+    assert snap.dg_direct_share == 0.0
+    # Indistinguishable from a healthy board by version id alone.
+    assert snap.model_version_id == "path_a@d69cf2a7323f"
+
+
+def test_snapshot_from_dict_tolerates_unknown_future_keys() -> None:
+    """A snapshot written by a newer build must still load, not be dropped."""
+    data = json.loads(_to_json(_snapshot(outcomes=_THREE, dg_direct_count=2)))
+    data["some_field_added_later"] = "whatever"
+    loaded = _from_dict(data)
+    assert loaded.dg_direct_count == 2
+    assert loaded.tournament_id == 1
+
+
+def test_snapshot_from_dict_defaults_missing_dg_direct_count() -> None:
+    """Legacy snapshots (no coverage recorded) load with None, not 0."""
+    data = json.loads(_to_json(_snapshot(outcomes=_THREE)))
+    data.pop("dg_direct_count", None)
+    assert _from_dict(data).dg_direct_count is None
+
+
+async def test_forward_grader_splits_events_by_serving_regime(tmp_path) -> None:
+    """The aggregate must expose how many graded boards were really Path A."""
+    archive = FileBoardArchive(tmp_path)
+    # Healthy Path A board.
+    await archive.persist(
+        _snapshot(tournament_id=1, version="a", outcomes=_THREE, dg_direct_count=3)
+    )
+    # Path A configured but DataGolf contributed nothing → cold-start only.
+    await archive.persist(
+        _snapshot(tournament_id=1, version="b", outcomes=_THREE, dg_direct_count=0)
+    )
+    # Captured before coverage was recorded → regime genuinely unknown.
+    await archive.persist(
+        _snapshot(tournament_id=1, version="c", outcomes=_THREE, dg_direct_count=None)
+    )
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.events == 3
+    assert result.events_path_a == 1
+    assert result.events_cold_start_only == 1
+    assert result.events_regime_unknown == 1

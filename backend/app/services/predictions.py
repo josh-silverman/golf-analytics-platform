@@ -81,7 +81,11 @@ _FIELD_TARGET_SUM: dict[str, float] = {
 
 # Index of each market in the coherent-outcome tuple.
 _MARKET_ORDER: tuple[str, ...] = (
-    "win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob",
+    "win_prob",
+    "top_5_prob",
+    "top_10_prob",
+    "top_20_prob",
+    "make_cut_prob",
 )
 
 
@@ -117,8 +121,7 @@ def normalize_field(
     normalized: list[tuple[float, float, float, float, float]] = []
     for r in rows:
         scaled = {
-            _MARKET_ORDER[i]: min(r[i] * scales.get(i, 1.0), 1.0)
-            for i in range(len(_MARKET_ORDER))
+            _MARKET_ORDER[i]: min(r[i] * scales.get(i, 1.0), 1.0) for i in range(len(_MARKET_ORDER))
         }
         # Re-apply nested coherence: scaling each market by a different factor
         # can flip win above top-5 for a player who was previously tied.
@@ -180,6 +183,12 @@ class TournamentPredictions:
     # this is the cold-start model's cutoff; the DG-direct part is inherently a
     # frozen pre-event snapshot. ``None`` when unknown (e.g. fallback model).
     model_trained_through: date | None = None
+    # Players served DataGolf-direct. ``None`` when Path A is not in use (the
+    # stacked path serves the model to everyone, so the number is meaningless);
+    # ``0`` under Path A means DataGolf returned nothing and the whole field
+    # cold-started to the SG-only model, which is a materially different board
+    # from the one ``model_version_id`` ("path_a@…") advertises.
+    dg_direct_count: int | None = None
 
 
 class PredictionService:
@@ -280,6 +289,14 @@ class PredictionService:
         # can rebuild outcomes after the field-level normalization step.
         players: list[tuple[int, str]] = []
         coherent_rows: list[tuple[float, float, float, float, float]] = []
+        # How many players actually got DataGolf-direct probabilities. Under
+        # Path A this is the difference between "the board Path A is supposed
+        # to serve" and "every player cold-started to the SG-only model", which
+        # is otherwise invisible: an empty ``dg_full`` (provider bug, DataGolf
+        # outage, un-covered event) produces a complete, normal-looking board.
+        # Recorded on the snapshot so the forward record can tell the two
+        # regimes apart after the fact instead of pooling them.
+        dg_direct_count = 0
         for entry in field:
             player = await self._catalog.get_player(entry.player_id)
             if player is None:
@@ -290,6 +307,8 @@ class PredictionService:
             if self._path_a is not None:
                 # Covered → DataGolf-direct; cold-start → SG-only model.
                 dg = dg_full.get(entry.player_id)
+                if dg is not None:
+                    dg_direct_count += 1
                 preds = dg if dg is not None else self._model.predict(extraction.values)
             else:
                 preds = self._model.predict(extraction.values)
@@ -331,6 +350,7 @@ class PredictionService:
             feature_set_hash=self._extractor.feature_set.hash,
             outcomes=tuple(outcomes),
             model_trained_through=self._model_trained_through,
+            dg_direct_count=dg_direct_count if self._path_a is not None else None,
         )
 
 

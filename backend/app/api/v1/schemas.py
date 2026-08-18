@@ -117,6 +117,14 @@ class ForwardTrackRecordPayload(BaseModel):
     players_graded: int = 0
     events_to_meaningful: int = 0
     markets: list[ForwardMarketSkillPayload] = []
+    # Serving-regime split of the graded events. The record spans the
+    # 2026-07-29 fix for the caching-wrapper bug that silently cold-started
+    # every player, and both sides carry the same "path_a@…" model version id,
+    # so these counts are the only way to tell how much of the aggregate was
+    # produced by Path A actually running.
+    events_path_a: int = 0
+    events_cold_start_only: int = 0
+    events_regime_unknown: int = 0
 
 
 class ForwardBackfillEventPayload(BaseModel):

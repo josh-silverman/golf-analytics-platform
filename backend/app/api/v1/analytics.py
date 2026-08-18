@@ -94,7 +94,17 @@ async def get_track_record(
     }
     with contextlib.suppress(Exception):
         await redis_client.setex(key, _TRACK_RECORD_TTL_S, json.dumps(data))
-    return TrackRecordPayload(available=True, model_name=name, model_version_id=version, **data)
+    return TrackRecordPayload(
+        available=True,
+        model_name=name,
+        model_version_id=version,
+        events=tr.events,
+        players_graded=tr.players_graded,
+        winner_in_top10_rate=tr.winner_in_top10_rate,
+        mean_winner_rank=tr.mean_winner_rank,
+        avg_top20_hit_rate=tr.avg_top20_hit_rate,
+        make_cut_accuracy=tr.make_cut_accuracy,
+    )
 
 
 def _bin_payload(b: ReliabilityBin) -> ReliabilityBinPayload:
@@ -127,6 +137,9 @@ async def get_forward_track_record(
         events=tr.events,
         players_graded=tr.players_graded,
         events_to_meaningful=tr.events_to_meaningful,
+        events_path_a=tr.events_path_a,
+        events_cold_start_only=tr.events_cold_start_only,
+        events_regime_unknown=tr.events_regime_unknown,
         markets=[
             ForwardMarketSkillPayload(
                 market=m.market,

@@ -24,7 +24,7 @@ service's own disk is ephemeral and would drop the archive on every redeploy).
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -65,6 +65,20 @@ class BoardSnapshot:
     # a completed event's pre-event DataGolf archive (still leakage-free: as-of
     # capped to the eve, admitted only if trained strictly before the event).
     source: str = "captured"
+    # Players on this board served DataGolf-direct, recorded because
+    # ``model_version_id`` cannot express it: it is stamped "path_a@<id>"
+    # whenever Path A is *configured*, before any DataGolf call happens, so a
+    # board where DataGolf returned nothing (provider bug, outage, uncovered
+    # event) is otherwise indistinguishable from a real Path A board. ``None``
+    # on snapshots written before this field existed, and on non-Path-A boards.
+    dg_direct_count: int | None = None
+
+    @property
+    def dg_direct_share(self) -> float | None:
+        """Fraction of the board served DataGolf-direct, or ``None`` if unknown."""
+        if self.dg_direct_count is None or not self.outcomes:
+            return None
+        return self.dg_direct_count / len(self.outcomes)
 
     def is_out_of_sample(self, start_date: date) -> bool:
         """True iff the producing model was trained strictly before the event.
@@ -82,11 +96,17 @@ def _to_json(snapshot: BoardSnapshot) -> str:
 
 
 def _from_dict(data: dict[str, Any]) -> BoardSnapshot:
-    """Rebuild a snapshot from its stored dict. Snapshots written before the
-    ``source`` field existed simply default to "captured".
+    """Rebuild a snapshot from its stored dict.
+
+    Fields added after a snapshot was written fall back to their defaults
+    (``source`` to "captured", ``dg_direct_count`` to ``None``). Unknown keys
+    are dropped rather than raising, so a snapshot written by a *newer* build
+    still loads on an older one instead of being skipped as corrupt — the
+    forward record must not silently lose events across a deploy.
     """
     outcomes = tuple(BoardSnapshotOutcome(**o) for o in data.pop("outcomes", []))
-    return BoardSnapshot(outcomes=outcomes, **data)
+    known = {f.name for f in fields(BoardSnapshot)}
+    return BoardSnapshot(outcomes=outcomes, **{k: v for k, v in data.items() if k in known})
 
 
 class BoardArchive(Protocol):
@@ -225,4 +245,5 @@ def snapshot_from_predictions(
             for o in predictions.outcomes  # type: ignore[attr-defined]
         ),
         source=source,
+        dg_direct_count=getattr(predictions, "dg_direct_count", None),
     )
