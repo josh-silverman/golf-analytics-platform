@@ -4,6 +4,7 @@ Usage (from the backend directory):
     uv run python -m app.cli.backtest
     uv run python -m app.cli.backtest --test-events 20
     uv run python -m app.cli.backtest --test-events 20 --holdout 0.2
+    uv run python -m app.cli.backtest --feature-set v3   # the active model
 
 Walks forward over the most recent ``--test-events`` completed tournaments,
 trains a calibrated GBDT on everything before them, and scores its
@@ -49,6 +50,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Recency half-life in days for training-example weighting "
         "(default: off — every example weighted equally)",
     )
+    p.add_argument(
+        "--feature-set",
+        choices=("v2", "v3"),
+        default="v2",
+        help="Feature set to evaluate: v2 (14-feature SG-only) or v3 "
+        "(18-feature, adds the DataGolf meta-features). Default: v2 — the "
+        "registered active model is v3, so pass --feature-set v3 to measure it.",
+    )
     return p
 
 
@@ -56,8 +65,11 @@ def _fmt_pct(x: float) -> str:
     return f"{x * 100:5.1f}%"
 
 
-async def _run(*, test_events: int, holdout: float, half_life: int | None) -> None:
+async def _run(
+    *, test_events: int, holdout: float, half_life: int | None, feature_set: str
+) -> None:
     from app.config import get_settings
+    from app.features.feature_sets import v2_field_relative, v3_dg_preds
     from app.ml.backtest import run_backtest
     from app.ml.trainer import GBDTTrainer, TrainerConfig
     from app.providers.factory import get_data_provider
@@ -67,7 +79,8 @@ async def _run(*, test_events: int, holdout: float, half_life: int | None) -> No
     settings = get_settings()
     provider = get_data_provider()
     catalog = CatalogService(provider)
-    extractor = FeatureExtractor(provider)
+    fs = v3_dg_preds() if feature_set == "v3" else v2_field_relative()
+    extractor = FeatureExtractor(provider, feature_set=fs)
     base_trainer = (
         GBDTTrainer(TrainerConfig(recency_half_life_days=half_life))
         if half_life is not None
@@ -78,6 +91,7 @@ async def _run(*, test_events: int, holdout: float, half_life: int | None) -> No
     print("PGA Analytics — Rolling-origin backtest")
     print("=" * 70)
     print(f"Provider:     {settings.data_provider}")
+    print(f"Feature set:  {feature_set} ({len(fs.features)} features)")
     print(f"Test events:  {test_events} most-recent completed tournaments")
     print(f"Recency:      {f'half-life {half_life}d' if half_life else 'off (uniform)'}")
     print()
@@ -102,23 +116,16 @@ async def _run(*, test_events: int, holdout: float, half_life: int | None) -> No
     print("\n" + "-" * 70)
     print("PROBABILITY QUALITY (out-of-sample)")
     print("-" * 70)
-    ci_label = (
-        f"{int(report.bootstrap_ci * 100)}% CI" if report.bootstrap_ci else "CI"
-    )
+    ci_label = f"{int(report.bootstrap_ci * 100)}% CI" if report.bootstrap_ci else "CI"
     print(
-        f"{'market':<14}{'base':>8}{'brier':>9}{'logloss':>9}"
-        f"{'ece':>8}{'skill':>9}{ci_label:>22}"
+        f"{'market':<14}{'base':>8}{'brier':>9}{'logloss':>9}{'ece':>8}{'skill':>9}{ci_label:>22}"
     )
-    print(f"{'':<14}{'rate':>8}{'':>9}{'':>9}{'':>8}{'vs base':>9}"
-          f"{'(block-bootstrap)':>22}")
+    print(f"{'':<14}{'rate':>8}{'':>9}{'':>9}{'':>8}{'vs base':>9}{'(block-bootstrap)':>22}")
     for o in report.outcomes:
         if o.brier_skill_score_ci_lower != o.brier_skill_score_ci_lower:  # NaN check
             ci_str = "—"
         else:
-            ci_str = (
-                f"[{o.brier_skill_score_ci_lower:+.3f},"
-                f"{o.brier_skill_score_ci_upper:+.3f}]"
-            )
+            ci_str = f"[{o.brier_skill_score_ci_lower:+.3f},{o.brier_skill_score_ci_upper:+.3f}]"
         print(
             f"{o.outcome_key:<14}"
             f"{_fmt_pct(o.base_rate):>8}"
@@ -140,8 +147,10 @@ async def _run(*, test_events: int, holdout: float, half_life: int | None) -> No
     print("\n" + "-" * 70)
     print("RANKING QUALITY")
     print("-" * 70)
-    print(f"  Spearman(win prob, finish):   {r.spearman_winprob_vs_finish:+.3f}  "
-          f"(1.0 = perfect ordering, 0 = none)")
+    print(
+        f"  Spearman(win prob, finish):   {r.spearman_winprob_vs_finish:+.3f}  "
+        f"(1.0 = perfect ordering, 0 = none)"
+    )
     print(f"  Mean winner predicted rank:   {r.mean_winner_predicted_rank:.1f}")
     print(f"  Median winner predicted rank: {r.median_winner_predicted_rank:.1f}")
     print(f"  Winner in our top-5:          {_fmt_pct(r.winner_in_top5_rate)}")
@@ -168,6 +177,7 @@ def main() -> None:
                 test_events=args.test_events,
                 holdout=args.holdout,
                 half_life=args.half_life,
+                feature_set=args.feature_set,
             )
         )
     except KeyboardInterrupt:
