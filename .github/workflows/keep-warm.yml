@@ -1,0 +1,37 @@
+name: Keep backend warm
+
+# Render's free plan spins the API down after ~15 min idle; the first request
+# after that pays a ~40s cold start (plus, if the requested event's board
+# isn't cached, a DataGolf fetch on top). A ping inside every idle window
+# keeps the container up.
+#
+# BUDGET, read before widening the schedule. Render's free tier allows 750
+# instance-hours per month across the account. Keeping this service up
+# around the clock costs ~730 of them in a 31-day month, which is 97% of the
+# allowance and leaves nothing for any other free service. So this pings
+# only during waking hours (12:00-04:00 UTC, roughly 08:00-24:00 US Eastern),
+# ~16h/day => ~500 instance-hours/month, leaving real headroom. Change the
+# hour range, not the interval, if you need a different window.
+#
+# GitHub Actions minutes are free on public repos, which this is. Scheduled
+# workflows are best-effort (delayed under load) and GitHub disables them
+# after 60 days with no repo activity, so treat this as a strong reduction
+# in cold-start odds rather than a guarantee. The pre-demo checklist in
+# docs/walkthrough-notes.md still has you hit the real event board once,
+# 5 minutes ahead.
+#
+# Pings /healthz only (dependency-free, no DataGolf call): it keeps the
+# container alive, it does not pre-build any event's board cache.
+
+on:
+  schedule:
+    - cron: "*/10 12-23,0-3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /healthz
+        run: |
+          curl -fsS --max-time 60 https://pga-analytics-api.onrender.com/api/v1/healthz
