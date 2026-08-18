@@ -36,6 +36,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import structlog
 
 from app.config import get_settings
 from app.domain.enums import CourseType, EntryStatus, TournamentStatus
@@ -53,6 +54,8 @@ from app.providers.base import Capability, DataProvider
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
+
+log = structlog.get_logger()
 
 _BASE_URL = "https://feeds.datagolf.com"
 
@@ -115,6 +118,19 @@ def _now_monotonic() -> float:
     return time.monotonic()
 
 
+def _normalize_event_name(name: str) -> str:
+    """Casefold an event name for comparison across DataGolf endpoints.
+
+    Both sides of the comparison are DataGolf's own ``event_name``, so this only
+    has to absorb incidental drift (case, spacing, punctuation, a leading
+    sponsor article), not genuinely different naming schemes.
+    """
+    lowered = name.casefold().strip()
+    kept = [c if c.isalnum() or c.isspace() else " " for c in lowered]
+    collapsed = " ".join("".join(kept).split())
+    return collapsed.removeprefix("the ")
+
+
 def _ttl_cache_get(store: dict[Any, tuple[float, Any]], key: Any) -> Any | None:
     """Read a value from a TTL'd in-process cache, or ``None`` if missing/expired."""
     entry = store.get(key)
@@ -143,9 +159,7 @@ class _RetryTransport(httpx.AsyncBaseTransport):
     backoff is 2·2^n seconds capped at 30s.
     """
 
-    def __init__(
-        self, inner: httpx.AsyncBaseTransport, *, max_attempts: int = 5
-    ) -> None:
+    def __init__(self, inner: httpx.AsyncBaseTransport, *, max_attempts: int = 5) -> None:
         self._inner = inner
         self._max_attempts = max_attempts
 
@@ -177,6 +191,7 @@ class _RetryTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
 
 # Our outcome keys → DataGolf ``betting-tools/outrights`` market names.
 _DG_MARKET = {
@@ -236,6 +251,7 @@ def _consensus_american(row: dict[str, Any]) -> int | None:
 # Stable ID helpers
 # ---------------------------------------------------------------------------
 
+
 def _stable_id(*parts: str | int) -> int:
     """Deterministic integer ID from arbitrary parts (no DB needed).
 
@@ -264,6 +280,7 @@ def _course_id(course_name: str) -> int:
 # Pagination helper
 # ---------------------------------------------------------------------------
 
+
 def _encode_cursor(offset: int) -> str:
     return f"{_CURSOR_PREFIX}{offset}"
 
@@ -273,12 +290,12 @@ def _decode_cursor(cursor: str | None) -> int:
         return 0
     if not cursor.startswith(_CURSOR_PREFIX):
         raise ValueError(f"Invalid cursor: {cursor!r}")
-    return int(cursor[len(_CURSOR_PREFIX):])
+    return int(cursor[len(_CURSOR_PREFIX) :])
 
 
 def _paginate(items: list, cursor: str | None, limit: int) -> Page:  # type: ignore[type-arg]
     offset = _decode_cursor(cursor)
-    page_items = items[offset: offset + limit]
+    page_items = items[offset : offset + limit]
     next_offset = offset + len(page_items)
     next_cursor = _encode_cursor(next_offset) if next_offset < len(items) else None
     return Page(items=page_items, next_cursor=next_cursor, total=len(items))
@@ -346,8 +363,18 @@ def _lookup_course(raw_name: str) -> tuple[str, int, int, CourseType]:
 # ---------------------------------------------------------------------------
 
 _MONTH_ABBR = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 
 
@@ -411,9 +438,7 @@ def _event_dates(ev: dict[str, Any], season: int) -> tuple[date, date]:
     return _parse_dg_date_range(ev.get("date", "Jan 1 - 4"), season)
 
 
-def _parse_dg_status(
-    raw_status: Any, start: date, end: date, today: date
-) -> TournamentStatus:
+def _parse_dg_status(raw_status: Any, start: date, end: date, today: date) -> TournamentStatus:
     """Prefer DataGolf's own ``status`` field, refining "upcoming" by date.
 
     DataGolf labels events ``"completed"`` or ``"upcoming"``; it has no distinct
@@ -481,9 +506,7 @@ def _round_datetime(start_date: date, round_num: int) -> datetime:
     return base + timedelta(days=round_num - 1)
 
 
-def _field_from_rows(
-    rows: list[dict[str, Any]], tournament_id: int
-) -> list[TournamentEntry]:
+def _field_from_rows(rows: list[dict[str, Any]], tournament_id: int) -> list[TournamentEntry]:
     """Rebuild a completed event's field from historical rows.
 
     Each entry carries the real ``dg_id`` as ``player_id`` and a finishing
@@ -515,6 +538,7 @@ def _field_from_rows(
 # ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
+
 
 class DataGolfProvider(DataProvider):
     """Live DataGolf data provider.
@@ -676,7 +700,7 @@ class DataGolfProvider(DataProvider):
 
     async def _fetch_schedule(self, season: int) -> list[Tournament]:
         """GET /get-schedule?tour=pga&season=YYYY — one season's events."""
-        cached = _ttl_cache_get(self._schedule_cache, season)
+        cached: list[Tournament] | None = _ttl_cache_get(self._schedule_cache, season)
         if cached is not None:
             return cached
         r = await self._http.get(
@@ -817,11 +841,7 @@ class DataGolfProvider(DataProvider):
         limit: int = 100,
     ) -> Page[Tournament]:
         today = date.today()
-        target_seasons = (
-            [season]
-            if season
-            else [today.year - i for i in range(_SCHEDULE_SEASONS)]
-        )
+        target_seasons = [season] if season else [today.year - i for i in range(_SCHEDULE_SEASONS)]
         all_tournaments: list[Tournament] = []
         for yr in target_seasons:
             all_tournaments.extend(await self._fetch_schedule(yr))
@@ -1045,7 +1065,8 @@ class DataGolfProvider(DataProvider):
             raw = await self._redis.get(key)
             if raw is None:
                 return None
-            return json.loads(raw)
+            data: list[dict[str, Any]] = json.loads(raw)
+            return data
         except Exception:  # noqa: BLE001 — cache is best-effort, never block serving
             return None
 
@@ -1066,7 +1087,7 @@ class DataGolfProvider(DataProvider):
         callers treat as "unknown → don't filter" so a shape change degrades to
         the old sweep-and-skip-400 behaviour rather than training on nothing.
         """
-        cached = _ttl_cache_get(self._valid_events_cache, year)
+        cached: set[int] | None = _ttl_cache_get(self._valid_events_cache, year)
         if cached is not None:
             return cached
         try:
@@ -1099,9 +1120,7 @@ class DataGolfProvider(DataProvider):
                 await asyncio.sleep(wait)
             self._rounds_last_request = loop.time()
 
-    async def _fetch_event_rows(
-        self, tournament_id: int, year: int
-    ) -> list[dict[str, Any]]:
+    async def _fetch_event_rows(self, tournament_id: int, year: int) -> list[dict[str, Any]]:
         """Single HTTP fetch of one event's rows (429s retried by the transport)."""
         await self._throttle_rounds()
         r = await self._http.get(
@@ -1120,9 +1139,7 @@ class DataGolfProvider(DataProvider):
         # DataGolf returns {"event_id": N, "year": Y, "scores": [...]} (older
         # payloads used "data"); accept either, or a bare list.
         rows: Any = (
-            (body.get("scores") or body.get("data") or [])
-            if isinstance(body, dict)
-            else body
+            (body.get("scores") or body.get("data") or []) if isinstance(body, dict) else body
         )
         return [row for row in rows if isinstance(row, dict)]
 
@@ -1265,7 +1282,8 @@ class DataGolfProvider(DataProvider):
             if not events and self._archive_enabled:
                 events = await self._archive_tournaments_for_year(yr)
             all_tournaments.extend(
-                t for t in events
+                t
+                for t in events
                 if t.status in (TournamentStatus.COMPLETED, TournamentStatus.IN_PROGRESS)
             )
         all_tournaments.sort(key=lambda t: t.start_date, reverse=True)
@@ -1365,7 +1383,7 @@ class DataGolfProvider(DataProvider):
         so callers cold-start those players. Values are probabilities in [0, 1].
         """
         if live:
-            rows = await self._fetch_dg_pred_rows(live=True)
+            rows = await self._fetch_dg_pred_rows(live=True, event_id=event_id, year=year)
             return self._parse_dg_full_rows(rows)
 
         cache_key = (event_id, year)
@@ -1435,7 +1453,7 @@ class DataGolfProvider(DataProvider):
         are probabilities in ``[0, 1]``. ``fin_text`` is never read.
         """
         if live:
-            rows = await self._fetch_dg_pred_rows(live=True)
+            rows = await self._fetch_dg_pred_rows(live=True, event_id=event_id, year=year)
             return self._parse_dg_pred_rows(rows)
 
         cache_key = (event_id, year)
@@ -1469,6 +1487,11 @@ class DataGolfProvider(DataProvider):
     ) -> list[dict[str, Any]]:
         """Fetch raw ``baseline_history_fit`` rows (archive or live). ``[]`` on
         any 400/404/shape error so a training sweep degrades to cold-start.
+
+        The live endpoint takes no event parameter — it returns whatever event
+        DataGolf currently features — so when the caller names an event, the
+        response is checked against it before being handed back. See
+        ``_live_response_is_for_event``.
         """
         try:
             if live:
@@ -1495,11 +1518,77 @@ class DataGolfProvider(DataProvider):
         if not isinstance(body, dict):
             return []
         rows = body.get("baseline_history_fit", [])
-        return rows if isinstance(rows, list) else []
+        if not isinstance(rows, list):
+            return []
+        if (
+            live
+            and event_id is not None
+            and not await self._live_response_is_for_event(body, event_id, year)
+        ):
+            return []
+        return rows
 
-    def _parse_dg_pred_rows(
-        self, rows: list[Any]
-    ) -> dict[int, dict[str, float]]:
+    async def _live_response_is_for_event(
+        self, body: dict[str, Any], event_id: int, year: int | None
+    ) -> bool:
+        """Does this live pre-tournament response actually describe ``event_id``?
+
+        ``/preds/pre-tournament`` has no event parameter: it serves DataGolf's
+        current featured event. Requesting an upcoming event that is *not* that
+        event would otherwise join another tournament's probabilities onto this
+        field by player id, silently and with no error — the board would look
+        entirely normal while being wrong.
+
+        The check compares DataGolf's own ``event_name`` from this response
+        against DataGolf's own ``event_name`` for ``event_id`` in the schedule
+        (``Tournament.name`` is populated from exactly that field), so both
+        sides of the comparison come from the same vendor and the same spelling.
+
+        Deliberately fails **open**: if either name is unavailable (a schedule
+        fetch failure, or a response shape without ``event_name``) this returns
+        True and behaviour is unchanged from before the guard existed. It only
+        rejects on a positive mismatch, so a DataGolf schema change degrades to
+        the old behaviour rather than blanking every board.
+        """
+        live_name = body.get("event_name")
+        if not isinstance(live_name, str) or not live_name.strip():
+            return True  # unknown → fail open
+        expected = await self._scheduled_event_name(event_id, year)
+        if expected is None:
+            return True  # unknown → fail open
+        if _normalize_event_name(live_name) == _normalize_event_name(expected):
+            return True
+        log.warning(
+            "datagolf_live_preds_event_mismatch",
+            requested_event_id=event_id,
+            requested_event_name=expected,
+            live_event_name=live_name,
+            action="discarded_live_preds_cold_start_instead",
+        )
+        return False
+
+    async def _scheduled_event_name(self, event_id: int, year: int | None) -> str | None:
+        """DataGolf's ``event_name`` for ``event_id``, or ``None`` if unknown.
+
+        Checks the named season first, then the adjacent one, because a
+        January event can be filed under either season depending on how
+        DataGolf rolls the schedule over.
+        """
+        seasons = [year, date.today().year] if year is not None else [date.today().year]
+        seen: set[int] = set()
+        for season in seasons:
+            if season is None or season in seen:
+                continue
+            seen.add(season)
+            try:
+                for t in await self._fetch_schedule(season):
+                    if t.id == event_id:
+                        return t.name
+            except (httpx.HTTPError, ValueError):
+                return None
+        return None
+
+    def _parse_dg_pred_rows(self, rows: list[Any]) -> dict[int, dict[str, float]]:
         """Map raw rows to ``{player_id: {market: prob}}``, dropping fin_text.
 
         The forbidden post-event ``fin_text`` field is explicitly never copied
@@ -1543,9 +1632,7 @@ class DataGolfProvider(DataProvider):
         except Exception:  # noqa: BLE001 — cache is best-effort, never block
             return None
 
-    async def _redis_set_json(
-        self, key: str, value: dict[Any, Any], ttl: int
-    ) -> None:
+    async def _redis_set_json(self, key: str, value: dict[Any, Any], ttl: int) -> None:
         """Best-effort durable cache of a JSON-serialisable object."""
         if self._redis is None:
             return

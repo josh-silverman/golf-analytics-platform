@@ -57,6 +57,8 @@ class StubProvider:
         self.get_player_calls = 0
         self.list_players_calls = 0
         self.freshness_calls = 0
+        self.full_preds_calls = 0
+        self.preds_calls = 0
 
     def get_source_name(self) -> str:
         return "stub"
@@ -102,6 +104,18 @@ class StubProvider:
 
     async def get_rounds_for_player(self, _, **__):  # type: ignore[override]
         return []
+
+    async def get_pretournament_preds(
+        self, event_id: int, year: int, *, live: bool = False
+    ) -> dict[int, dict[str, float]]:
+        self.preds_calls += 1
+        return {1: {"make_cut": 0.7, "top_20": 0.3}}
+
+    async def get_pretournament_full_preds(
+        self, event_id: int, year: int, *, live: bool = False
+    ) -> dict[int, dict[str, float]]:
+        self.full_preds_calls += 1
+        return {1: {"win": 0.05, "top_5": 0.2, "top_10": 0.3, "top_20": 0.5, "make_cut": 0.8}}
 
 
 # ---------------------------------------------------------------------------
@@ -226,3 +240,45 @@ class TestKeyNamespacing:
         # All keys should start with the source name
         for key in fake_redis._store:
             assert key.startswith("pga:stub:")
+
+
+class TestPretournamentPredsPassThrough:
+    """Path A serving reads DataGolf's probabilities through this wrapper.
+
+    A missing override here does not fail loudly — it silently falls through to
+    ``DataProvider``'s base default of ``{}``, which cold-starts every player to
+    the SG-only model. That shipped to production once and was only caught by
+    grading the 3M Open after the fact (DataGolf's make-cut skill +0.127 vs the
+    bug-served board's +0.007), so both methods are pinned here.
+    """
+
+    async def test_full_preds_reach_the_underlying_provider(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        result = await wrapper.get_pretournament_full_preds(123, 2026)
+        assert stub_provider.full_preds_calls == 1
+        # Must be the provider's real five-market payload, not an empty dict.
+        assert result[1]["win"] == 0.05
+        assert set(result[1]) == {"win", "top_5", "top_10", "top_20", "make_cut"}
+
+    async def test_preds_reach_the_underlying_provider(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        result = await wrapper.get_pretournament_preds(123, 2026)
+        assert stub_provider.preds_calls == 1
+        assert result[1]["make_cut"] == 0.7
+
+    async def test_live_flag_is_forwarded(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        captured: dict[str, bool] = {}
+
+        async def spy(
+            event_id: int, year: int, *, live: bool = False
+        ) -> dict[int, dict[str, float]]:
+            captured["live"] = live
+            return {}
+
+        stub_provider.get_pretournament_full_preds = spy  # type: ignore[assignment]
+        await wrapper.get_pretournament_full_preds(123, 2026, live=True)
+        assert captured["live"] is True

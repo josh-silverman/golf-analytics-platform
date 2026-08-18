@@ -132,8 +132,15 @@ _HISTORICAL_ROUNDS = {
 
 _PROJECTIONS = {
     "projections": [
-        {"dg_id": 18417, "player_name": "McIlroy, Rory",
-         "win": 12.5, "top_5": 35.0, "top_10": 55.0, "top_20": 75.0, "make_cut": 88.0},
+        {
+            "dg_id": 18417,
+            "player_name": "McIlroy, Rory",
+            "win": 12.5,
+            "top_5": 35.0,
+            "top_10": 55.0,
+            "top_20": 75.0,
+            "make_cut": 88.0,
+        },
     ]
 }
 
@@ -169,12 +176,27 @@ _OUTRIGHTS = {
 
 # event-list: only _DONE_EVENT_ID is a PGA event with SG raw data this year.
 _EVENT_LIST = [
-    {"calendar_year": _THIS_YEAR, "event_id": _DONE_EVENT_ID, "tour": "pga",
-     "sg_categories": "yes", "event_name": "Completed Open"},
-    {"calendar_year": _THIS_YEAR, "event_id": 777, "tour": "pga",
-     "sg_categories": "no", "event_name": "No SG Event"},  # excluded: no SG
-    {"calendar_year": _THIS_YEAR, "event_id": 888, "tour": "kft",
-     "sg_categories": "yes", "event_name": "Wrong Tour"},  # excluded: not PGA
+    {
+        "calendar_year": _THIS_YEAR,
+        "event_id": _DONE_EVENT_ID,
+        "tour": "pga",
+        "sg_categories": "yes",
+        "event_name": "Completed Open",
+    },
+    {
+        "calendar_year": _THIS_YEAR,
+        "event_id": 777,
+        "tour": "pga",
+        "sg_categories": "no",
+        "event_name": "No SG Event",
+    },  # excluded: no SG
+    {
+        "calendar_year": _THIS_YEAR,
+        "event_id": 888,
+        "tour": "kft",
+        "sg_categories": "yes",
+        "event_name": "Wrong Tour",
+    },  # excluded: not PGA
 ]
 
 
@@ -466,9 +488,7 @@ async def test_real_field_produces_nonzero_features_and_labels() -> None:
     field = await provider.get_tournament_field(_DONE_EVENT_ID)
     # Extract features as of after the event so its rounds are in-window.
     as_of = date(_THIS_YEAR, 6, 1)
-    extractions = await extractor.extract_field(
-        [e.player_id for e in field], as_of
-    )
+    extractions = await extractor.extract_field([e.player_id for e in field], as_of)
 
     rory = extractions[18417]
     # Rounds were dated → kept → skill features are non-zero.
@@ -526,3 +546,132 @@ async def test_schedule_cache_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> N
     clock["now"] += dgp._INPROC_CACHE_TTL_S + 1
     await provider._fetch_schedule(_THIS_YEAR)
     assert calls["schedule"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Live pre-tournament predictions: wrong-event guard
+# ---------------------------------------------------------------------------
+
+
+def _live_preds_body(event_name: str) -> dict[str, Any]:
+    """Shape of ``/preds/pre-tournament`` — event identity plus the model column."""
+    return {
+        "event_name": event_name,
+        "baseline_history_fit": [
+            {
+                "dg_id": 18417,
+                "win": 0.10,
+                "top_5": 0.30,
+                "top_10": 0.45,
+                "top_20": 0.60,
+                "make_cut": 0.85,
+            },
+            {
+                "dg_id": 10091,
+                "win": 0.20,
+                "top_5": 0.40,
+                "top_10": 0.55,
+                "top_20": 0.70,
+                "make_cut": 0.90,
+            },
+        ],
+    }
+
+
+def _live_preds_provider(event_name: str) -> DataGolfProvider:
+    """Provider whose live preds endpoint reports ``event_name``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/preds/pre-tournament":
+            return httpx.Response(200, json=_live_preds_body(event_name))
+        if request.url.path == "/get-schedule":
+            season = int(request.url.params.get("season", 0))
+            body = _SCHEDULE if season == _THIS_YEAR else {"schedule": []}
+            return httpx.Response(200, json=body)
+        return httpx.Response(404, json={"error": "not found"})
+
+    provider = DataGolfProvider(api_key="test-key", transport=httpx.MockTransport(handler))
+    _CREATED.append(provider)
+    return provider
+
+
+async def test_live_full_preds_served_when_event_matches() -> None:
+    """The happy path: DataGolf's current event IS the one being requested."""
+    provider = _live_preds_provider("Live Championship")  # matches _LIVE_EVENT_ID
+    preds = await provider.get_pretournament_full_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True)
+    assert set(preds) == {18417, 10091}
+    assert preds[10091]["win_prob"] == 0.20
+
+
+async def test_live_full_preds_discarded_when_event_differs() -> None:
+    """DataGolf has rolled to the next event → do not join it onto this field.
+
+    ``/preds/pre-tournament`` takes no event parameter, so without this guard
+    the other tournament's probabilities are silently matched by player id and
+    the board looks completely normal while being wrong. Returning ``{}`` makes
+    every player cold-start to the SG-only model, which is honest.
+    """
+    provider = _live_preds_provider("Some Other Open")
+    preds = await provider.get_pretournament_full_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True)
+    assert preds == {}
+
+
+async def test_live_three_market_preds_use_the_same_guard() -> None:
+    """The feature-path fetch is guarded identically to the Path A fetch."""
+    match = _live_preds_provider("Live Championship")
+    assert await match.get_pretournament_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True) != {}
+
+    mismatch = _live_preds_provider("Some Other Open")
+    assert await mismatch.get_pretournament_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True) == {}
+
+
+async def test_live_preds_fail_open_when_response_has_no_event_name() -> None:
+    """A shape change must degrade to the old behaviour, not blank every board."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/preds/pre-tournament":
+            body = _live_preds_body("ignored")
+            del body["event_name"]
+            return httpx.Response(200, json=body)
+        if request.url.path == "/get-schedule":
+            return httpx.Response(200, json=_SCHEDULE)
+        return httpx.Response(404, json={"error": "not found"})
+
+    provider = DataGolfProvider(api_key="test-key", transport=httpx.MockTransport(handler))
+    _CREATED.append(provider)
+    preds = await provider.get_pretournament_full_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True)
+    assert set(preds) == {18417, 10091}
+
+
+async def test_live_preds_fail_open_when_schedule_lookup_fails() -> None:
+    """No expected name available → serve, rather than block on our own outage."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/preds/pre-tournament":
+            return httpx.Response(200, json=_live_preds_body("Some Other Open"))
+        if request.url.path == "/get-schedule":
+            return httpx.Response(500, text="schedule down")
+        return httpx.Response(404, json={"error": "not found"})
+
+    provider = DataGolfProvider(api_key="test-key", transport=httpx.MockTransport(handler))
+    _CREATED.append(provider)
+    preds = await provider.get_pretournament_full_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True)
+    assert set(preds) == {18417, 10091}
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("The Open Championship", "Open Championship"),
+        ("Rocket  Classic", "Rocket Classic"),
+        ("AT&T Byron Nelson", "AT T Byron Nelson"),
+        ("3M OPEN", "3m open"),
+    ],
+)
+def test_event_name_normalization_absorbs_incidental_drift(a: str, b: str) -> None:
+    """Both sides come from DataGolf, so only cosmetic drift must be absorbed."""
+    assert dgp._normalize_event_name(a) == dgp._normalize_event_name(b)
+
+
+def test_event_name_normalization_still_separates_real_events() -> None:
+    assert dgp._normalize_event_name("3M Open") != dgp._normalize_event_name("Rocket Classic")

@@ -53,18 +53,18 @@ _T = TypeVar("_T")
 
 # TTLs in seconds
 _TTL = {
-    "players": 86_400,       # 24 h
-    "courses": 86_400,       # 24 h
-    "tournaments": 21_600,   # 6 h
-    "field": 900,            # 15 min
+    "players": 86_400,  # 24 h
+    "courses": 86_400,  # 24 h
+    "tournaments": 21_600,  # 6 h
+    "field": 900,  # 15 min
     # Completed-event rounds are immutable, and a training/backtest run sweeps
     # the whole multi-season archive in one pass that takes well over an hour.
     # A short TTL expired early-fetched rounds mid-build, forcing throttled
     # re-fetches in circles (a backtest burned 3.5h CPU thrashing). 24 h both
     # outlasts any single build and lets successive runs reuse the archive.
-    "rounds": 86_400,        # 24 h — historical rounds never change
-    "freshness": 300,        # 5 min
-    "betting": 300,          # 5 min — odds move
+    "rounds": 86_400,  # 24 h — historical rounds never change
+    "freshness": 300,  # 5 min
+    "betting": 300,  # 5 min — odds move
 }
 
 
@@ -119,7 +119,9 @@ class CachingProviderWrapper(DataProvider):
             return cls.model_validate(json.loads(cached))  # type: ignore[attr-defined, no-any-return]
         result = await call()
         await self._redis.setex(
-            key, ttl, json.dumps(result.model_dump(), default=str)  # type: ignore[attr-defined]
+            key,
+            ttl,
+            json.dumps(result.model_dump(), default=str),  # type: ignore[attr-defined]
         )
         return result
 
@@ -169,7 +171,8 @@ class CachingProviderWrapper(DataProvider):
     async def get_data_freshness(self) -> DataFreshness:
         key = _key(self.get_source_name(), "freshness")
         return await self._get_or_set(
-            key, _TTL["freshness"],
+            key,
+            _TTL["freshness"],
             self._provider.get_data_freshness,
             DataFreshness,
         )
@@ -186,7 +189,8 @@ class CachingProviderWrapper(DataProvider):
     ) -> Page[Player]:
         key = _key(self.get_source_name(), "list_players", cursor, limit)
         return await self._get_or_set_page(
-            key, _TTL["players"],
+            key,
+            _TTL["players"],
             lambda: self._provider.list_players(cursor=cursor, limit=limit),
             Player,
         )
@@ -214,7 +218,8 @@ class CachingProviderWrapper(DataProvider):
     ) -> Page[Course]:
         key = _key(self.get_source_name(), "list_courses", cursor, limit)
         return await self._get_or_set_page(
-            key, _TTL["courses"],
+            key,
+            _TTL["courses"],
             lambda: self._provider.list_courses(cursor=cursor, limit=limit),
             Course,
         )
@@ -250,11 +255,17 @@ class CachingProviderWrapper(DataProvider):
         # smaller event set).
         span = getattr(self._provider, "default_schedule_seasons", None)
         key = _key(
-            self.get_source_name(), "list_tournaments",
-            season, span, status, cursor, limit,
+            self.get_source_name(),
+            "list_tournaments",
+            season,
+            span,
+            status,
+            cursor,
+            limit,
         )
         return await self._get_or_set_page(
-            key, _TTL["tournaments"],
+            key,
+            _TTL["tournaments"],
             lambda: self._provider.list_tournaments(
                 season=season, status=status, cursor=cursor, limit=limit
             ),
@@ -275,7 +286,8 @@ class CachingProviderWrapper(DataProvider):
     async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
         key = _key(self.get_source_name(), "field", tournament_id)
         return await self._get_or_set_list(
-            key, _TTL["field"],
+            key,
+            _TTL["field"],
             lambda: self._provider.get_tournament_field(tournament_id),
             TournamentEntry,
         )
@@ -287,7 +299,8 @@ class CachingProviderWrapper(DataProvider):
     async def get_rounds(self, tournament_id: int) -> list[Round]:
         key = _key(self.get_source_name(), "rounds", tournament_id)
         return await self._get_or_set_list(
-            key, _TTL["rounds"],
+            key,
+            _TTL["rounds"],
             lambda: self._provider.get_rounds(tournament_id),
             Round,
         )
@@ -301,10 +314,9 @@ class CachingProviderWrapper(DataProvider):
     ) -> list[Round]:
         key = _key(self.get_source_name(), "player_rounds", player_id, since, limit)
         return await self._get_or_set_list(
-            key, _TTL["rounds"],
-            lambda: self._provider.get_rounds_for_player(
-                player_id, since=since, limit=limit
-            ),
+            key,
+            _TTL["rounds"],
+            lambda: self._provider.get_rounds_for_player(player_id, since=since, limit=limit),
             Round,
         )
 
@@ -318,7 +330,8 @@ class CachingProviderWrapper(DataProvider):
 
         key = _key(self.get_source_name(), "betting", tournament_id)
         return await self._get_or_set_list(
-            key, _TTL["betting"],
+            key,
+            _TTL["betting"],
             lambda: self._provider.get_betting_lines(tournament_id),
             BettingLineDomain,
         )
@@ -354,9 +367,7 @@ class CachingProviderWrapper(DataProvider):
         predictions carry their own short TTL there. Wrapping them again here
         would only duplicate that, so this is a transparent pass-through.
         """
-        return await self._provider.get_pretournament_preds(
-            event_id, year, live=live
-        )
+        return await self._provider.get_pretournament_preds(event_id, year, live=live)
 
     async def get_pretournament_full_preds(
         self,
@@ -374,6 +385,4 @@ class CachingProviderWrapper(DataProvider):
         probabilities beat the (bug-served) model on every market with skill
         — make-cut skill +0.127 vs the served board's +0.007.
         """
-        return await self._provider.get_pretournament_full_preds(
-            event_id, year, live=live
-        )
+        return await self._provider.get_pretournament_full_preds(event_id, year, live=live)
