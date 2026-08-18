@@ -235,14 +235,22 @@ The model is stored on the Fly.io machine's local filesystem at
 `MODEL_REGISTRY_PATH` (default `./models`). On a multi-machine setup,
 use a Fly volume or S3-backed storage so all machines see the same model.
 
+**`--feature-set` defaults to `v2`, but the active model is `v3`.** Pass
+`--feature-set v3` to retrain what production actually serves. Activating a
+model whose feature set differs from the current active one is refused with
+exit code 2, because `deps._feature_set_for_active_model` resolves the serving
+extractor by the active model's hash — so activating a v2 artifact silently
+repoints the entire feature pipeline. Override with
+`--allow-feature-set-change` only when the swap is intended.
+
 ```bash
-# Train with all data through today
-fly ssh console -C "python -m app.cli.train"
+# Retrain the active (v3) model with all data through today
+fly ssh console -C "python -m app.cli.train --feature-set v3"
 
 # Train through a specific date (prevent look-ahead leakage)
-fly ssh console -C "python -m app.cli.train --through 2025-04-06"
+fly ssh console -C "python -m app.cli.train --feature-set v3 --through 2025-04-06"
 
-# Register without activating (A/B test)
+# Register without activating (A/B test) — the guard does not apply
 fly ssh console -C "python -m app.cli.train --name golf_v2 --no-activate"
 ```
 
@@ -254,12 +262,54 @@ fly ssh console -C "python -m app.cli.train --name golf_v2 --no-activate"
 |----------|---------------|
 | `GET /api/v1/healthz` | Liveness — app is running |
 | `GET /api/v1/readyz` | Readiness — Redis reachable + an active model loads from the registry |
+| `GET /api/v1/status` | Operational snapshot — active model version, its training cutoff, serving strategy, whether the configured data provider answers right now, and the most recent captured board timestamp |
 | `GET /api/v1/meta/data-freshness` | Provider last-sync timestamps |
 
 ```bash
 curl https://pga-analytics-api.onrender.com/api/v1/healthz
 curl https://pga-analytics-api.onrender.com/api/v1/readyz
+curl https://pga-analytics-api.onrender.com/api/v1/status
 ```
+
+`/status` is informational and always returns 200: each sub-check is
+best-effort, so one failing dependency still reports what it can about the
+rest. Use `/readyz` (which returns 503 when unhealthy) for anything
+automated. `provider_reachable: "unreachable"` means the DataGolf call
+failed, in which case Path A serves cold-start probabilities for the whole
+field.
+
+### Is Path A actually running?
+
+`GET /api/v1/analytics/track-record/forward` reports `events_path_a`,
+`events_cold_start_only`, and `events_regime_unknown`. A graded board counts as
+Path A only when more than half its field was served DataGolf-direct
+(`dg_direct_count / len(outcomes)`), which is recorded on the snapshot at
+serving time.
+
+This exists because `model_version_id` cannot answer the question: it is set to
+`path_a@<cold-start-model-id>` when Path A is *configured*, before any DataGolf
+call happens. A board where DataGolf returned nothing looks identical by version
+id while being an entirely different product (this is exactly what the
+2026-07-29 caching-wrapper bug produced). A rising `events_cold_start_only` is
+the alert that DataGolf coverage has silently dropped.
+
+Snapshots written before this field existed report `null` and are counted as
+`events_regime_unknown` rather than assumed healthy.
+
+### Cold starts on the free tier
+
+The Render free instance spins down after ~15 min idle. Two mitigations,
+both optional:
+
+- `.github/workflows/keep-warm.yml` pings `/healthz` every 10 minutes. One
+  always-on service fits inside the free plan's 750 instance-hour monthly
+  allowance. GitHub pauses scheduled workflows after 60 days without repo
+  activity, and cron firing is not minute-precise, so treat this as a
+  strong reduction in cold-start odds rather than a guarantee.
+- `scripts/warm_demo.sh [base_url]` wakes the container, prints `/status`,
+  and builds the current event's board (the slower of the two costs, since
+  an uncached board also pays a rate-limited DataGolf fetch). Boards are
+  cached for 6h after that.
 
 ---
 

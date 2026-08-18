@@ -110,11 +110,17 @@ Three principles governed the work from the start:
   and an admin-gated backfill (`POST /analytics/track-record/forward/backfill`) seeds it
   by replaying the served pipeline over events that completed before capture shipped —
   leakage-free (as-of capped to the eve, DataGolf's pre-event archive, admitted only when
-  trained strictly before the event).
+  trained strictly before the event). Each board also records **how many players were
+  actually served DataGolf-direct**, because `model_version_id` is stamped `path_a@…`
+  when Path A is *configured* — before any DataGolf call — and so cannot distinguish a
+  healthy Path A board from one that cold-started the entire field. The endpoint reports
+  the resulting regime split (`events_path_a` / `events_cold_start_only` /
+  `events_regime_unknown`), and boards captured before that field existed count as
+  *unknown* rather than as covered.
 - **What it honestly does not do:** beat a sharp sportsbook on any market, or predict
   winners with meaningful skill (that market is data-starved and dominated by
   week-of variance).
-- **Test suite:** 289 passing tests (backend), deterministic.
+- **Test suite:** 321 passing tests (backend), deterministic.
 
 Full identity and hyperparameters are in
 [`docs/project-summary.md` §1](docs/project-summary.md).
@@ -129,16 +135,49 @@ Full identity and hyperparameters are in
 > code); **ranking/Spearman numbers throughout this README are unaffected**
 > (normalization rescales every player in an event by the same factor per
 > market, which preserves rank order); **win, top-5, top-10, and top-20
-> Brier/skill/log-loss/ECE point estimates sourced from the backtest harness
-> were computed pre-fix and have not been rechecked** against the corrected
-> harness. The Path A-vs-stacked comparison above and the
+> Brier/skill/log-loss/ECE point estimates elsewhere in this README were
+> computed pre-fix.** The Path A-vs-stacked comparison above and the
 > [forward record](#forward-record) are unaffected: both were validated
 > against the actual served, already-normalized pipeline rather than the
-> backtest harness. The 3M Open grading in the forward record independently
-> corroborates the qualitative finding (DataGolf beats the served model on
-> every market that carries skill) using real served numbers, so the
-> conclusion looks right; the backtest harness's own point estimates for the
-> four affected markets are the ones still pending a re-run.
+> backtest harness.
+>
+> **Re-run on the corrected harness (2026-08-17).** v3 feature set, 10 most
+> recent completed events (2026-06-25 Travelers through 2026-08-13 FedEx St.
+> Jude), trained through 2026-06-24 on 11,803 examples, 1,323 out-of-sample
+> test predictions:
+>
+> | market | base rate | Brier | log-loss | ECE | skill | 90% CI |
+> |---|---|---|---|---|---|---|
+> | win | 0.8% | 0.0074 | 0.0434 | 0.0003 | +0.008 | [−0.006, +0.030] |
+> | top-5 | 4.5% | 0.0401 | 0.1698 | 0.0116 | +0.059 | [+0.012, +0.105] |
+> | top-10 | 8.8% | 0.0735 | 0.2620 | 0.0135 | +0.089 | [+0.062, +0.118] |
+> | top-20 | 16.9% | 0.1242 | 0.3952 | 0.0325 | +0.114 | [+0.088, +0.135] |
+> | make-cut | 55.7% | 0.2032 | 0.6517 | 0.0248 | +0.177 | [+0.095, +0.277] |
+>
+> Spearman(win prob, finish) +0.175; mean winner predicted rank 48.4.
+>
+> **Reading it, carefully.** These numbers are *not* a controlled measurement
+> of the normalization fix: this window is a different set of 10 events and a
+> different training cutoff than the v3 gate rows reported further down, so
+> the gap between (say) make-cut +0.246 there and +0.177 here is mostly
+> window, not the fix. Isolating the fix would need the same window scored
+> both ways, which has not been done.
+>
+> What the re-run does establish is that **the qualitative claims in this
+> README survive the corrected harness**: make-cut (+0.095) and top-20
+> (+0.088) have lower CI bounds clearly above zero, top-10 (+0.062) is
+> genuine, top-5 now marginally clears (+0.012), and **win does not clear
+> zero** ([−0.006, +0.030]), consistent with the stated finding that winner
+> prediction has ~0 practical skill.
+>
+> One number that does *not* replicate: ranking Spearman is +0.175 on this
+> window against the +0.301 recorded for the v3 gate. Normalization provably
+> cannot affect Spearman, so that gap is entirely window-to-window variance
+> in the metric, which is a concrete illustration of the test-window reuse
+> problem flagged in
+> [`docs/technical-due-diligence.md`](docs/technical-due-diligence.md) rather
+> than a scoring bug. Reproduce with:
+> `python -m app.cli.backtest --test-events 10 --feature-set v3`.
 
 ---
 
@@ -496,7 +535,12 @@ un-exploitable); "blocked" means the data doesn't exist or isn't leakage-safe;
   Large UI "edges" are model error, not value.
 - **Single-vendor dependency.** The one external win (DG meta-features) makes the model
   reliant on DataGolf's continued output and schema; there are fixtures but not full
-  contract tests against live schema drift.
+  contract tests against live schema drift. The two failure modes that actually shipped
+  were both *silent* rather than loud: a missing provider delegation returning `{}`
+  instead of raising, and the live predictions endpoint (which takes no event
+  parameter) being joined onto the wrong event's field by player id. Both are now
+  guarded and regression-tested, and the guard fails open so a schema change degrades
+  to cold-start instead of blanking every board.
 - **Registry version id** omits training data and code — a same-day retrain with the
   same feature set can overwrite a prior artifact under the same id. Iterate
   deliberately.
@@ -578,15 +622,17 @@ backend/
     providers/       DataProvider interface · DataGolfProvider · MockDataProvider (contract-tested)
     services/        FeatureExtractor (train/serve parity), PredictionService, catalog
     api/ · db/ · cache/   FastAPI layer, SQLAlchemy models, Redis caching
-  tests/             289 passing tests
+  tests/             321 passing tests
   scripts/           one-off analyst scripts behind tournament-analyses/ (see scripts/README.md)
 frontend/            React 19 + TypeScript (Vite) — leaderboard, player detail, betting-edge
+scripts/             operational scripts against the deployed API (warm_demo.sh)
 tournament-analyses/ weekly forward-record reports, graded against actual results
 docs/
   project-summary.md         the consolidated research record (primary source for this README)
   project-brief.md           how to judge proposed work against settled results
   technical-due-diligence.md independent review of the system's risks and gaps
   rank-native-model-design.md the shelved rank-native architecture design
+  runbook.md                 deploy, health checks, troubleshooting
   architecture/              the original 12-section system-design pass
 ```
 
@@ -596,15 +642,17 @@ docs/
 
 ```bash
 make dev            # boot api + postgres + redis + frontend via docker compose
-make test-backend   # full pytest suite (289 tests)
+make test-backend   # full pytest suite (321 tests)
 make lint-backend   # ruff check + format --check
 make typecheck-backend
 
 # Train / register on the configured provider, with end-to-end validation:
 docker compose exec api uv run python -m app.cli.bootstrap
 
-# Measure out-of-sample accuracy (with block-bootstrap CI columns):
-docker compose exec api uv run python -m app.cli.backtest --test-events 10
+# Measure out-of-sample accuracy (with block-bootstrap CI columns).
+# NOTE: --feature-set defaults to v2 (the 14-feature SG-only set). The
+# registered active artifact is v3, so pass --feature-set v3 to measure it:
+docker compose exec api uv run python -m app.cli.backtest --test-events 10 --feature-set v3
 
 # Per-player error diagnostics + permutation importances:
 docker compose exec api uv run python -m app.cli.diagnose --test-events 10

@@ -43,3 +43,6 @@ dist/
 
 # Local tool state
 .claude/
+
+# Personal prep notes — kept out of a public repo deliberately
+docs/walkthrough-notes.md

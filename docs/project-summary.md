@@ -470,7 +470,7 @@ make down         # stop (keeps volumes)
 Backend tasks (inside the api container, or via the targets):
 
 ```bash
-make test-backend                                   # full pytest suite (289 tests)
+make test-backend                                   # full pytest suite (321 tests)
 make lint-backend                                   # ruff check + format --check
 make typecheck-backend                              # mypy
 
