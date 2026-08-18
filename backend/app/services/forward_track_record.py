@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+    from app.domain.models import TournamentEntry
     from app.services.board_archive import BoardArchive
     from app.services.catalog import CatalogService
 
@@ -89,6 +90,26 @@ def _labels(final_position: int | None, status: EntryStatus) -> dict[str, int] |
     }
 
 
+def _event_has_a_cut(field: list[TournamentEntry]) -> bool:
+    """Did this event actually cut anyone?
+
+    The FedExCup playoff events and several limited-field events play all four
+    rounds with no 36-hole cut. Every player is graded as having made it, so
+    the make-cut market on those events scores a question that was never asked.
+
+    The contamination does not have a fixed sign, which is why it has to be
+    excluded rather than corrected: served DataGolf-direct it reports 1.0 for
+    everyone and scores perfectly, inflating the aggregate (measured at about
+    +0.065 of skill for three no-cut events among ten); served by the
+    cold-start model, which has no idea the cut was waived, it predicts a
+    normal spread and scores badly, deflating it. Either way the number stops
+    describing real make-cut skill, and this is the market the product claims
+    as its strongest. Excluded from the make-cut aggregate only; every other
+    market on those events grades normally.
+    """
+    return any(e.status == EntryStatus.MISSED_CUT for e in field)
+
+
 async def compute_forward_track_record(
     *,
     archive: BoardArchive,
@@ -118,6 +139,8 @@ async def compute_forward_track_record(
         field = await catalog.get_tournament_field(snap.tournament_id)
         label_by_player = {e.player_id: _labels(e.final_position, e.status) for e in field}
         probs_by_player = {o.player_id: o for o in snap.outcomes}
+        # Markets this event can legitimately be graded on.
+        gradeable = [m for m in _MARKETS if m != "make_cut_prob" or _event_has_a_cut(field)]
 
         ev_y: dict[str, list[float]] = {m: [] for m in _MARKETS}
         ev_p: dict[str, list[float]] = {m: [] for m in _MARKETS}
@@ -127,7 +150,7 @@ async def compute_forward_track_record(
                 continue
             o = probs_by_player[pid]
             graded_here += 1
-            for m in _MARKETS:
+            for m in gradeable:
                 ev_y[m].append(float(lab[m]))
                 ev_p[m].append(float(getattr(o, m)))
         if graded_here == 0:
@@ -141,9 +164,13 @@ async def compute_forward_track_record(
             path_a_events += 1
         else:
             cold_start_events += 1
-        for m in _MARKETS:
-            y_by_event[m].append(ev_y[m])
-            p_by_event[m].append(ev_p[m])
+        for m in gradeable:
+            # An event contributes to a market's bootstrap only if it produced
+            # rows for it, so a no-cut event is absent from the make-cut
+            # resampling pool rather than present as a zero-variance block.
+            if ev_y[m]:
+                y_by_event[m].append(ev_y[m])
+                p_by_event[m].append(ev_p[m])
 
     if events == 0:
         return None

@@ -136,7 +136,8 @@ def test_is_out_of_sample_requires_trained_before_event() -> None:
 class _GradeCatalog:
     """Catalog stub for grading: one completed tournament + graded field."""
 
-    def __init__(self, *, start_date: date, status: TournamentStatus) -> None:
+    def __init__(self, *, start_date: date, status: TournamentStatus, no_cut: bool = False) -> None:
+        self._no_cut = no_cut
         self._t = Tournament(
             id=1,
             course_id=1,
@@ -183,7 +184,23 @@ class _GradeCatalog:
         return self._t if tournament_id == 1 else None
 
     async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
-        return list(self._field) if tournament_id == 1 else []
+        if tournament_id != 1:
+            return []
+        if not self._no_cut:
+            return list(self._field)
+        # A playoff-style event: everyone plays all four rounds, nobody is cut.
+        return [
+            TournamentEntry(
+                id=e.id,
+                tournament_id=e.tournament_id,
+                player_id=e.player_id,
+                status=EntryStatus.MADE_CUT,
+                final_position=e.final_position if e.final_position is not None else 40,
+                final_score_to_par=None,
+                official_money_cents=None,
+            )
+            for e in self._field
+        ]
 
 
 async def test_forward_grader_skips_in_sample_boards(tmp_path) -> None:
@@ -302,3 +319,74 @@ async def test_forward_grader_splits_events_by_serving_regime(tmp_path) -> None:
     assert result.events_path_a == 1
     assert result.events_cold_start_only == 1
     assert result.events_regime_unknown == 1
+
+
+# ---------------------------------------------------------------------------
+# No-cut events must not be graded on the make-cut market
+#
+# The FedExCup playoff events and several limited-field events play four rounds
+# with no 36-hole cut. DataGolf reports make_cut = 1.0 there and every player is
+# graded as having made it, so the market is a free perfect prediction on
+# something that never happened. Pooling those rows inflates the make-cut skill
+# score, which is the market this product claims as its strongest.
+# ---------------------------------------------------------------------------
+
+
+async def test_no_cut_event_is_excluded_from_the_make_cut_market(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(outcomes=_THREE, dg_direct_count=3))
+    catalog = _GradeCatalog(
+        start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED, no_cut=True
+    )
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    # The event still grades on the finish-position markets.
+    assert result.events == 1
+    graded = {m.market for m in result.markets}
+    assert "top_20_prob" in graded
+    # ...but contributes nothing to make-cut.
+    assert "make_cut_prob" not in graded
+
+
+async def test_event_with_a_real_cut_still_grades_make_cut(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(outcomes=_THREE, dg_direct_count=3))
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert "make_cut_prob" in {m.market for m in result.markets}
+
+
+async def test_no_cut_event_does_not_inflate_pooled_make_cut_skill(tmp_path) -> None:
+    """The point of the exclusion: the number must not move when one is added."""
+    real = FileBoardArchive(tmp_path / "real")
+    (tmp_path / "real").mkdir()
+    await real.persist(_snapshot(tournament_id=1, version="a", outcomes=_THREE))
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    before = await compute_forward_track_record(archive=real, catalog=catalog)  # type: ignore[arg-type]
+
+    mixed = FileBoardArchive(tmp_path / "mixed")
+    (tmp_path / "mixed").mkdir()
+    await mixed.persist(_snapshot(tournament_id=1, version="a", outcomes=_THREE))
+    await mixed.persist(_snapshot(tournament_id=1, version="b", outcomes=_THREE))
+
+    class _Mixed(_GradeCatalog):
+        """Second board lands on a no-cut event."""
+
+        def __init__(self) -> None:
+            super().__init__(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+            self._calls = 0
+
+        async def get_tournament_field(self, tournament_id: int):  # noqa: ANN201
+            self._calls += 1
+            if self._calls > 1:  # the second board grades against a no-cut field
+                self._no_cut = True
+            return await super().get_tournament_field(tournament_id)
+
+    after = await compute_forward_track_record(archive=mixed, catalog=_Mixed())  # type: ignore[arg-type]
+    assert before is not None and after is not None
+    mc_before = next(m for m in before.markets if m.market == "make_cut_prob")
+    mc_after = next(m for m in after.markets if m.market == "make_cut_prob")
+    # Same graded make-cut sample as before: the no-cut event added nothing.
+    assert mc_after.n == mc_before.n
+    assert mc_after.brier_skill == pytest.approx(mc_before.brier_skill)
