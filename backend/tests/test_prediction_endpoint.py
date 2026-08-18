@@ -34,14 +34,22 @@ def _predictions(tournament_id: int = 1) -> TournamentPredictions:
         feature_set_hash="deadbeef",
         outcomes=(
             PlayerOutcome(
-                player_id=12, player_name="Cara Chip",
-                win_prob=0.08, top_5_prob=0.30, top_10_prob=0.45,
-                top_20_prob=0.65, make_cut_prob=0.85,
+                player_id=12,
+                player_name="Cara Chip",
+                win_prob=0.08,
+                top_5_prob=0.30,
+                top_10_prob=0.45,
+                top_20_prob=0.65,
+                make_cut_prob=0.85,
             ),
             PlayerOutcome(
-                player_id=10, player_name="Alice Ace",
-                win_prob=0.04, top_5_prob=0.18, top_10_prob=0.30,
-                top_20_prob=0.50, make_cut_prob=0.70,
+                player_id=10,
+                player_name="Alice Ace",
+                win_prob=0.04,
+                top_5_prob=0.18,
+                top_10_prob=0.30,
+                top_20_prob=0.50,
+                make_cut_prob=0.70,
             ),
         ),
     )
@@ -101,6 +109,5 @@ def test_predictions_endpoint_validates_outcome_probabilities(
     r = found_client.get("/api/v1/predictions/1")
     body = r.json()
     for outcome in body["outcomes"]:
-        for key in ("win_prob", "top_5_prob", "top_10_prob",
-                    "top_20_prob", "make_cut_prob"):
+        for key in ("win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob"):
             assert 0.0 <= outcome[key] <= 1.0

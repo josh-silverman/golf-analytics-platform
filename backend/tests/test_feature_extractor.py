@@ -24,6 +24,7 @@ def _expected_sg(observed: float, played_on: date, as_of: date, prior: float) ->
     w = exponential_decay_weight(days_between(played_on, as_of), 60.0)
     return shrink_to_prior(observed * w, w, prior)
 
+
 if TYPE_CHECKING:
     from app.domain.enums import TournamentStatus
     from app.domain.models import (
@@ -80,17 +81,13 @@ class _StubProvider(DataProvider):
     async def get_data_freshness(self) -> DataFreshness:
         return DataFreshness(sources={})
 
-    async def list_players(
-        self, *, cursor: str | None = None, limit: int = 100
-    ) -> Page[Player]:
+    async def list_players(self, *, cursor: str | None = None, limit: int = 100) -> Page[Player]:
         raise NotImplementedError
 
     async def get_player(self, player_id: int) -> Player | None:
         raise NotImplementedError
 
-    async def list_courses(
-        self, *, cursor: str | None = None, limit: int = 100
-    ) -> Page[Course]:
+    async def list_courses(self, *, cursor: str | None = None, limit: int = 100) -> Page[Course]:
         raise NotImplementedError
 
     async def get_course(self, course_id: int) -> Course | None:
@@ -140,6 +137,7 @@ async def test_extractor_returns_empty_features_for_player_with_no_rounds() -> N
         SGOffTheTeeRating,
         SGPuttingRating,
     )
+
     assert result.values["sg_ott_rating"] == pytest.approx(SGOffTheTeeRating._prior)
     assert result.values["sg_app_rating"] == pytest.approx(SGApproachRating._prior)
     assert result.values["sg_arg_rating"] == pytest.approx(SGAroundTheGreenRating._prior)
@@ -194,9 +192,12 @@ async def test_extract_field_resolves_field_relative_margins() -> None:
     their own skill minus the field mean, computed over the whole field."""
     # Provider returns the same rounds for whatever player is asked; we vary
     # skill by handing each player a distinct stub provider instead.
-    p1 = _StubProvider(rounds=[
-        _round(rid=1, tee_time=datetime(2026, 5, 1, tzinfo=UTC), sg_total=2.0),
-    ])
+    p1 = _StubProvider(
+        rounds=[
+            _round(rid=1, tee_time=datetime(2026, 5, 1, tzinfo=UTC), sg_total=2.0),
+        ]
+    )
+
     # Build one extractor per provider isn't how the real flow works (one
     # provider serves all players), so instead use a provider keyed by player.
     class _PerPlayerProvider(_StubProvider):
@@ -205,7 +206,11 @@ async def test_extract_field_resolves_field_relative_margins() -> None:
             self._skill = skill_by_player
 
         async def get_rounds_for_player(
-            self, player_id, *, since=None, limit=100,
+            self,
+            player_id,
+            *,
+            since=None,
+            limit=100,
         ):
             sg = self._skill.get(player_id, 0.0)
             return [_round(rid=player_id, tee_time=datetime(2026, 5, 1, tzinfo=UTC), sg_total=sg)]
@@ -235,9 +240,11 @@ async def test_extract_field_resolves_field_relative_margins() -> None:
 
 
 async def test_extract_field_deduplicates_player_ids() -> None:
-    provider = _StubProvider(rounds=[
-        _round(rid=1, tee_time=datetime(2026, 5, 1, tzinfo=UTC), sg_total=1.0),
-    ])
+    provider = _StubProvider(
+        rounds=[
+            _round(rid=1, tee_time=datetime(2026, 5, 1, tzinfo=UTC), sg_total=1.0),
+        ]
+    )
     extractor = FeatureExtractor(provider)
     extractions = await extractor.extract_field([5, 5, 5], as_of=date(2026, 6, 1))
     assert set(extractions.keys()) == {5}
@@ -264,6 +271,7 @@ async def test_extractor_runs_full_v1_baseline_end_to_end() -> None:
         SGOffTheTeeRating,
         SGPuttingRating,
     )
+
     assert result.values["sg_ott_rating"] == pytest.approx(
         _expected_sg(1.1, played, as_of, SGOffTheTeeRating._prior)
     )

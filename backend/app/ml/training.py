@@ -213,9 +213,7 @@ class TrainingDataBuilder:
         extractions = await self._extractor.extract_field(
             [entry.player_id for entry in field],
             as_of,
-            event=EventRef(
-                event_id=tournament.id, season=tournament.season, live=False
-            ),
+            event=EventRef(event_id=tournament.id, season=tournament.season, live=False),
         )
         out: list[TrainingExample] = []
         for entry in field:

@@ -41,9 +41,7 @@ router = APIRouter(tags=["betting"], prefix="/betting")
 OutcomeKey = Literal["win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob"]
 
 
-async def _fetch_real_odds(
-    provider: DataProvider, outcome_key: str
-) -> dict[int, int] | None:
+async def _fetch_real_odds(provider: DataProvider, outcome_key: str) -> dict[int, int] | None:
     """Best-effort real outright odds; ``None`` if the provider has no feed."""
     try:
         board = await provider.get_outright_odds(outcome_key)

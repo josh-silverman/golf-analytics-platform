@@ -233,8 +233,7 @@ class TestBuildBettingBoard:
         # A player with effectively zero probability should be dropped.
         tiny = _make_outcome(player_id=99, player_name="No-Hope", win_prob=0.0005)
         outcomes = (tiny,) + tuple(
-            _make_outcome(player_id=i, player_name=f"P{i}", win_prob=0.10)
-            for i in range(1, 4)
+            _make_outcome(player_id=i, player_name=f"P{i}", win_prob=0.10) for i in range(1, 4)
         )
         board = build_betting_board(
             outcomes,

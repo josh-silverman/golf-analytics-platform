@@ -47,8 +47,9 @@ def test_perfect_ranking_scores_maximally() -> None:
     # score = -position → higher score = better finish, exactly aligned.
     n = 30
     event = [
-        RankRow(pid, score=-(pid + 1), placement=float(pid + 1),
-                final_position=pid + 1, made_cut=True)
+        RankRow(
+            pid, score=-(pid + 1), placement=float(pid + 1), final_position=pid + 1, made_cut=True
+        )
         for pid in range(n)
     ]
     r = ranking_metrics([event])
@@ -62,8 +63,13 @@ def test_perfect_ranking_scores_maximally() -> None:
 def test_reversed_ranking_scores_minimally() -> None:
     n = 30
     event = [
-        RankRow(pid, score=float(pid + 1), placement=float(pid + 1),
-                final_position=pid + 1, made_cut=True)
+        RankRow(
+            pid,
+            score=float(pid + 1),
+            placement=float(pid + 1),
+            final_position=pid + 1,
+            made_cut=True,
+        )
         for pid in range(n)
     ]
     r = ranking_metrics([event])
@@ -78,11 +84,18 @@ def test_random_ranking_near_baseline() -> None:
     for _ in range(200):
         n = 60
         scores = rng.normal(size=n)
-        events.append([
-            RankRow(pid, score=float(scores[pid]), placement=float(pid + 1),
-                    final_position=pid + 1, made_cut=True)
-            for pid in range(n)
-        ])
+        events.append(
+            [
+                RankRow(
+                    pid,
+                    score=float(scores[pid]),
+                    placement=float(pid + 1),
+                    final_position=pid + 1,
+                    made_cut=True,
+                )
+                for pid in range(n)
+            ]
+        )
     r = ranking_metrics(events)
     assert abs(r.spearman) < 0.05  # no ranking information
     assert r.precision[5] < 0.2
@@ -113,12 +126,18 @@ def test_derived_markets_dominant_player_wins() -> None:
 
 def test_market_labels_match_convention() -> None:
     assert market_labels(1, True) == {
-        "win_prob": 1, "top_5_prob": 1, "top_10_prob": 1,
-        "top_20_prob": 1, "make_cut_prob": 1,
+        "win_prob": 1,
+        "top_5_prob": 1,
+        "top_10_prob": 1,
+        "top_20_prob": 1,
+        "make_cut_prob": 1,
     }
     assert market_labels(None, False) == {
-        "win_prob": 0, "top_5_prob": 0, "top_10_prob": 0,
-        "top_20_prob": 0, "make_cut_prob": 0,
+        "win_prob": 0,
+        "top_5_prob": 0,
+        "top_10_prob": 0,
+        "top_20_prob": 0,
+        "make_cut_prob": 0,
     }
     assert market_labels(12, True)["top_10_prob"] == 0
     assert market_labels(12, True)["top_20_prob"] == 1

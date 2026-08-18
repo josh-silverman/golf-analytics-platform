@@ -53,9 +53,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-async def _validate_training_readiness(
-    provider: DataProvider, tournament: Tournament
-) -> None:
+async def _validate_training_readiness(provider: DataProvider, tournament: Tournament) -> None:
     """Deep-check one completed event against what the model pipeline needs.
 
     Each check prints ✔/⚠ with remediation guidance so a DataGolf response
@@ -69,8 +67,9 @@ async def _validate_training_readiness(
         return
 
     if not field:
-        print(f"   ⚠  Completed event {tournament.name} returned an empty field.\n",
-              file=sys.stderr)
+        print(
+            f"   ⚠  Completed event {tournament.name} returned an empty field.\n", file=sys.stderr
+        )
         return
 
     with_positions = [e for e in field if e.final_position is not None]
@@ -220,8 +219,12 @@ async def _run(*, through: date, name: str, skip_train: bool) -> None:
             extractor=FeatureExtractor(provider),
         )
         version = await train_calibrated_and_register(
-            builder=builder, registry=registry, through=through, name=name,
-            season=None, activate=True,
+            builder=builder,
+            registry=registry,
+            through=through,
+            name=name,
+            season=None,
+            activate=True,
         )
         print(f"   ✔  Registered {name} @ {version.version_id[:12]} (active)")
         for k, v in sorted(version.metrics.items()):

@@ -170,9 +170,7 @@ def _collect_feature_names(data: TrainingData) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
-def _in_sample_brier(
-    estimator: Any, x: NDArray[np.float64], y: NDArray[np.int_]
-) -> float:
+def _in_sample_brier(estimator: Any, x: NDArray[np.float64], y: NDArray[np.int_]) -> float:
     """Brier score of the classifier on the data it was fit on.
 
     In-sample and therefore optimistic — it is a sanity signal, not a
@@ -234,10 +232,7 @@ class GBDTTrainer(Trainer):
 
         feature_names = _collect_feature_names(data)
         x = np.array(
-            [
-                [float(ex.features.get(name, 0.0)) for name in feature_names]
-                for ex in data.examples
-            ],
+            [[float(ex.features.get(name, 0.0)) for name in feature_names] for ex in data.examples],
             dtype=np.float64,
         )
         sample_weight = self._recency_weights(data)

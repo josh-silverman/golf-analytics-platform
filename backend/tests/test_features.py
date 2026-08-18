@@ -147,22 +147,26 @@ def _empty_context() -> FeatureContext:
 
 
 def test_registry_topological_order_respects_deps() -> None:
-    registry = FeatureRegistry([
-        _ConstFeature("c", 3.0, deps=("a", "b")),
-        _ConstFeature("a", 1.0),
-        _ConstFeature("b", 2.0, deps=("a",)),
-    ])
+    registry = FeatureRegistry(
+        [
+            _ConstFeature("c", 3.0, deps=("a", "b")),
+            _ConstFeature("a", 1.0),
+            _ConstFeature("b", 2.0, deps=("a",)),
+        ]
+    )
     # a must come before b; b before c.
     order = registry.order
     assert order.index("a") < order.index("b") < order.index("c")
 
 
 def test_registry_computes_in_dependency_order() -> None:
-    registry = FeatureRegistry([
-        _ConstFeature("a", 1.0),
-        _ConstFeature("b", 2.0, deps=("a",)),
-        _ConstFeature("c", 3.0, deps=("a", "b")),
-    ])
+    registry = FeatureRegistry(
+        [
+            _ConstFeature("a", 1.0),
+            _ConstFeature("b", 2.0, deps=("a",)),
+            _ConstFeature("c", 3.0, deps=("a", "b")),
+        ]
+    )
     values = registry.compute(_empty_context())
     assert values["a"] == 1.0
     assert values["b"] == 3.0  # 2 + a(1)
@@ -176,10 +180,12 @@ def test_registry_rejects_missing_dependency() -> None:
 
 def test_registry_detects_cycle() -> None:
     with pytest.raises(ValueError, match="[Cc]yclic"):
-        FeatureRegistry([
-            _ConstFeature("a", 1.0, deps=("b",)),
-            _ConstFeature("b", 2.0, deps=("a",)),
-        ])
+        FeatureRegistry(
+            [
+                _ConstFeature("a", 1.0, deps=("b",)),
+                _ConstFeature("b", 2.0, deps=("a",)),
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +228,7 @@ def test_sg_rating_empty_rounds_returns_prior() -> None:
 def test_sg_rating_uniform_rounds_shrinks_toward_prior() -> None:
     """Three identical rounds (sg_ott=1.2) on the same day → weighted_total 3.6
     over weight_sum 3, blended with the prior's pseudo-weight."""
-    rounds = tuple(
-        DatedRound(_make_round(rid=i, sg_ott=1.2), date(2026, 6, 1))
-        for i in range(3)
-    )
+    rounds = tuple(DatedRound(_make_round(rid=i, sg_ott=1.2), date(2026, 6, 1)) for i in range(3))
     ctx = FeatureContext(player_id=1, as_of_date=date(2026, 6, 4), rounds=rounds)
     # Rounds are 3 days before as_of, so each carries the same decay weight.
     w = exponential_decay_weight(days_between(date(2026, 6, 1), date(2026, 6, 4)), 60.0)
@@ -274,8 +277,7 @@ def test_form_index_is_zero_when_recent_equals_baseline() -> None:
     """All rounds identical → recent mean == baseline mean → form == 0."""
     today = date(2026, 6, 4)
     rounds = tuple(
-        DatedRound(_make_round(rid=i, sg_total=0.5), date(2026, 1, 1))
-        for i in range(20)
+        DatedRound(_make_round(rid=i, sg_total=0.5), date(2026, 1, 1)) for i in range(20)
     )
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
     assert FormIndex().compute(ctx, {}) == pytest.approx(0.0)
@@ -288,17 +290,11 @@ def test_form_index_positive_when_recent_outperforms_baseline() -> None:
     form_index = 2.0 - 0.8 = 1.2.
     """
     today = date(2026, 6, 4)
-    strong = [
-        DatedRound(_make_round(rid=i, sg_total=2.0), date(2026, 6, 1))
-        for i in range(8)
-    ]
+    strong = [DatedRound(_make_round(rid=i, sg_total=2.0), date(2026, 6, 1)) for i in range(8)]
     average = [
-        DatedRound(_make_round(rid=i + 100, sg_total=0.0), date(2025, 12, 1))
-        for i in range(12)
+        DatedRound(_make_round(rid=i + 100, sg_total=0.0), date(2025, 12, 1)) for i in range(12)
     ]
-    ctx = FeatureContext(
-        player_id=1, as_of_date=today, rounds=tuple(strong + average)
-    )
+    ctx = FeatureContext(player_id=1, as_of_date=today, rounds=tuple(strong + average))
     assert FormIndex().compute(ctx, {}) == pytest.approx(1.2)
 
 
@@ -393,9 +389,7 @@ def test_field_strength_zero_without_field() -> None:
 
 def test_round_count_reports_number_of_rounds() -> None:
     today = date(2026, 6, 4)
-    rounds = tuple(
-        DatedRound(_make_round(rid=i, sg_total=1.0), today) for i in range(7)
-    )
+    rounds = tuple(DatedRound(_make_round(rid=i, sg_total=1.0), today) for i in range(7))
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
     assert RoundCount().compute(ctx, {}) == pytest.approx(7.0)
 
@@ -408,9 +402,14 @@ def test_v2_field_relative_has_fourteen_features() -> None:
     assert {f.name for f in v1_baseline().features} <= names
     # Plus the field-relative additions and the volatility estimate.
     assert {
-        "field_rel_sg_ott", "field_rel_sg_app", "field_rel_sg_arg",
-        "field_rel_sg_putt", "field_rel_sg_total", "field_strength",
-        "round_count", "score_volatility",
+        "field_rel_sg_ott",
+        "field_rel_sg_app",
+        "field_rel_sg_arg",
+        "field_rel_sg_putt",
+        "field_rel_sg_total",
+        "field_strength",
+        "round_count",
+        "score_volatility",
     } <= names
 
 
@@ -443,18 +442,14 @@ def test_v2_hash_differs_from_v1() -> None:
 def test_score_volatility_zero_when_too_few_rounds() -> None:
     # Fewer than the 5-round minimum → 0.0 (engine reads as "unknown").
     today = date(2026, 6, 4)
-    rounds = tuple(
-        DatedRound(_make_round(rid=i, sg_total=float(i)), today) for i in range(4)
-    )
+    rounds = tuple(DatedRound(_make_round(rid=i, sg_total=float(i)), today) for i in range(4))
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
     assert ScoreVolatility().compute(ctx, {}) == 0.0
 
 
 def test_score_volatility_zero_for_perfectly_consistent_player() -> None:
     today = date(2026, 6, 4)
-    rounds = tuple(
-        DatedRound(_make_round(rid=i, sg_total=1.0), today) for i in range(10)
-    )
+    rounds = tuple(DatedRound(_make_round(rid=i, sg_total=1.0), today) for i in range(10))
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
     assert ScoreVolatility().compute(ctx, {}) == pytest.approx(0.0)
 
@@ -464,8 +459,7 @@ def test_score_volatility_is_population_std_of_recent_sg_total() -> None:
     today = date(2026, 6, 4)
     vals = [2.0, -2.0, 2.0, -2.0, 2.0, -2.0]
     rounds = tuple(
-        DatedRound(_make_round(rid=i, sg_total=v), date(2026, 6, 1))
-        for i, v in enumerate(vals)
+        DatedRound(_make_round(rid=i, sg_total=v), date(2026, 6, 1)) for i, v in enumerate(vals)
     )
     ctx = FeatureContext(player_id=1, as_of_date=today, rounds=rounds)
     assert ScoreVolatility().compute(ctx, {}) == pytest.approx(2.0)

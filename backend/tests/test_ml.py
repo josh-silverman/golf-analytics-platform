@@ -81,12 +81,8 @@ def test_version_id_changes_when_training_through_date_changes() -> None:
 
 
 def test_version_id_independent_of_hyperparameter_key_order() -> None:
-    v1 = ModelVersion.compute_version_id(
-        "aaa", date(2026, 6, 1), {"a": 1, "b": 2}
-    )
-    v2 = ModelVersion.compute_version_id(
-        "aaa", date(2026, 6, 1), {"b": 2, "a": 1}
-    )
+    v1 = ModelVersion.compute_version_id("aaa", date(2026, 6, 1), {"a": 1, "b": 2})
+    v2 = ModelVersion.compute_version_id("aaa", date(2026, 6, 1), {"b": 2, "a": 1})
     assert v1 == v2
 
 

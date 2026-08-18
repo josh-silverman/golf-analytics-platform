@@ -178,9 +178,7 @@ def _time_split(
     mirrors deployment, where the model is always calibrated against the
     season's older events and applied to the newest.
     """
-    ordered = sorted(
-        data.examples, key=lambda e: (e.as_of, e.tournament_id, e.player_id)
-    )
+    ordered = sorted(data.examples, key=lambda e: (e.as_of, e.tournament_id, e.player_id))
     n_holdout = int(len(ordered) * holdout_fraction)
     train = ordered[: len(ordered) - n_holdout]
     holdout = ordered[len(ordered) - n_holdout :]
@@ -231,9 +229,7 @@ def fit_calibrated(
 
     can_calibrate = len(holdout_examples) >= _MIN_CALIBRATION_EXAMPLES
     raw_preds = (
-        [base_model.predict(ex.features) for ex in holdout_examples]
-        if can_calibrate
-        else []
+        [base_model.predict(ex.features) for ex in holdout_examples] if can_calibrate else []
     )
 
     for label_key, outcome_key in LABEL_TO_OUTCOME_KEY.items():
@@ -277,9 +273,7 @@ def fit_calibrated(
         outcomes=tuple(outcome_reports),
         n_calibration_examples=len(holdout_examples),
     )
-    model = CalibratedOutcomeModel(
-        base=base_model, calibrators=calibrators, report=report
-    )
+    model = CalibratedOutcomeModel(base=base_model, calibrators=calibrators, report=report)
     return CalibratedTrainingResult(
         model=model,
         feature_names=base_result.feature_names,

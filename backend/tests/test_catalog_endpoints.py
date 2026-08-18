@@ -82,9 +82,7 @@ _ROUND = Round(
     sg_total=4.4,
 )
 
-_FRESHNESS = DataFreshness(
-    sources={"players": _NOW, "tournaments": _NOW, "rounds": _NOW}
-)
+_FRESHNESS = DataFreshness(sources={"players": _NOW, "tournaments": _NOW, "rounds": _NOW})
 
 
 # ---------------------------------------------------------------------------
@@ -98,17 +96,13 @@ class _StubCatalog:
     async def data_freshness(self) -> DataFreshness:
         return _FRESHNESS
 
-    async def list_players(
-        self, *, cursor: str | None = None, limit: int = 50
-    ) -> Page[Player]:
+    async def list_players(self, *, cursor: str | None = None, limit: int = 50) -> Page[Player]:
         return Page(items=[_PLAYER], next_cursor=None, total=1)
 
     async def get_player(self, player_id: int) -> Player | None:
         return _PLAYER if player_id == 1 else None
 
-    async def recent_rounds_for_player(
-        self, player_id: int, *, limit: int = 20
-    ) -> list[Round]:
+    async def recent_rounds_for_player(self, player_id: int, *, limit: int = 20) -> list[Round]:
         return [_ROUND]
 
     async def list_tournaments(
@@ -124,9 +118,7 @@ class _StubCatalog:
     async def get_tournament(self, tournament_id: int) -> Tournament | None:
         return _TOURNAMENT if tournament_id == 1 else None
 
-    async def get_tournament_field(
-        self, tournament_id: int
-    ) -> list[TournamentEntry]:
+    async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
         return [_ENTRY]
 
     async def get_current_tournament(self) -> Tournament | None:

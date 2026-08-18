@@ -171,9 +171,7 @@ class ModelRegistry:
     # --- Internal ------------------------------------------------------------
 
     def _write_metadata(self, version: ModelVersion) -> None:
-        meta_path = (
-            self._root / version.name / version.version_id / self._METADATA_FILE
-        )
+        meta_path = self._root / version.name / version.version_id / self._METADATA_FILE
         payload = {
             "name": version.name,
             "version_id": version.version_id,

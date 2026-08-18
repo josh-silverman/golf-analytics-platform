@@ -99,9 +99,7 @@ class FeatureExtractor:
     def feature_set(self) -> FeatureSet:
         return self._feature_set
 
-    async def _dated_rounds(
-        self, player_id: int, as_of: date
-    ) -> tuple[DatedRound, ...]:
+    async def _dated_rounds(self, player_id: int, as_of: date) -> tuple[DatedRound, ...]:
         """A player's dated rounds within the window ending at ``as_of``.
 
         Shared by single-player and field extraction so both apply the same

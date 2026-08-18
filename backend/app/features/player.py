@@ -36,9 +36,7 @@ def shrink_to_prior(weighted_total: float, weight_sum: float, prior: float) -> f
     ``weighted_total`` is Σ(wᵢ·valueᵢ) and ``weight_sum`` is Σwᵢ; with no
     observations (``weight_sum == 0``) the result is exactly ``prior``.
     """
-    return (weighted_total + _PRIOR_PSEUDO_WEIGHT * prior) / (
-        weight_sum + _PRIOR_PSEUDO_WEIGHT
-    )
+    return (weighted_total + _PRIOR_PSEUDO_WEIGHT * prior) / (weight_sum + _PRIOR_PSEUDO_WEIGHT)
 
 
 class _SGSkillRating(Feature):
@@ -50,7 +48,7 @@ class _SGSkillRating(Feature):
     """
 
     _attribute: str  # column on Round: sg_ott / sg_app / sg_arg / sg_putt / sg_total
-    _prior: float    # below-average SG this category regresses to with no data
+    _prior: float  # below-average SG this category regresses to with no data
 
     def compute(
         self,

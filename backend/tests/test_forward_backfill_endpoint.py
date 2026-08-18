@@ -36,8 +36,14 @@ _BACKFILL_URL = "/api/v1/analytics/track-record/forward/backfill"
 def _tournament(tid: int, start: str) -> Tournament:
     d = date.fromisoformat(start)
     return Tournament(
-        id=tid, course_id=1, name=f"Event {tid}", season=2026,
-        start_date=d, end_date=d, purse=None, field_strength=None,
+        id=tid,
+        course_id=1,
+        name=f"Event {tid}",
+        season=2026,
+        start_date=d,
+        end_date=d,
+        purse=None,
+        field_strength=None,
         status=TournamentStatus.COMPLETED,
     )
 
@@ -54,8 +60,12 @@ def _preds(t: Tournament) -> SimpleNamespace:
         model_trained_through=date(2026, 5, 1),  # strictly before both events → OOS
         outcomes=[
             SimpleNamespace(
-                player_id=10, win_prob=0.1, top_5_prob=0.2,
-                top_10_prob=0.3, top_20_prob=0.4, make_cut_prob=0.9,
+                player_id=10,
+                win_prob=0.1,
+                top_5_prob=0.2,
+                top_10_prob=0.3,
+                top_20_prob=0.4,
+                make_cut_prob=0.9,
             )
         ],
     )
@@ -114,7 +124,8 @@ def backfill_ctx(
     app.dependency_overrides[get_catalog_service] = lambda: _StubCatalog(tournaments)
     app.dependency_overrides[get_board_archive] = lambda: archive
     monkeypatch.setattr(
-        analytics_module, "get_settings",
+        analytics_module,
+        "get_settings",
         lambda: SimpleNamespace(admin_api_token="secret", data_provider="mock"),
     )
     with TestClient(app) as c:
@@ -133,7 +144,8 @@ def test_backfill_rejects_missing_and_wrong_token(backfill_ctx) -> None:
 def test_backfill_disabled_when_no_token_configured(backfill_ctx, monkeypatch) -> None:
     client, _, _ = backfill_ctx
     monkeypatch.setattr(
-        analytics_module, "get_settings",
+        analytics_module,
+        "get_settings",
         lambda: SimpleNamespace(admin_api_token=None, data_provider="mock"),
     )
     r = client.post(_BACKFILL_URL, headers={"X-Admin-Token": "secret"})

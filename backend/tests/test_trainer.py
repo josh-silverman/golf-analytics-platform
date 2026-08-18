@@ -151,8 +151,7 @@ def test_feature_names_are_sorted_union_across_examples() -> None:
     ]
     # Pad so the classifier has enough rows to fit without error.
     examples += [
-        _example(features={"a": 0.0}, labels=_labels(made_cut=1), pid=i)
-        for i in range(3, 25)
+        _example(features={"a": 0.0}, labels=_labels(made_cut=1), pid=i) for i in range(3, 25)
     ]
     result = GBDTTrainer(_SMALL_DATA_CONFIG).fit(_dataset(examples))
     assert result.feature_names == ("a", "b", "c")
@@ -330,9 +329,7 @@ async def test_end_to_end_trains_real_model_predictions_pick_it_up(
     # Score an upcoming tournament's field with the trained model.
     upcoming = await catalog.list_tournaments(limit=200)
     target = next(t for t in upcoming.items if t.start_date >= date(2022, 2, 15))
-    result = await service.predict_tournament(
-        target.id, as_of=date(2022, 2, 15)
-    )
+    result = await service.predict_tournament(target.id, as_of=date(2022, 2, 15))
     assert result is not None
     assert result.model_version_id == active.version_id
     assert len(result.outcomes) > 0

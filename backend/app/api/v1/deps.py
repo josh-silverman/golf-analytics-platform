@@ -129,9 +129,7 @@ def _latest_v2_cold_start() -> tuple[Model, str | None, date | None] | None:
     v2_hash = v2_field_relative().hash
     registry = get_model_registry()
     name = get_settings().active_model_name
-    candidates = [
-        v for v in registry.list_versions(name) if v.feature_set_hash == v2_hash
-    ]
+    candidates = [v for v in registry.list_versions(name) if v.feature_set_hash == v2_hash]
     if not candidates:
         return None
     best = max(candidates, key=lambda v: v.training_data_through)
@@ -175,5 +173,3 @@ def get_prediction_service(
         model_version_id=version_id,
         model_trained_through=active.training_data_through if active else None,
     )
-
-

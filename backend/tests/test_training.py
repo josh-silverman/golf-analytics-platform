@@ -103,8 +103,12 @@ def _tournament(
 
 def _player(pid: int) -> Player:
     return Player(
-        id=pid, dg_id=None, full_name=f"Player {pid}",
-        country="USA", dob=None, turned_pro=2020,
+        id=pid,
+        dg_id=None,
+        full_name=f"Player {pid}",
+        country="USA",
+        dob=None,
+        turned_pro=2020,
     )
 
 
@@ -133,10 +137,7 @@ class _StubCatalog:
         cursor: str | None = None,
         limit: int = 200,
     ) -> Page[Tournament]:
-        items = [
-            t for t in self._tournaments
-            if status is None or t.status == status
-        ]
+        items = [t for t in self._tournaments if status is None or t.status == status]
         return Page(items=items, next_cursor=None, total=len(items))
 
     async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
@@ -254,7 +255,9 @@ async def test_build_skips_made_cut_entries_without_final_position() -> None:
 
 async def test_build_returns_empty_when_no_completed_tournaments() -> None:
     upcoming = _tournament(
-        1, date(2026, 6, 10), date(2026, 6, 13),
+        1,
+        date(2026, 6, 10),
+        date(2026, 6, 13),
         status=TournamentStatus.UPCOMING,
     )
     builder, _ = _make_builder(tournaments=[upcoming], fields={})

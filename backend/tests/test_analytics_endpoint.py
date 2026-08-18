@@ -82,9 +82,7 @@ def _client(app: FastAPI, registry: _StubRegistry) -> Iterator[TestClient]:
 
 @pytest.fixture
 def calibrated_client(app: FastAPI) -> Iterator[TestClient]:
-    registry = _StubRegistry(
-        active=_StubVersion("abc123def456"), model=_calibrated_model()
-    )
+    registry = _StubRegistry(active=_StubVersion("abc123def456"), model=_calibrated_model())
     yield from _client(app, registry)
 
 
@@ -95,9 +93,7 @@ def no_model_client(app: FastAPI) -> Iterator[TestClient]:
 
 @pytest.fixture
 def uncalibrated_client(app: FastAPI) -> Iterator[TestClient]:
-    registry = _StubRegistry(
-        active=_StubVersion("v0"), model=ConstantModel({"win_prob": 0.05})
-    )
+    registry = _StubRegistry(active=_StubVersion("v0"), model=ConstantModel({"win_prob": 0.05}))
     yield from _client(app, registry)
 
 

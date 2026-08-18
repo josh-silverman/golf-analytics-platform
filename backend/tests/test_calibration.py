@@ -144,8 +144,7 @@ def test_calibrated_predictions_are_probabilities() -> None:
 def test_hyperparameters_record_isotonic_calibration() -> None:
     result = fit_calibrated(GBDTTrainer(_SMALL_DATA_CONFIG), _separable_dataset())
     assert (
-        result.hyperparameters["calibration"]
-        == "per_market: sigmoid(win,top_5) + isotonic(rest)"
+        result.hyperparameters["calibration"] == "per_market: sigmoid(win,top_5) + isotonic(rest)"
     )
 
 
@@ -166,9 +165,7 @@ def test_thin_data_skips_calibration_but_still_builds_model() -> None:
     """Below the calibration-set threshold, the model passes base
     probabilities through and the report is empty rather than crashing."""
     data = _separable_dataset(n=40)  # 25% holdout = 10 < threshold (30)
-    result = fit_calibrated(
-        GBDTTrainer(_SMALL_DATA_CONFIG), data, holdout_fraction=0.25
-    )
+    result = fit_calibrated(GBDTTrainer(_SMALL_DATA_CONFIG), data, holdout_fraction=0.25)
     assert isinstance(result.model, CalibratedOutcomeModel)
     assert result.report.outcomes == ()
     # Still predicts every outcome.
@@ -216,8 +213,7 @@ async def test_train_calibrated_and_register_activates(tmp_path: Path) -> None:
     assert active is not None
     assert active.version_id == version.version_id
     assert (
-        version.hyperparameters["calibration"]
-        == "per_market: sigmoid(win,top_5) + isotonic(rest)"
+        version.hyperparameters["calibration"] == "per_market: sigmoid(win,top_5) + isotonic(rest)"
     )
 
     loaded = registry.load_artifact(active, model_cls=CalibratedOutcomeModel)
@@ -232,8 +228,5 @@ async def test_calibrated_model_pickle_roundtrip_keeps_report(tmp_path: Path) ->
     result.model.save(artifact)
     loaded = CalibratedOutcomeModel.load(artifact)
     assert isinstance(loaded, CalibratedOutcomeModel)
-    assert (
-        loaded.report.n_calibration_examples
-        == result.report.n_calibration_examples
-    )
+    assert loaded.report.n_calibration_examples == result.report.n_calibration_examples
     assert loaded.predict({"skill": 2.0}) == result.model.predict({"skill": 2.0})

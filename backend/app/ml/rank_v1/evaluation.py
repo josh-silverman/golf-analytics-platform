@@ -172,8 +172,11 @@ def score_markets(
         skill = 0.0 if base_brier == 0.0 else 1.0 - brier / base_brier
         lo, hi = (
             _bootstrap_skill_ci(
-                y_events, p_events,
-                n_reps=bootstrap_reps, ci=bootstrap_ci, seed=bootstrap_seed,
+                y_events,
+                p_events,
+                n_reps=bootstrap_reps,
+                ci=bootstrap_ci,
+                seed=bootstrap_seed,
             )
             if bootstrap_reps > 0
             else (float("nan"), float("nan"))
@@ -236,9 +239,7 @@ def _ndcg_at_k(scores: NDArray[np.float64], rels: NDArray[np.float64], k: int) -
     return _dcg(gains) / ideal_dcg if ideal_dcg > 0.0 else 0.0
 
 
-def _precision_at_k(
-    scores: NDArray[np.float64], placement: NDArray[np.float64], k: int
-) -> float:
+def _precision_at_k(scores: NDArray[np.float64], placement: NDArray[np.float64], k: int) -> float:
     """Fraction of the predicted top-k that actually finished in the top-k."""
     kk = min(k, len(scores))
     if kk == 0:

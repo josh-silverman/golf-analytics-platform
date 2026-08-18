@@ -46,9 +46,7 @@ class Model(ABC):
         """
         obj = pickle.loads(path.read_bytes())  # noqa: S301 — see docstring
         if not isinstance(obj, cls):
-            raise TypeError(
-                f"Loaded artifact is {type(obj).__name__}, expected {cls.__name__}"
-            )
+            raise TypeError(f"Loaded artifact is {type(obj).__name__}, expected {cls.__name__}")
         return obj
 
 

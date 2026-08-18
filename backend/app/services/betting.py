@@ -192,10 +192,7 @@ def _devig_real_odds(
     margin without assuming it's flat. ``make_cut`` has no fixed total, so it
     falls back to dividing out a flat vig margin.
     """
-    raw = {
-        pid: american_to_implied_prob(odds, vig_margin=0.0)
-        for pid, odds in real_odds.items()
-    }
+    raw = {pid: american_to_implied_prob(odds, vig_margin=0.0) for pid, odds in real_odds.items()}
     target = _MARKET_TARGET_SUM.get(outcome_key)
     if target is None:
         # No theoretical total — strip a flat margin instead.
@@ -229,6 +226,7 @@ def build_betting_board(
     (best bets first). ``board.odds_source`` is ``"datagolf"`` if any real line
     was used.
     """
+
     def _get_prob(o: PlayerOutcome) -> float:
         return getattr(o, outcome_key, 0.0)
 

@@ -47,17 +47,13 @@ class CatalogService:
 
     # --- Players -------------------------------------------------------------
 
-    async def list_players(
-        self, *, cursor: str | None = None, limit: int = 50
-    ) -> Page[Player]:
+    async def list_players(self, *, cursor: str | None = None, limit: int = 50) -> Page[Player]:
         return await self._provider.list_players(cursor=cursor, limit=limit)
 
     async def get_player(self, player_id: int) -> Player | None:
         return await self._provider.get_player(player_id)
 
-    async def recent_rounds_for_player(
-        self, player_id: int, *, limit: int = 20
-    ) -> list[Round]:
+    async def recent_rounds_for_player(self, player_id: int, *, limit: int = 20) -> list[Round]:
         return await self._provider.get_rounds_for_player(player_id, limit=limit)
 
     # --- Tournaments ---------------------------------------------------------
@@ -77,9 +73,7 @@ class CatalogService:
     async def get_tournament(self, tournament_id: int) -> Tournament | None:
         return await self._provider.get_tournament(tournament_id)
 
-    async def get_tournament_field(
-        self, tournament_id: int
-    ) -> list[TournamentEntry]:
+    async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
         return await self._provider.get_tournament_field(tournament_id)
 
     async def get_current_tournament(self) -> Tournament | None:
@@ -101,9 +95,7 @@ class CatalogService:
 
     # --- Courses -------------------------------------------------------------
 
-    async def list_courses(
-        self, *, cursor: str | None = None, limit: int = 50
-    ) -> Page[Course]:
+    async def list_courses(self, *, cursor: str | None = None, limit: int = 50) -> Page[Course]:
         return await self._provider.list_courses(cursor=cursor, limit=limit)
 
     async def get_course(self, course_id: int) -> Course | None:
@@ -121,6 +113,7 @@ def reference_today() -> date:
     - Any real provider (datagolf, …): returns the actual current UTC date.
     """
     from app.config import get_settings
+
     if get_settings().data_provider == "mock":
         return datetime.fromisoformat(_MOCK_REFERENCE_TODAY).date()
     return datetime.now(UTC).date()

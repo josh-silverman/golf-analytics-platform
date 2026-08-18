@@ -30,8 +30,11 @@ if TYPE_CHECKING:
 
 _MARKETS = ("win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob")
 _LABEL_OF = {
-    "win_prob": "win", "top_5_prob": "top_5", "top_10_prob": "top_10",
-    "top_20_prob": "top_20", "make_cut_prob": "made_cut",
+    "win_prob": "win",
+    "top_5_prob": "top_5",
+    "top_10_prob": "top_10",
+    "top_20_prob": "top_20",
+    "make_cut_prob": "made_cut",
 }
 
 
@@ -40,20 +43,36 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m app.cli.diagnose",
         description="Read-only per-player diagnostics export for the rolling backtest.",
     )
-    p.add_argument("--test-events", type=int, default=10,
-                   help="Most-recent completed tournaments to evaluate (default: 10)")
-    p.add_argument("--holdout", type=float, default=0.25,
-                   help="Calibration holdout fraction (default: 0.25)")
-    p.add_argument("--out-dir", default="diagnostics",
-                   help="Directory for exported files (default: ./diagnostics)")
+    p.add_argument(
+        "--test-events",
+        type=int,
+        default=10,
+        help="Most-recent completed tournaments to evaluate (default: 10)",
+    )
+    p.add_argument(
+        "--holdout", type=float, default=0.25, help="Calibration holdout fraction (default: 0.25)"
+    )
+    p.add_argument(
+        "--out-dir",
+        default="diagnostics",
+        help="Directory for exported files (default: ./diagnostics)",
+    )
     return p
 
 
 def _write_predictions(result: DiagnosticResult, path: Path) -> None:
     cols = [
-        "tournament_id", "tournament", "start_date", "player_id", "player",
-        "predicted_rank", "made_cut", "actual_finish", "field_size",
-        "finishing_percentile", "rank_error",
+        "tournament_id",
+        "tournament",
+        "start_date",
+        "player_id",
+        "player",
+        "predicted_rank",
+        "made_cut",
+        "actual_finish",
+        "field_size",
+        "finishing_percentile",
+        "rank_error",
     ]
     for m in _MARKETS:
         cols += [f"{m}", f"{m}_label", f"{m}_sqerr"]
@@ -64,10 +83,17 @@ def _write_predictions(result: DiagnosticResult, path: Path) -> None:
         w.writerow(cols)
         for r in result.rows:
             row = [
-                r.tournament_id, r.tournament, r.start_date.isoformat(),
-                r.player_id, r.player, r.predicted_rank, int(r.made_cut),
+                r.tournament_id,
+                r.tournament,
+                r.start_date.isoformat(),
+                r.player_id,
+                r.player,
+                r.predicted_rank,
+                int(r.made_cut),
                 "" if r.actual_finish is None else r.actual_finish,
-                r.field_size, f"{r.finishing_percentile:.4f}", r.rank_error,
+                r.field_size,
+                f"{r.finishing_percentile:.4f}",
+                r.rank_error,
             ]
             for m in _MARKETS:
                 row += [f"{r.probs[m]:.6f}", r.labels[_LABEL_OF[m]], f"{r.sq_error[m]:.6f}"]
@@ -93,9 +119,11 @@ def _write_calibration(result: DiagnosticResult, path: Path) -> None:
                 "brier_calibrated": o.brier_calibrated,
                 "bins_calibrated": [
                     {
-                        "lower": b.lower, "upper": b.upper,
+                        "lower": b.lower,
+                        "upper": b.upper,
                         "mean_predicted": b.mean_predicted,
-                        "observed_frequency": b.observed_frequency, "count": b.count,
+                        "observed_frequency": b.observed_frequency,
+                        "count": b.count,
                     }
                     for b in o.bins_calibrated
                 ],
@@ -126,8 +154,10 @@ async def _run(*, test_events: int, holdout: float, out_dir: str) -> None:
     print("Training + scoring (read-only; exports per-player rows)…\n")
 
     result = await run_diagnostics(
-        catalog=catalog, extractor=extractor,
-        test_events=test_events, holdout_fraction=holdout,
+        catalog=catalog,
+        extractor=extractor,
+        test_events=test_events,
+        holdout_fraction=holdout,
     )
 
     out = Path(out_dir)
@@ -140,16 +170,17 @@ async def _run(*, test_events: int, holdout: float, out_dir: str) -> None:
     print(f"Train examples:    {result.n_train_examples}")
     print(f"Feature-set hash:  {result.feature_set_hash[:12]}")
     print(f"Rows exported:     {len(result.rows)} (players × test events)")
-    print(f"\nWrote:\n  {out / 'predictions.csv'}\n  {out / 'importances.csv'}"
-          f"\n  {out / 'calibration.json'}")
+    print(
+        f"\nWrote:\n  {out / 'predictions.csv'}\n  {out / 'importances.csv'}"
+        f"\n  {out / 'calibration.json'}"
+    )
     print("\nDone.")
 
 
 def main() -> None:
     args = _build_parser().parse_args()
     try:
-        asyncio.run(_run(test_events=args.test_events, holdout=args.holdout,
-                         out_dir=args.out_dir))
+        asyncio.run(_run(test_events=args.test_events, holdout=args.holdout, out_dir=args.out_dir))
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(1)

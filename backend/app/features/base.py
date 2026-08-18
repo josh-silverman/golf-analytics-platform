@@ -129,9 +129,7 @@ class FeatureSet:
         # Sort by feature name so the hash is stable regardless of insertion
         # order. Two FeatureSets with the same features in different orders
         # must produce the same hash.
-        self.features: tuple[Feature, ...] = tuple(
-            sorted(features, key=lambda f: f.name)
-        )
+        self.features: tuple[Feature, ...] = tuple(sorted(features, key=lambda f: f.name))
 
     @property
     def hash(self) -> str:
@@ -181,9 +179,7 @@ class FeatureRegistry:
 
         if len(order) < len(self.features):
             unresolved = [n for n in self.features if n not in order]
-            raise ValueError(
-                f"Cyclic feature dependency detected among: {unresolved}"
-            )
+            raise ValueError(f"Cyclic feature dependency detected among: {unresolved}")
         return tuple(order)
 
     def compute(self, context: FeatureContext) -> dict[str, float]:
