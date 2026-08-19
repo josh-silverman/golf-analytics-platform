@@ -375,6 +375,19 @@ async def run_backtest(
         made_cut_positions = [e.final_position for e in field if e.final_position is not None]
         worst_placement = (max(made_cut_positions) if made_cut_positions else len(field)) + 1
 
+        # Did this event cut anyone? The FedExCup playoff events and several
+        # limited-field events play four rounds with no 36-hole cut, so every
+        # player grades as having made it and the make-cut market scores a
+        # question that was never asked. Measured on the 2026 season, 2 of the
+        # 12 most recent events (Travelers, FedEx St. Jude) were no-cut, and
+        # both fell inside the default 10-event window — so this is not an edge
+        # case, it is roughly one in six of every window this harness reports.
+        # The contamination has no fixed sign (a board that says 1.0 for
+        # everyone scores perfectly and inflates; one that predicts a normal
+        # spread scores badly and deflates), so the market is dropped for that
+        # event rather than corrected. Every other market grades normally.
+        event_has_cut = any(e.status == EntryStatus.MISSED_CUT for e in field)
+
         for entry in field:
             # Only score players with a resolved outcome.
             if entry.status == EntryStatus.ACTIVE:
@@ -386,6 +399,8 @@ async def run_backtest(
             served = served_by_player[entry.player_id]
             win = served["win_prob"]
             for label_key, outcome_key in LABEL_TO_OUTCOME_KEY.items():
+                if outcome_key == "make_cut_prob" and not event_has_cut:
+                    continue
                 ev_y_by_outcome[outcome_key].append(float(labels[label_key]))
                 ev_p_by_outcome[outcome_key].append(served[outcome_key])
 

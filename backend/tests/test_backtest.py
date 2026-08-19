@@ -326,3 +326,70 @@ async def test_run_backtest_requires_enough_events() -> None:
             extractor=_SkillExtractor(),  # type: ignore[arg-type]
             test_events=2,
         )
+
+
+# ---------------------------------------------------------------------------
+# No-cut events must not be scored on the make-cut market.
+#
+# The FedExCup playoff events and several limited-field events play four rounds
+# with no 36-hole cut. Two of the twelve most recent 2026 events (Travelers,
+# FedEx St. Jude) were no-cut, and both landed inside the default 10-event
+# window, so roughly one window in six is affected. Grading make-cut there
+# scores a question that was never asked.
+# ---------------------------------------------------------------------------
+
+
+def _no_cut_field(tid: int, n_players: int) -> list[TournamentEntry]:
+    """Every player finishes; nobody is cut."""
+    ordered = sorted(range(1, n_players + 1), reverse=True)
+    return [
+        TournamentEntry(
+            id=tid * 1000 + pid,
+            tournament_id=tid,
+            player_id=pid,
+            status=EntryStatus.MADE_CUT,
+            final_position=position,
+            final_score_to_par=None,
+            official_money_cents=None,
+        )
+        for position, pid in enumerate(ordered, start=1)
+    ]
+
+
+class _NoCutCatalog(_StubCatalog):
+    """Catalog whose most recent event played without a cut."""
+
+    def __init__(self, tournaments: list[Tournament], n_players: int) -> None:
+        super().__init__(tournaments, n_players)
+        last = tournaments[-1].id
+        self._fields[last] = _no_cut_field(last, n_players)
+
+
+async def test_no_cut_event_is_not_scored_on_make_cut() -> None:
+    starts = [date(2026, m, 1) for m in range(1, 7)]
+    tournaments = [_tournament(i + 1, s) for i, s in enumerate(starts)]
+
+    normal = await run_backtest(
+        catalog=_StubCatalog(tournaments, n_players=30),  # type: ignore[arg-type]
+        extractor=_SkillExtractor(),  # type: ignore[arg-type]
+        test_events=2,
+        holdout_fraction=0.25,
+    )
+    mixed = await run_backtest(
+        catalog=_NoCutCatalog(tournaments, n_players=30),  # type: ignore[arg-type]
+        extractor=_SkillExtractor(),  # type: ignore[arg-type]
+        test_events=2,
+        holdout_fraction=0.25,
+    )
+
+    normal_mc = next(o for o in normal.outcomes if o.outcome_key == "make_cut_prob")
+    mixed_mc = next(o for o in mixed.outcomes if o.outcome_key == "make_cut_prob")
+
+    # The no-cut event contributed no make-cut rows, so the sample shrank...
+    assert mixed_mc.n < normal_mc.n
+    # ...while the finish-position markets still graded both events in full.
+    normal_t20 = next(o for o in normal.outcomes if o.outcome_key == "top_20_prob")
+    mixed_t20 = next(o for o in mixed.outcomes if o.outcome_key == "top_20_prob")
+    assert mixed_t20.n == normal_t20.n
+    # And the event itself is still part of the backtest.
+    assert mixed.n_test_events == 2

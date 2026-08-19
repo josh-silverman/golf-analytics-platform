@@ -152,7 +152,19 @@ Full identity and hyperparameters are in
 > | top-5 | 4.5% | 0.0401 | 0.1698 | 0.0116 | +0.059 | [+0.012, +0.105] |
 > | top-10 | 8.8% | 0.0735 | 0.2620 | 0.0135 | +0.089 | [+0.062, +0.118] |
 > | top-20 | 16.9% | 0.1242 | 0.3952 | 0.0325 | +0.114 | [+0.088, +0.135] |
-> | make-cut | 55.7% | 0.2032 | 0.6517 | 0.0248 | +0.177 | [+0.095, +0.277] |
+> | make-cut | 55.7% | 0.2032 | 0.6517 | 0.0248 | +0.177 ⚠ | [+0.095, +0.277] |
+>
+> ⚠ **The make-cut row is contaminated and should not be quoted.** Two of those
+> ten events (Travelers, FedEx St. Jude) are FedExCup-style events played with
+> no 36-hole cut. Every player grades as having made a cut that never happened,
+> so those rows score a question that was never asked. The harness has since
+> been fixed to exclude the make-cut market on no-cut events, but this table
+> predates the fix and the corrected figure has not been re-measured yet.
+> Direction of the error depends on what was served: DataGolf-direct reports
+> 1.0 for everyone and scores perfectly (inflating), while the cold-start model
+> predicts a normal spread and scores badly (deflating). The other four markets
+> in this table are unaffected — they grade on finish position, which exists at
+> every event.
 >
 > Spearman(win prob, finish) +0.175; mean winner predicted rank 48.4.
 >
