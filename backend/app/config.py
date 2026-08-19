@@ -69,6 +69,16 @@ class Settings(BaseSettings):
             " Used only when board_archive_backend='file'."
         ),
     )
+    matchup_archive_path: str = Field(
+        default="./matchup_boards",
+        description=(
+            "Root directory for the forward matchup-line archive (weekly"
+            " pre-event captures of every book's matchup price plus DataGolf's"
+            " line, graded once the event settles). Used only when"
+            " board_archive_backend='file'; the redis backend stores both"
+            " archives in the shared instance."
+        ),
+    )
     board_archive_backend: Literal["file", "redis"] = Field(
         default="file",
         description=(

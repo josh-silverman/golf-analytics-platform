@@ -150,6 +150,61 @@ class ForwardBackfillPayload(BaseModel):
     events: list[ForwardBackfillEventPayload] = []
 
 
+class MatchupCapturePayload(BaseModel):
+    """Result of the weekly matchup-line capture.
+
+    ``captured`` is false both when this week's board was already captured
+    (first capture wins, never overwritten) and when DataGolf has no matchup
+    board up (off week); ``detail`` says which.
+    """
+
+    captured: bool
+    event_name: str | None = None
+    year: int | None = None
+    matchups: int = 0
+    detail: str
+
+
+class MatchupThresholdPayload(BaseModel):
+    """Flat-$1 record of every captured price that beat DataGolf's de-vigged
+    line by more than ``min_edge`` (EV per $1)."""
+
+    min_edge: float
+    bets: int
+    pnl: float
+    roi: float | None
+
+
+class MatchupGradedEventPayload(BaseModel):
+    event_name: str
+    year: int
+    matchups_captured: int
+    matchups_graded: int
+    bets: int  # best-price strategy at the headline (2c) threshold
+    pnl: float
+
+
+class MatchupLineRecordPayload(BaseModel):
+    """Forward record of DataGolf's matchup line vs real book prices.
+
+    Accumulates from weekly pre-event captures graded against settled
+    outcomes. This record — not the historical backtest, which cannot see
+    DataGolf's line — is what decides whether a matchup surface may ever
+    present an edge claim. ``available`` is false until one capture exists.
+    """
+
+    available: bool
+    events_captured: int = 0
+    events_graded: int = 0
+    events_pending: int = 0
+    matchups_graded: int = 0
+    dg_line_brier: float | None = None  # vs decisive outcomes; 0.25 = coin-flip
+    dg_line_n: int = 0
+    any_price: list[MatchupThresholdPayload] = []
+    best_price: list[MatchupThresholdPayload] = []
+    events: list[MatchupGradedEventPayload] = []
+
+
 class TournamentPredictionsPayload(BaseModel):
     """Body of ``GET /predictions/{tournament_id}``.
 

@@ -1,0 +1,38 @@
+name: Capture weekly matchup lines
+
+# Snapshots this week's matchup board (every book's price + DataGolf's line)
+# into the immutable matchup archive, so the line-record grader
+# (GET /api/v1/analytics/matchups/line-record) accumulates real forward
+# evidence on whether DataGolf's line finds +EV matchup prices. The
+# historical backtest could not answer that (it never stored DataGolf's
+# line); ~10 graded weeks of this record is what decides whether the matchup
+# product may ever present an edge claim.
+#
+# Two runs per week: Wednesday evening UTC (lines are posted, still clearly
+# pre-event) and a Thursday-morning retry in case the first run hit an
+# outage. The capture endpoint is first-write-wins, so the retry is a no-op
+# whenever Wednesday succeeded, and manual dispatch is always safe.
+#
+# Requires the ADMIN_API_TOKEN repository secret to match the Render
+# service's ADMIN_API_TOKEN env var — without it the endpoint answers 404.
+# Scheduled workflows are best-effort and GitHub disables them after 60 days
+# without repo activity; a missed week costs one data point, not the record.
+
+on:
+  schedule:
+    - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET)
+    - cron: "0 11 * * 4" # Thu 11:00 UTC retry, before US tee-offs
+  workflow_dispatch: {}
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /analytics/matchups/capture
+        run: |
+          # --retry covers the Render free-tier cold start (~40s) and blips;
+          # curl doesn't retry POSTs by default without --retry-all-errors.
+          curl -fsS --max-time 120 --retry 3 --retry-delay 20 --retry-all-errors \
+            -X POST \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            https://pga-analytics-api.onrender.com/api/v1/analytics/matchups/capture

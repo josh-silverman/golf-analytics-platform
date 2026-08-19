@@ -1642,6 +1642,68 @@ class DataGolfProvider(DataProvider):
             return
 
     # -----------------------------------------------------------------------
+    # Matchup odds — live capture + historical grading for the matchup line
+    # record (app/services/matchup_line_record.py)
+    # -----------------------------------------------------------------------
+
+    async def fetch_live_matchups(self, market: str = "tournament_matchups") -> dict[str, Any]:
+        """Raw ``betting-tools/matchups`` feed: every book's price on every
+        current matchup plus DataGolf's own line. Never cached — the weekly
+        capture job calls it once and the point is the freshest price.
+        """
+        r = await self._http.get(
+            "/betting-tools/matchups",
+            params={"tour": "pga", "market": market, "odds_format": "american"},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
+    async def fetch_historical_matchup_event_list(self) -> list[dict[str, Any]]:
+        """Events covered by the historical-odds archive (``matchups`` flag,
+        ``event_id``/``calendar_year`` join keys for graded outcomes)."""
+        r = await self._http.get("/historical-odds/event-list", params={"tour": "pga"})
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+
+    async def fetch_historical_matchups(
+        self, event_id: int, year: int, book: str
+    ) -> dict[str, Any]:
+        """One book's archived matchup odds and graded outcomes for one event.
+
+        A completed event's archive is immutable, so those responses cache in
+        Redis like the per-event round archives; incomplete/missing ones don't,
+        so grading sees the event the moment it settles. Non-200 → ``{}`` (the
+        archive doesn't price every book at every event; that's not an error).
+        """
+        redis_key = f"pga:datagolf:hist_matchups:{event_id}:{year}:{book}"
+        cached = await self._redis_get_json(redis_key)
+        if cached is not None:
+            return cached
+        r = await self._http.get(
+            "/historical-odds/matchups",
+            params={
+                "tour": "pga",
+                "event_id": event_id,
+                "year": year,
+                "book": book,
+                "odds_format": "american",
+            },
+        )
+        if r.status_code != 200:
+            return {}
+        try:
+            data = r.json()
+        except ValueError:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        if data.get("event_completed"):
+            await self._redis_set_json(redis_key, data, _EVENT_ROWS_TTL_S)
+        return data
+
+    # -----------------------------------------------------------------------
     # Real sportsbook odds  —  GET /betting-tools/outrights
     # -----------------------------------------------------------------------
 

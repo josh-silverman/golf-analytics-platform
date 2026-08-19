@@ -26,6 +26,11 @@ from app.services.board_archive import (
 )
 from app.services.catalog import CatalogService
 from app.services.features import FeatureExtractor
+from app.services.matchup_line_record import (
+    FileMatchupArchive,
+    MatchupArchive,
+    RedisMatchupArchive,
+)
 from app.services.predictions import PathASource, PredictionService
 
 if TYPE_CHECKING:
@@ -103,6 +108,22 @@ def get_board_archive() -> BoardArchive:
 
         return RedisBoardArchive(redis_client)
     return FileBoardArchive(Path(settings.prediction_boards_path))
+
+
+@lru_cache(maxsize=1)
+def get_matchup_archive() -> MatchupArchive:
+    """Process-cached forward matchup-line archive.
+
+    Same backend split as the board archive, and for the same reason: the
+    weekly matchup captures must outlive redeploys in production, while dev and
+    tests stay dependency-free on the filesystem.
+    """
+    settings = get_settings()
+    if settings.board_archive_backend == "redis":
+        from app.cache.redis import redis_client
+
+        return RedisMatchupArchive(redis_client)
+    return FileMatchupArchive(Path(settings.matchup_archive_path))
 
 
 def _resolve_active_model() -> tuple[Model, str, str | None]:

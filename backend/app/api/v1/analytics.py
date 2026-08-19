@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.api.v1.deps import (
     get_board_archive,
     get_catalog_service,
+    get_matchup_archive,
     get_model_registry,
     get_prediction_service,
 )
@@ -19,6 +20,10 @@ from app.api.v1.schemas import (
     ForwardBackfillPayload,
     ForwardMarketSkillPayload,
     ForwardTrackRecordPayload,
+    MatchupCapturePayload,
+    MatchupGradedEventPayload,
+    MatchupLineRecordPayload,
+    MatchupThresholdPayload,
     OutcomeCalibrationPayload,
     ReliabilityBinPayload,
     TrackRecordPayload,
@@ -27,12 +32,20 @@ from app.config import get_settings
 from app.domain.enums import TournamentStatus
 from app.ml.calibration import CalibratedOutcomeModel, ReliabilityBin
 from app.ml.registry import ModelRegistry  # noqa: TC001 — FastAPI resolves at runtime
+from app.providers.base import DataProvider  # noqa: TC001 — FastAPI DI
+from app.providers.factory import get_data_provider
 from app.services.board_archive import (  # noqa: TC001
     BoardArchive,
     snapshot_from_predictions,
 )
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
 from app.services.forward_track_record import compute_forward_track_record
+from app.services.matchup_line_record import (
+    MatchupArchive,  # noqa: TC001 — FastAPI DI
+    MatchupHistorySource,
+    compute_matchup_line_record,
+    snapshot_from_feed,
+)
 from app.services.predictions import PredictionService  # noqa: TC001
 from app.services.track_record import compute_track_record
 
@@ -232,6 +245,100 @@ async def backfill_forward_track_record(
         captured=len(captured),
         skipped=skipped,
         events=captured,
+    )
+
+
+@router.post("/matchups/capture")
+async def capture_matchup_lines(
+    provider: Annotated[DataProvider, Depends(get_data_provider)],
+    archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+) -> MatchupCapturePayload:
+    """Capture this week's matchup board: every book's price on every 2-way
+    tournament matchup plus DataGolf's own line, stored immutably per event.
+
+    Called by a weekly scheduled job before the Thursday tee-off. First capture
+    wins — a re-run (the Thursday retry, a manual trigger) never overwrites, so
+    the later grade provably reflects pre-event prices. The graded record lives
+    at ``GET /analytics/matchups/line-record``.
+
+    Admin-gated exactly like the forward backfill: requires ``X-Admin-Token``
+    matching ``settings.admin_api_token``; 404 when the secret is unset, 409
+    when the configured provider has no live matchup feed (mock).
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    fetch = getattr(provider, "fetch_live_matchups", None)
+    if fetch is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Configured data provider has no live matchup feed",
+        )
+
+    feed = await fetch()
+    snapshot = snapshot_from_feed(feed, year=reference_today().year)
+    if snapshot is None:
+        return MatchupCapturePayload(captured=False, detail="no matchup board this week")
+    stored = await archive.persist(snapshot)
+    return MatchupCapturePayload(
+        captured=stored,
+        event_name=snapshot.event_name,
+        year=snapshot.year,
+        matchups=len(snapshot.rows),
+        detail="stored" if stored else "already captured",
+    )
+
+
+@router.get("/matchups/line-record")
+async def get_matchup_line_record(
+    provider: Annotated[DataProvider, Depends(get_data_provider)],
+    archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+) -> MatchupLineRecordPayload:
+    """Forward record of DataGolf's matchup line against real book prices.
+
+    Grades every captured pre-event snapshot whose event has settled in the
+    historical-odds archive: would betting the sides DataGolf's de-vigged line
+    called +EV have made money? The 2019-2026 backtest could not answer this
+    (the archive never stored DataGolf's line); this record is the evidence
+    that decides whether a matchup surface may ever present an edge claim.
+    ``available`` is false until the first capture exists.
+    """
+    if not hasattr(provider, "fetch_historical_matchup_event_list"):
+        return MatchupLineRecordPayload(available=False)
+    # The hasattr check above is the runtime capability gate; mypy can't narrow
+    # a nominal DataProvider to the structural protocol from it, hence the cast.
+    record = await compute_matchup_line_record(archive, cast("MatchupHistorySource", provider))
+    if record is None:
+        return MatchupLineRecordPayload(available=False)
+
+    def _thresholds(records: tuple) -> list[MatchupThresholdPayload]:  # type: ignore[type-arg]
+        return [
+            MatchupThresholdPayload(min_edge=t.min_edge, bets=t.bets, pnl=t.pnl, roi=t.roi)
+            for t in records
+        ]
+
+    return MatchupLineRecordPayload(
+        available=True,
+        events_captured=record.events_captured,
+        events_graded=record.events_graded,
+        events_pending=record.events_pending,
+        matchups_graded=record.matchups_graded,
+        dg_line_brier=record.dg_line_brier,
+        dg_line_n=record.dg_line_n,
+        any_price=_thresholds(record.any_price),
+        best_price=_thresholds(record.best_price),
+        events=[
+            MatchupGradedEventPayload(
+                event_name=e.event_name,
+                year=e.year,
+                matchups_captured=e.matchups_captured,
+                matchups_graded=e.matchups_graded,
+                bets=e.bets,
+                pnl=e.pnl,
+            )
+            for e in record.events
+        ],
     )
 
 
