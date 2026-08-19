@@ -59,6 +59,9 @@ class StubProvider:
         self.freshness_calls = 0
         self.full_preds_calls = 0
         self.preds_calls = 0
+        self.live_matchups_calls = 0
+        self.hist_event_list_calls = 0
+        self.hist_matchups_calls = 0
 
     def get_source_name(self) -> str:
         return "stub"
@@ -116,6 +119,20 @@ class StubProvider:
     ) -> dict[int, dict[str, float]]:
         self.full_preds_calls += 1
         return {1: {"win": 0.05, "top_5": 0.2, "top_10": 0.3, "top_20": 0.5, "make_cut": 0.8}}
+
+    # DataGolf-only methods, not on the base DataProvider — present here purely
+    # so the pass-through pin below can call them through the wrapper.
+    async def fetch_live_matchups(self, market: str = "tournament_matchups") -> dict:
+        self.live_matchups_calls += 1
+        return {"event_name": "Stub Open", "match_list": []}
+
+    async def fetch_historical_matchup_event_list(self) -> list[dict]:
+        self.hist_event_list_calls += 1
+        return [{"event_id": 1, "calendar_year": 2026}]
+
+    async def fetch_historical_matchups(self, event_id: int, year: int, book: str) -> dict:
+        self.hist_matchups_calls += 1
+        return {"event_completed": True, "book": book}
 
 
 # ---------------------------------------------------------------------------
@@ -282,3 +299,38 @@ class TestPretournamentPredsPassThrough:
         stub_provider.get_pretournament_full_preds = spy  # type: ignore[assignment]
         await wrapper.get_pretournament_full_preds(123, 2026, live=True)
         assert captured["live"] is True
+
+
+class TestMatchupMethodsPassThrough:
+    """The matchup capture/grading endpoints feature-detect these three
+    DataGolf-only methods with ``hasattr`` on whatever ``get_data_provider``
+    returns. In production that's this wrapper, not the raw provider — the
+    same silent-gap shape as ``TestPretournamentPredsPassThrough`` above: a
+    missing override doesn't raise, it just makes ``hasattr`` return ``False``,
+    so the capture endpoint 409s and the line-record endpoint reports
+    ``available: False`` forever despite the feature being fully deployed.
+    """
+
+    async def test_live_matchups_reach_the_underlying_provider(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        assert hasattr(wrapper, "fetch_live_matchups")
+        result = await wrapper.fetch_live_matchups()  # type: ignore[attr-defined]
+        assert stub_provider.live_matchups_calls == 1
+        assert result["event_name"] == "Stub Open"
+
+    async def test_historical_event_list_reaches_the_underlying_provider(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        assert hasattr(wrapper, "fetch_historical_matchup_event_list")
+        result = await wrapper.fetch_historical_matchup_event_list()  # type: ignore[attr-defined]
+        assert stub_provider.hist_event_list_calls == 1
+        assert result == [{"event_id": 1, "calendar_year": 2026}]
+
+    async def test_historical_matchups_reaches_the_underlying_provider(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        assert hasattr(wrapper, "fetch_historical_matchups")
+        result = await wrapper.fetch_historical_matchups(1, 2026, "pinnacle")  # type: ignore[attr-defined]
+        assert stub_provider.hist_matchups_calls == 1
+        assert result == {"event_completed": True, "book": "pinnacle"}

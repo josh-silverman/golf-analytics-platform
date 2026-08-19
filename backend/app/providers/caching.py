@@ -386,3 +386,27 @@ class CachingProviderWrapper(DataProvider):
         — make-cut skill +0.127 vs the served board's +0.007.
         """
         return await self._provider.get_pretournament_full_preds(event_id, year, live=live)
+
+    # ------------------------------------------------------------------
+    # Matchup lines — delegate; the same silent-gap bug documented above for
+    # get_pretournament_full_preds. These three aren't on the base DataProvider
+    # (only DataGolf implements them), so without an explicit pass-through here
+    # a wrapped provider silently fails hasattr() checks in the matchup capture
+    # and grading endpoints instead of raising — the analytics/matchups routes
+    # would 409/return unavailable forever in production despite the feature
+    # being fully deployed. No caching needed: the live feed wants the freshest
+    # price and the historical reads already cache inside DataGolfProvider.
+    # ------------------------------------------------------------------
+
+    async def fetch_live_matchups(self, market: str = "tournament_matchups") -> dict[str, Any]:
+        return await self._provider.fetch_live_matchups(market)  # type: ignore[attr-defined,no-any-return]
+
+    async def fetch_historical_matchup_event_list(self) -> list[dict[str, Any]]:
+        return await self._provider.fetch_historical_matchup_event_list()  # type: ignore[attr-defined,no-any-return]
+
+    async def fetch_historical_matchups(
+        self, event_id: int, year: int, book: str
+    ) -> dict[str, Any]:
+        return await self._provider.fetch_historical_matchups(  # type: ignore[attr-defined,no-any-return]
+            event_id, year, book
+        )
