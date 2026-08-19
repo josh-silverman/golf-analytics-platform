@@ -150,6 +150,42 @@ class ForwardBackfillPayload(BaseModel):
     events: list[ForwardBackfillEventPayload] = []
 
 
+class ArchiveExportPayload(BaseModel):
+    """Full dump of both forward archives (boards + matchup lines).
+
+    Snapshots are carried as raw dicts, not typed models, on purpose: the
+    archive deserializers tolerate unknown/missing keys so an export written
+    by a newer build restores on an older one, and typing the envelope but
+    not the entries preserves exactly that property. Content is
+    deterministic (stably sorted, no timestamp) so the backup job can skip
+    committing an unchanged archive.
+
+    Contains DataGolf-derived data — personal use only, never redistribute:
+    exports must only ever be committed to a private repository.
+    """
+
+    schema_version: int
+    boards: list[dict[str, object]] = []
+    matchups: list[dict[str, object]] = []
+
+
+class ArchiveImportPayload(BaseModel):
+    """Result of restoring an export into the live archives.
+
+    ``*_skipped`` counts snapshots that already existed — first write wins,
+    so a restore can never overwrite a live capture. ``*_errors`` counts
+    entries that failed to parse (counted, not fatal: restoring most of the
+    record beats restoring none of it).
+    """
+
+    boards_stored: int
+    boards_skipped: int
+    boards_errors: int
+    matchups_stored: int
+    matchups_skipped: int
+    matchups_errors: int
+
+
 class MatchupCapturePayload(BaseModel):
     """Result of the weekly matchup-line capture.
 

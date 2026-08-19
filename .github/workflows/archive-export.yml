@@ -1,0 +1,75 @@
+name: Export forward archives
+
+# The production board + matchup archives live in Render's free Key Value
+# instance, which has NO persistence: any restart of that service can erase
+# the entire forward record. This job is the survival mechanism — it fetches
+# the full archive dump from the API and commits it to the PRIVATE ledger
+# repo (pinpoint-ledger). Private is a hard requirement, not a preference:
+# the dump contains DataGolf-derived data and DataGolf's terms are personal
+# use only, no redistribution. Never point this at a public repo.
+#
+# The committed history doubles as an independent witness: each commit
+# timestamp proves the predictions in it existed before their events, which
+# is what makes the forward track record trustworthy to an outside reader.
+#
+# The export endpoint returns deterministic content (stably sorted, no
+# timestamp), so an unchanged archive produces a byte-identical file and the
+# commit step is skipped — the ledger history only grows when the record does.
+#
+# Runs nightly, on manual dispatch, and via workflow_call at the end of every
+# scheduled capture (see matchup-capture.yml) so a fresh capture is backed up
+# within minutes rather than waiting a day. Recovery procedure: see
+# docs/runbook.md ("Restore the forward archives").
+#
+# Secrets:
+#   ADMIN_API_TOKEN    must match the Render service's env var (endpoint 404s
+#                      otherwise) — already used by matchup-capture.yml.
+#   LEDGER_DEPLOY_KEY  SSH private key whose public half is a write-enabled
+#                      deploy key on josh-silverman/pinpoint-ledger.
+
+on:
+  schedule:
+    - cron: "30 7 * * *" # 07:30 UTC nightly — after US play and the keep-warm window
+  workflow_dispatch: {}
+  workflow_call: {}
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch archive export
+        run: |
+          # --retry covers the Render free-tier cold start (~40s) and blips.
+          curl -fsS --max-time 120 --retry 3 --retry-delay 20 --retry-all-errors \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            -o export.json \
+            https://pga-analytics-api.onrender.com/api/v1/analytics/archive/export
+          # Sanity-check the dump before it can clobber the ledger copy. Log
+          # counts only — the content is DataGolf-derived and these logs are
+          # public.
+          jq -e '.schema_version == 1' export.json > /dev/null
+          echo "boards: $(jq '.boards | length' export.json)  matchups: $(jq '.matchups | length' export.json)"
+
+      - name: Commit to the private ledger repo
+        env:
+          LEDGER_DEPLOY_KEY: ${{ secrets.LEDGER_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$LEDGER_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone --depth 1 git@github.com:josh-silverman/pinpoint-ledger.git ledger
+          mkdir -p ledger/golf-analytics
+          # jq -S: pretty-printed with sorted keys, so ledger diffs are readable
+          # and formatting can never masquerade as a content change.
+          jq -S . export.json > ledger/golf-analytics/archive-export.json
+          cd ledger
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Archive unchanged since last export — nothing to commit."
+            exit 0
+          fi
+          git config user.name "archive-export workflow"
+          git config user.email "actions@github.com"
+          git add golf-analytics/archive-export.json
+          git commit -m "archive export $(date -u +%Y-%m-%dT%H:%M)Z"
+          git push

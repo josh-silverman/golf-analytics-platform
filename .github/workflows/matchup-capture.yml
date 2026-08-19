@@ -36,3 +36,11 @@ jobs:
             -X POST \
             -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
             https://pga-analytics-api.onrender.com/api/v1/analytics/matchups/capture
+
+  # Back up the fresh capture to the private ledger immediately — the free
+  # Key Value store it lands in has no persistence, so waiting for the
+  # nightly export would leave the new snapshot exposed for up to a day.
+  export:
+    needs: capture
+    uses: ./.github/workflows/archive-export.yml
+    secrets: inherit

@@ -359,6 +359,34 @@ DataGolf does not publish hard rate limits but recommends caching aggressively.
 
 If you hit limits, increase TTLs in `app/providers/caching.py → _TTL`.
 
+### Restore the forward archives after a Key Value wipe
+
+The board and matchup archives live in the Render Key Value instance. If
+that instance loses its data (free plans have no persistence; paid plans
+can still be reset), the record is restored from the private ledger repo:
+
+```bash
+# 1. Grab the last committed dump (private repo — DataGolf ToS: never public).
+git clone git@github.com:josh-silverman/pinpoint-ledger.git
+
+# 2. POST it back. Idempotent and first-write-wins: an import only fills
+#    gaps, it can never overwrite a snapshot the live store still holds.
+curl -fsS -X POST \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data @pinpoint-ledger/golf-analytics/archive-export.json \
+  https://pga-analytics-api.onrender.com/api/v1/analytics/archive/import
+
+# 3. Confirm: boards_stored + boards_skipped should equal the dump's board
+#    count, and /analytics/track-record/forward should grade the same
+#    events as before the wipe.
+```
+
+Exports are written by `.github/workflows/archive-export.yml` (nightly +
+after every scheduled capture + manual dispatch). If the wipe happened
+between a capture and its export, that snapshot is gone; everything up to
+the last commit in `pinpoint-ledger` comes back.
+
 ---
 
 ## 10. Cost estimate
