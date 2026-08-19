@@ -15,6 +15,8 @@ from app.api.v1.deps import (
     get_prediction_service,
 )
 from app.api.v1.schemas import (
+    ArchiveExportPayload,
+    ArchiveImportPayload,
     CalibrationReportPayload,
     ForwardBackfillEventPayload,
     ForwardBackfillPayload,
@@ -34,6 +36,7 @@ from app.ml.calibration import CalibratedOutcomeModel, ReliabilityBin
 from app.ml.registry import ModelRegistry  # noqa: TC001 — FastAPI resolves at runtime
 from app.providers.base import DataProvider  # noqa: TC001 — FastAPI DI
 from app.providers.factory import get_data_provider
+from app.services.archive_export import export_archives, import_archives
 from app.services.board_archive import (  # noqa: TC001
     BoardArchive,
     snapshot_from_predictions,
@@ -339,6 +342,67 @@ async def get_matchup_line_record(
             )
             for e in record.events
         ],
+    )
+
+
+@router.get("/archive/export")
+async def export_archive(
+    board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+) -> ArchiveExportPayload:
+    """Dump both forward archives (board + matchup snapshots) as one document.
+
+    The production archives live in a Key Value instance with no persistence,
+    so this is the ledger's survival mechanism: a scheduled job fetches this
+    dump and commits it to a **private** repository (the content is
+    DataGolf-derived — personal use only, never the public repo). Output is
+    deterministic for an unchanged archive, so that job can skip empty
+    commits, and the resulting git history independently witnesses that each
+    prediction existed before its event.
+
+    Admin-gated like the backfill: requires ``X-Admin-Token`` matching
+    ``settings.admin_api_token``; 404 when the secret is unset.
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    doc = await export_archives(boards=board_archive, matchups=matchup_archive)
+    return ArchiveExportPayload.model_validate(doc)
+
+
+@router.post("/archive/import")
+async def import_archive(
+    payload: ArchiveExportPayload,
+    board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+) -> ArchiveImportPayload:
+    """Restore both forward archives from an export dump.
+
+    The disaster-recovery half of ``/archive/export``: after a Key Value
+    wipe, POST the last committed dump and the record is back. Idempotent
+    and safe against races by construction — snapshots are written through
+    the archives' first-write-wins ``persist``, so an import can only fill
+    gaps, never overwrite a snapshot the live store still holds.
+
+    Admin-gated identically to the export.
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    result = await import_archives(
+        payload.model_dump(), boards=board_archive, matchups=matchup_archive
+    )
+    return ArchiveImportPayload(
+        boards_stored=result.boards_stored,
+        boards_skipped=result.boards_skipped,
+        boards_errors=result.boards_errors,
+        matchups_stored=result.matchups_stored,
+        matchups_skipped=result.matchups_skipped,
+        matchups_errors=result.matchups_errors,
     )
 
 
