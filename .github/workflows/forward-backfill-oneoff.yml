@@ -1,0 +1,31 @@
+name: One-off forward-record backfill
+
+# TEMPORARY — reconstructs the recent completed out-of-sample events lost in
+# the Key Value wipe (9 candidates as of 2026-08-20, from the John Deere
+# Classic through the FedEx St. Jude Championship). The two surviving July
+# live captures were imported first and separately; the A2 grader dedup is
+# deployed, so the reconstructions the backfill also produces for those two
+# events are stored (per-version policy) but not double-counted.
+#
+# Manual dispatch only. Delete after the recovery is confirmed — archive
+# writes stay deliberate, human-triggered acts.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /analytics/track-record/forward/backfill
+        run: |
+          # Long timeout: the backfill rebuilds a full board per event (field
+          # extraction + DataGolf archive reads) for ~9 events.
+          curl -fsS --max-time 580 --retry 2 --retry-delay 30 --retry-all-errors \
+            -X POST \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            https://pga-analytics-api.onrender.com/api/v1/analytics/track-record/forward/backfill \
+            | tee backfill-result.json
+          echo
+          echo "--- backfill result ---"
+          cat backfill-result.json
