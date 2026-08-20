@@ -1,0 +1,113 @@
+name: Settle and grade completed events
+
+# Monday pass over the weekend's finished events: pin their results
+# immutably (docs/ledger.md §2.4) and regrade the forward record. Settling
+# already happens as a side effect of any request to /track-record/forward,
+# so this job does not add capability — it makes the timing deterministic,
+# the same reason scheduled capture exists, instead of depending on whoever
+# loads the leaderboard first after an event ends.
+#
+# Idempotent: settlements are first-write-wins, so a second run for the same
+# event pins nothing. The 20:00 retry exists for the case where the provider
+# had not yet marked Sunday's event completed at 12:00.
+#
+# NOTE ON THE FORWARD RECORD "CACHE": there isn't one server-side. Unlike
+# /track-record (Redis, 7-day TTL), /track-record/forward is recomputed on
+# every request, so nothing needs invalidating here. What this job actually
+# refreshes is the settlement archive.
+#
+# TIMEOUT. The run can exceed the client timeout, and that is tolerated
+# rather than prevented: settlement cost is proportional to the number of
+# *newly* completed events (one provider field read each), because an event
+# that already has a settlement is graded without touching the provider at
+# all. A normal Monday is one event. Settlements are persisted per event
+# inside the grading loop, so even a run cut off client-side leaves durable
+# partial progress that the retry completes. The curl below therefore does
+# not gate success; the verify step reads the record instead.
+#
+# VERIFY AGAINST THE RECORD, NOT THE RESPONSE. On 2026-08-20 the recovery
+# backfill ran ~14 minutes, timed out client-side, and its retry reported
+# {"captured": 0, "skipped": 9} while 7 boards had in fact just persisted.
+# The same failure mode applies here, so success is decided by reading
+# archive-inspect and the forward record afterwards.
+#
+# Requires the ADMIN_API_TOKEN repository secret to match the Render env var.
+
+on:
+  schedule:
+    - cron: "0 12 * * 1" # Mon 12:00 UTC (~08:00 ET), well after Sunday's finish
+    - cron: "0 20 * * 1" # Mon 20:00 UTC retry, if the provider was slow to mark it completed
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /analytics/track-record/settle
+        run: |
+          set -uo pipefail
+          API=https://pga-analytics-api.onrender.com/api/v1
+          # Deliberately not gating on this call: a client-side timeout does
+          # not mean the server stopped, and the verify step below is the
+          # real check. `|| true` keeps a timeout from masking the record.
+          curl -fsS --max-time 580 --retry 2 --retry-delay 30 --retry-all-errors \
+            -X POST -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            "$API/track-record/settle" -o settle.json || true
+          if [ -s settle.json ]; then
+            echo "--- settle response (a report, not proof) ---"
+            jq . settle.json
+          else
+            echo "Settle call returned nothing (timeout or error). The verify step decides."
+          fi
+
+      - name: Verify against the record
+        run: |
+          set -euo pipefail
+          API=https://pga-analytics-api.onrender.com/api/v1
+          fetch() {
+            curl -fsS --max-time 300 --retry 3 --retry-delay 20 --retry-all-errors \
+              -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" "$1"
+          }
+
+          fetch "$API/analytics/archive/inspect" > inspect.json
+          fetch "$API/analytics/track-record/forward" > forward.json
+
+          settlements=$(jq -r '.settlements' inspect.json)
+          boards=$(jq -r '.boards' inspect.json)
+          available=$(jq -r '.available' forward.json)
+          graded=$(jq -r '.events // 0' forward.json)
+          captured=$(jq -r '.events_captured // 0' forward.json)
+          backfilled=$(jq -r '.events_backfilled // 0' forward.json)
+
+          echo "--- record state ---"
+          echo "  boards archived     : $boards"
+          echo "  settlements pinned  : $settlements"
+          echo "  events graded       : $graded (captured $captured, backfilled $backfilled)"
+          # Event names and dates only; no probabilities, so this is safe in a
+          # public log.
+          jq -r '.settlement_records[] | "    \(.tournament_start_date)  \(.tournament_name): \(.players) players, settled \(.settled_at[0:10])"' inspect.json
+
+          if [ "$available" != "true" ]; then
+            echo "::error::Forward record reports available=false. Grading is broken or the archive is empty."
+            exit 1
+          fi
+          # Every graded event must have pinned results. Fewer settlements than
+          # graded events means grading ran without pinning, which breaks the
+          # guarantee that a provider revision cannot rewrite history (§2.4).
+          if [ "$settlements" -lt "$graded" ]; then
+            echo "::error::$settlements settlement(s) for $graded graded event(s): an event was graded without pinning its results."
+            exit 1
+          fi
+          if [ "$settlements" -gt "$graded" ]; then
+            echo "::warning::$settlements settlement(s) but only $graded graded event(s). Expected when an event settled with no players overlapping its board."
+          fi
+          echo "OK: $graded graded event(s), all with pinned results."
+
+  # Back the new settlements up to the private ledger immediately rather than
+  # waiting for the nightly export, per docs/ledger.md §4.2.
+  export:
+    needs: settle
+    uses: ./.github/workflows/archive-export.yml
+    secrets: inherit

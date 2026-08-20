@@ -149,7 +149,7 @@ D2 (grading commentary) ── after A4/B2
 - **Verify**: dispatch on a week with an upcoming event → snapshot exists
   (visible in export / `last_board_build_at`); dispatch again → no-op.
 
-### B2. Scheduled settle + grade
+### B2. Scheduled settle + grade ✅ (built 2026-08-20; Monday cron, verifies against the record — see docs/ledger.md §2.4)
 - **What**: Monday cron: POST an admin settle endpoint that (a) writes
   settlement records for newly completed events (A3), (b) refreshes the
   cached forward record, (c) fails the workflow loudly on error (GitHub

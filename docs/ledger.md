@@ -156,6 +156,21 @@ event. Settlements travel in the export/import and appear in
 with the old provider-path grading is pinned by
 `test_grading_from_settlement_matches_grading_from_provider`.
 
+**Settling runs on a schedule (B2, built 2026-08-20).**
+`.github/workflows/settle-and-grade.yml` runs Monday 12:00 UTC with a
+20:00 UTC retry, calling `POST /analytics/track-record/settle`. That
+endpoint adds no capability, since any request to `/track-record/forward`
+already pins missing settlements; it makes the timing deterministic and
+reports which events were newly pinned. Cost is proportional to *newly*
+completed events (one provider field read each), because an event that
+already has a settlement is graded without touching the provider, and
+settlements persist per event inside the grading loop, so a run cut off
+by a client timeout leaves durable partial progress for the retry to
+finish. The job decides success by reading `archive-inspect` and the
+forward record afterwards rather than by trusting the settle response
+(§3.3), and fails when the forward record is unavailable or when graded
+events outnumber pinned settlements.
+
 **Initial pinning was deliberate, not accidental.** The 9 events graded
 before A3 existed had no settlement records, so the first grading run
 after the deploy pinned the provider's *current* view as truth for events
@@ -381,7 +396,7 @@ single-purpose workflow with one narrow endpoint.
 
 What it can reach is exactly the `operation` dropdown:
 `backfill-dry-run`, `backfill`, `archive-inspect`, `archive-import`,
-`matchup-capture`, `capture-upcoming`. The endpoint path is never free text, so a typo cannot
+`matchup-capture`, `capture-upcoming`, `settle`. The endpoint path is never free text, so a typo cannot
 send a request somewhere unintended.
 
 What it cannot reach, and the rule for adding to it: `/archive/export` is
@@ -479,7 +494,6 @@ Do not assume these exist. Roadmap detail in `docs/plans/01-roadmap.md`.
 | A1 git SHA provenance | Not built. Neither `ModelVersion` nor `BoardSnapshot` records the code revision. |
 | A4 named baselines | Not built. The only baseline is the field base rate. No DataGolf-raw column, no closing-line column. |
 | A5 closing-line capture | Not built. `get_outright_odds` exists on the provider; nothing captures it. |
-| B2 scheduled settle and grade | Not built. |
 | D1 integrity checker | Not built. Nothing currently diffs production against the ledger. |
 
 One more standing caveat: under Path A, roughly 95% of a covered field is
