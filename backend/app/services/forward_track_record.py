@@ -60,10 +60,17 @@ class ForwardTrackRecord:
     events_regime_unknown: int = 0
     # Provenance split of the graded events: a live pre-event capture is
     # primary evidence; a backfill is a post-hoc reconstruction by whatever
-    # code was current when it ran. Pooled in the aggregate, but reported so
-    # the record never silently passes one off as the other.
+    # code was current when it ran. Pooled in ``markets``, but also aggregated
+    # separately below so a surface can show the two classes of evidence side
+    # by side instead of passing a pooled figure off as a live record.
     events_captured: int = 0
     events_backfilled: int = 0
+    players_captured: int = 0
+    players_backfilled: int = 0
+    # Same per-market aggregation as ``markets``, restricted to one provenance.
+    # CIs are None until a pool has enough events to bootstrap.
+    markets_captured: tuple[MarketSkill, ...] = ()
+    markets_backfilled: tuple[MarketSkill, ...] = ()
 
 
 # Heuristic: block-bootstrap CIs over events stabilise for the strong markets
@@ -142,9 +149,13 @@ async def compute_forward_track_record(
             canonical[snap.tournament_id] = snap
     snapshots = list(canonical.values())
 
-    # Per-market, grouped by event (the block-bootstrap unit).
-    y_by_event: dict[str, list[list[float]]] = {m: [] for m in _MARKETS}
-    p_by_event: dict[str, list[list[float]]] = {m: [] for m in _MARKETS}
+    # Per-market, grouped by event (the block-bootstrap unit) — one pool for
+    # the combined record and one per provenance, so captured and backfilled
+    # can be reported as separate aggregates rather than only as counts.
+    pools: dict[str, tuple[dict[str, list[list[float]]], dict[str, list[list[float]]]]] = {
+        key: ({m: [] for m in _MARKETS}, {m: [] for m in _MARKETS})
+        for key in ("all", "captured", "backfilled")
+    }
     events = 0
     players = 0
     path_a_events = 0
@@ -152,6 +163,8 @@ async def compute_forward_track_record(
     unknown_regime_events = 0
     captured_events = 0
     backfilled_events = 0
+    captured_players = 0
+    backfilled_players = 0
 
     for snap in snapshots:
         tournament = await catalog.get_tournament(snap.tournament_id)
@@ -183,8 +196,10 @@ async def compute_forward_track_record(
         players += graded_here
         if snap.source == "captured":
             captured_events += 1
+            captured_players += graded_here
         else:
             backfilled_events += 1
+            backfilled_players += graded_here
         share = snap.dg_direct_share
         if share is None:
             unknown_regime_events += 1
@@ -192,17 +207,41 @@ async def compute_forward_track_record(
             path_a_events += 1
         else:
             cold_start_events += 1
+        provenance = "captured" if snap.source == "captured" else "backfilled"
         for m in gradeable:
             # An event contributes to a market's bootstrap only if it produced
             # rows for it, so a no-cut event is absent from the make-cut
             # resampling pool rather than present as a zero-variance block.
             if ev_y[m]:
-                y_by_event[m].append(ev_y[m])
-                p_by_event[m].append(ev_p[m])
+                for key in ("all", provenance):
+                    pools[key][0][m].append(ev_y[m])
+                    pools[key][1][m].append(ev_p[m])
 
     if events == 0:
         return None
 
+    return ForwardTrackRecord(
+        events=events,
+        players_graded=players,
+        markets=_aggregate_markets(*pools["all"]),
+        events_to_meaningful=max(0, _MEANINGFUL_EVENTS - events),
+        events_path_a=path_a_events,
+        events_cold_start_only=cold_start_events,
+        events_regime_unknown=unknown_regime_events,
+        events_captured=captured_events,
+        events_backfilled=backfilled_events,
+        players_captured=captured_players,
+        players_backfilled=backfilled_players,
+        markets_captured=_aggregate_markets(*pools["captured"]),
+        markets_backfilled=_aggregate_markets(*pools["backfilled"]),
+    )
+
+
+def _aggregate_markets(
+    y_by_event: dict[str, list[list[float]]],
+    p_by_event: dict[str, list[list[float]]],
+) -> tuple[MarketSkill, ...]:
+    """Per-market Brier skill + block-bootstrap CI over one pool of events."""
     markets: list[MarketSkill] = []
     for m in _MARKETS:
         y_flat = [v for ev in y_by_event[m] for v in ev]
@@ -220,18 +259,7 @@ async def compute_forward_track_record(
             ci=0.90,
         )
         markets.append(MarketSkill(m, len(y_flat), base, brier, skill, lo, hi))
-
-    return ForwardTrackRecord(
-        events=events,
-        players_graded=players,
-        markets=tuple(markets),
-        events_to_meaningful=max(0, _MEANINGFUL_EVENTS - events),
-        events_path_a=path_a_events,
-        events_cold_start_only=cold_start_events,
-        events_regime_unknown=unknown_regime_events,
-        events_captured=captured_events,
-        events_backfilled=backfilled_events,
-    )
+    return tuple(markets)
 
 
 def _np(values: list[float]) -> NDArray[np.float64]:

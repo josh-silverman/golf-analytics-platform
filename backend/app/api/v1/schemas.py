@@ -130,6 +130,14 @@ class ForwardTrackRecordPayload(BaseModel):
     # preferred), so these two always sum to ``events``.
     events_captured: int = 0
     events_backfilled: int = 0
+    players_captured: int = 0
+    players_backfilled: int = 0
+    # Per-market aggregates restricted to one provenance, same shape as
+    # ``markets`` (which pools both). Lets a surface show captured and
+    # backfilled side by side instead of presenting the pooled figure as a
+    # live record. CIs are null until a pool has enough events to bootstrap.
+    markets_captured: list[ForwardMarketSkillPayload] = []
+    markets_backfilled: list[ForwardMarketSkillPayload] = []
 
 
 class ForwardBackfillEventPayload(BaseModel):

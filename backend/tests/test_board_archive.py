@@ -434,6 +434,43 @@ async def test_backfill_stands_in_when_no_live_capture_exists(tmp_path) -> None:
     assert result.events_backfilled == 1
 
 
+async def test_per_provenance_market_aggregates(tmp_path) -> None:
+    """Captured and backfilled events aggregate separately as well as pooled,
+    so a surface can show the two classes of evidence side by side."""
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(tournament_id=1, source="captured", outcomes=_THREE))
+    await archive.persist(_snapshot(tournament_id=2, source="backfilled", outcomes=_THREE))
+    catalog = _GradeCatalog(
+        start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED, ids=(1, 2)
+    )
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.events == 2
+    assert result.players_captured == 3
+    assert result.players_backfilled == 3
+    # Each provenance pool aggregates its own single event.
+    cap_mc = next(m for m in result.markets_captured if m.market == "make_cut_prob")
+    back_mc = next(m for m in result.markets_backfilled if m.market == "make_cut_prob")
+    assert cap_mc.n == 3
+    assert back_mc.n == 3
+    # Identical boards on identical fields grade identically in both pools,
+    # and the pooled aggregate covers the union.
+    assert cap_mc.brier == pytest.approx(back_mc.brier)
+    pooled_mc = next(m for m in result.markets if m.market == "make_cut_prob")
+    assert pooled_mc.n == 6
+
+
+async def test_single_provenance_record_leaves_other_pool_empty(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(source="captured", outcomes=_THREE))
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert len(result.markets_captured) > 0
+    assert result.markets_backfilled == ()
+    assert result.players_backfilled == 0
+
+
 # ---------------------------------------------------------------------------
 # No-cut events must not be graded on the make-cut market
 #

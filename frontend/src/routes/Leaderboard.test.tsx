@@ -130,6 +130,56 @@ const TRACK_RECORD_MIXED_FIXTURE = {
   ],
 }
 
+// Mirrors the live record as of 2026-08-20: 2 live captures + 7 backfilled
+// reconstructions, with per-provenance market aggregates. The captured pool
+// has too few events for CIs (null); the backfilled pool clears on make-cut.
+const TRACK_RECORD_SPLIT_FIXTURE: ForwardTrackRecord = {
+  available: true,
+  events: 9,
+  players_graded: 1239,
+  events_to_meaningful: 11,
+  events_path_a: 7,
+  events_cold_start_only: 0,
+  events_regime_unknown: 2,
+  events_captured: 2,
+  events_backfilled: 7,
+  players_captured: 303,
+  players_backfilled: 936,
+  markets: [
+    {
+      market: 'make_cut_prob',
+      n: 1171,
+      base_rate: 0.51,
+      brier: 0.2235,
+      brier_skill: 0.106,
+      ci_lower: 0.083,
+      ci_upper: 0.126,
+    },
+  ],
+  markets_captured: [
+    {
+      market: 'make_cut_prob',
+      n: 300,
+      base_rate: 0.503,
+      brier: 0.2237,
+      brier_skill: 0.109,
+      ci_lower: null,
+      ci_upper: null,
+    },
+  ],
+  markets_backfilled: [
+    {
+      market: 'make_cut_prob',
+      n: 871,
+      base_rate: 0.512,
+      brier: 0.2234,
+      brier_skill: 0.105,
+      ci_lower: 0.08,
+      ci_upper: 0.13,
+    },
+  ],
+}
+
 function mockFetch({
   tournament = TOURNAMENT_FIXTURE as typeof TOURNAMENT_FIXTURE | null,
   predictions = PREDICTIONS_FIXTURE as typeof PREDICTIONS_FIXTURE | null,
@@ -209,19 +259,53 @@ describe('Leaderboard', () => {
     })
   })
 
-  it('renders provisional markets when the CI is null instead of hiding the widget', async () => {
+  it('renders too-early markets when the CI is null instead of hiding the widget', async () => {
     mockFetch({ trackRecord: TRACK_RECORD_PROVISIONAL_FIXTURE })
     renderLeaderboard(makeClient())
     await waitFor(() => {
       expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
     })
     // Both markets in the fixture have ci_lower: null, so both should render
-    // as provisional rather than being filtered out.
-    expect(screen.getAllByText('(provisional)')).toHaveLength(2)
-    expect(screen.getByText(/~18 more to a stable interval/i)).toBeInTheDocument()
-    // Neither market has cleared its CI yet, so the one-line summary must not
-    // claim confirmed skill on anything.
-    expect(screen.getByText(/Too early to call/i)).toBeInTheDocument()
+    // as "too early to say" rather than being filtered out.
+    expect(screen.getAllByText('(too early to say)')).toHaveLength(2)
+    expect(
+      screen.getByText(/About 18 more completed events before the combined numbers settle/i),
+    ).toBeInTheDocument()
+    // Neither market clears the baseline yet, so the summary must not claim
+    // the served board is ahead on anything.
+    expect(
+      screen.getByText(/Too early to say whether the served board beats the field-average/i),
+    ).toBeInTheDocument()
+  })
+
+  it('splits the record into live-capture and reconstructed blocks with their own n', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_SPLIT_FIXTURE })
+    renderLeaderboard(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+    })
+    // The summary leads with what the record is, then what it shows.
+    expect(
+      screen.getByText(/9 completed events graded: 2 recorded live before play, 7 reconstructed/i),
+    ).toBeInTheDocument()
+    // Separate blocks, each with its own event and player count. The captured
+    // n of 2 must be visible, not pooled away.
+    expect(screen.getByText(/Predicted live · 2 events, 303 players/i)).toBeInTheDocument()
+    expect(screen.getByText(/Reconstructed · 7 events, 936 players/i)).toBeInTheDocument()
+    // The reconstruction disclaimer states what backfills are.
+    expect(
+      screen.getByText(/not a record of what the site showed those weeks/i),
+    ).toBeInTheDocument()
+    // The baseline is named where the numbers are.
+    expect(
+      screen.getByText(/predicting the field average for every player/i),
+    ).toBeInTheDocument()
+    // The settling footer says which pool each estimate applies to.
+    expect(
+      screen.getByText(
+        /About 11 more completed events before the combined numbers settle; the live record needs about 18 more/i,
+      ),
+    ).toBeInTheDocument()
   })
 
   it('flags when the graded record mixes serving regimes', async () => {
@@ -260,17 +344,20 @@ describe('Leaderboard', () => {
     expect(screen.queryByText(/serving configuration/i)).not.toBeInTheDocument()
   })
 
-  it('summarizes confirmed vs. still-accumulating markets in plain language', async () => {
+  it('summarizes which markets clear the baseline in plain language', async () => {
     mockFetch({ trackRecord: TRACK_RECORD_MIXED_FIXTURE })
     renderLeaderboard(makeClient())
     await waitFor(() => {
       expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
     })
-    // make-cut and top-20 have ci_lower > 0 (confirmed); win does not.
+    // make-cut and top-20 have ci_lower > 0; win does not. The claim is about
+    // the served board, named baseline, not "the model".
     expect(
-      screen.getByText(/Model has beaten the base rate on Make cut and Top 20/i),
+      screen.getByText(
+        /The served board is ahead of the field-average baseline on Make cut and Top 20/i,
+      ),
     ).toBeInTheDocument()
-    expect(screen.getByText(/Win hasn't accumulated enough samples yet to call/i)).toBeInTheDocument()
+    expect(screen.getByText('(too early to say)')).toBeInTheDocument()
   })
 
   it('shows an empty-field message instead of a blank table when outcomes is empty', async () => {

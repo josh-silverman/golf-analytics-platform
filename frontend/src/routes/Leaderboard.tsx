@@ -46,42 +46,120 @@ const MARKET_LABELS: Record<string, string> = {
 // top-20 carry the most genuine backtest skill, win/top-5 the least.
 const MARKET_ORDER = ['make_cut_prob', 'top_20_prob', 'top_10_prob', 'top_5_prob', 'win_prob']
 
-// A market is "confirmed" once its 90% block-bootstrap CI clears zero — the
-// same bar the backend's own forward-record grader uses to call it skilled.
-// Below that (or before there are enough events to bootstrap a CI at all,
-// when ci_lower is null) the point estimate is shown but marked provisional,
-// rather than hidden — with 2-3 events so far, showing nothing looks like the
-// feature is broken instead of like the record is still accumulating.
-type DisplayMarketSkill = ForwardMarketSkill & { confirmed: boolean }
+// A market "clears the baseline" once its lead over the field-average
+// baseline is bigger than the event-to-event swing in the record (the 90%
+// range across events stays above zero) — the same bar the backend's own
+// forward-record grader uses. Below that, or before there are enough events
+// to measure the swing at all (ci_lower null), the point estimate is shown
+// but labeled "too early to say" rather than hidden — with a handful of
+// events, showing nothing looks like the feature is broken instead of like
+// the record is still accumulating. Deliberately not called "confirmed": a
+// 90% interval clearing zero is a threshold, and five correlated markets on
+// the same players make it looser than it sounds.
+type DisplayMarketSkill = ForwardMarketSkill & { clearsBaseline: boolean }
 
 function orderedSkillMarkets(markets: ForwardMarketSkill[]): DisplayMarketSkill[] {
   return [...markets]
     .sort((a, b) => MARKET_ORDER.indexOf(a.market) - MARKET_ORDER.indexOf(b.market))
-    .map((m) => ({ ...m, confirmed: m.ci_lower != null && m.ci_lower > 0 }))
+    .map((m) => ({ ...m, clearsBaseline: m.ci_lower != null && m.ci_lower > 0 }))
 }
 
-// A one-line plain-language summary above the detailed per-market breakdown.
-// Only claims what the data supports: "beaten the base rate" is exactly the
-// ``confirmed`` bar above (CI lower clears zero), and markets that haven't
-// cleared it are named as still-accumulating rather than as failing.
-function summarizeTrackRecord(markets: DisplayMarketSkill[], events: number): string {
-  const eventWord = `${events} event${events === 1 ? '' : 's'}`
-  const confirmed = markets.filter((m) => m.confirmed).map((m) => MARKET_LABELS[m.market])
-  const provisional = markets.filter((m) => !m.confirmed).map((m) => MARKET_LABELS[m.market])
+const CLEARS_TOOLTIP =
+  'Ahead of the field-average baseline by more than the week-to-week swing in this record: the 90% range across events stays above zero.'
+const TOO_EARLY_TOOLTIP =
+  'The lead over the field-average baseline is smaller than the week-to-week swing so far, or there are too few events to measure the swing.'
 
-  if (confirmed.length === 0) {
-    return `Too early to call: ${eventWord} isn't enough yet to confirm skill on any market.`
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+// One-line summary. Leads with what the record is (how many events, how they
+// were obtained), then what it shows. "The served board" rather than "the
+// model": under Path A most covered players are served DataGolf's own
+// probabilities, so these are not the in-house model's numbers.
+function summarizeTrackRecord(tr: ForwardTrackRecord, markets: DisplayMarketSkill[]): string {
+  const captured = tr.events_captured ?? 0
+  const backfilled = tr.events_backfilled ?? 0
+  const eventWord = `${tr.events} completed event${tr.events === 1 ? '' : 's'}`
+  const opening =
+    captured + backfilled === tr.events && tr.events > 0
+      ? `${eventWord} graded: ${captured} recorded live before play, ${backfilled} reconstructed afterwards.`
+      : `${eventWord} graded.`
+  const clears = markets.filter((m) => m.clearsBaseline).map((m) => MARKET_LABELS[m.market])
+  if (clears.length === 0) {
+    return `${opening} Too early to say whether the served board beats the field-average baseline on any market.`
   }
-  const beat = confirmed.join(' and ')
-  if (provisional.length === 0) {
-    return `Model has beaten the base rate on ${beat} over the last ${eventWord}.`
+  return `${opening} The served board is ahead of the field-average baseline on ${joinNames(clears)}.`
+}
+
+// "About N more events" only means something if the reader knows which pool
+// it describes: the combined record settles far sooner than the live-capture
+// record, which is rebuilding from two events.
+function settlingFooter(tr: ForwardTrackRecord): string | null {
+  const target = tr.events + tr.events_to_meaningful
+  const captured = tr.events_captured ?? 0
+  const liveMore = Math.max(0, target - captured)
+  if (tr.events_to_meaningful <= 0) return null
+  if (captured > 0 && liveMore > tr.events_to_meaningful) {
+    return (
+      `About ${tr.events_to_meaningful} more completed events before the combined numbers settle; ` +
+      `the live record needs about ${liveMore} more.`
+    )
   }
-  const pending = provisional.join(' and ')
-  const verb = provisional.length === 1 ? "hasn't" : "haven't"
-  return (
-    `Model has beaten the base rate on ${beat} over the last ${eventWord}; ` +
-    `${pending} ${verb} accumulated enough samples yet to call.`
-  )
+  return `About ${tr.events_to_meaningful} more completed events before the combined numbers settle.`
+}
+
+// The two provenances render as separate blocks with their own n. Falls back
+// to a single pooled block against an older backend that doesn't report the
+// split, so a deploy-order skew never blanks the widget.
+type ProvenanceBlockData = {
+  title: string
+  events: number
+  players: number
+  markets: ForwardMarketSkill[]
+  note: string
+}
+
+function provenanceBlocks(tr: ForwardTrackRecord): ProvenanceBlockData[] {
+  const blocks: ProvenanceBlockData[] = []
+  const captured = tr.markets_captured ?? []
+  const backfilled = tr.markets_backfilled ?? []
+  if (captured.length > 0 && (tr.events_captured ?? 0) > 0) {
+    const events = tr.events_captured ?? 0
+    const allEarly = captured.every((m) => !(m.ci_lower != null && m.ci_lower > 0))
+    blocks.push({
+      title: 'Predicted live',
+      events,
+      players: tr.players_captured ?? 0,
+      markets: captured,
+      note:
+        'Recorded before play began, as the site served them.' +
+        (allEarly
+          ? ` ${events} event${events === 1 ? '' : 's'} is not enough to tell skill from luck; expect these numbers to move.`
+          : ''),
+    })
+  }
+  if (backfilled.length > 0 && (tr.events_backfilled ?? 0) > 0) {
+    blocks.push({
+      title: 'Reconstructed',
+      events: tr.events_backfilled ?? 0,
+      players: tr.players_backfilled ?? 0,
+      markets: backfilled,
+      note:
+        'Rebuilt afterwards from the data available before each event. No result information goes in, but later code produced them, so they are not a record of what the site showed those weeks.',
+    })
+  }
+  if (blocks.length === 0) {
+    blocks.push({
+      title: 'All graded events',
+      events: tr.events,
+      players: tr.players_graded,
+      markets: tr.markets,
+      note: '',
+    })
+  }
+  return blocks
 }
 
 // The record spans the 2026-07-29 Path A fix. Boards served before it
@@ -381,46 +459,49 @@ export function Leaderboard() {
 
         {predictions && (
           <p className="text-xs italic text-fg-tertiary">
-            Pre-event predictions — not updated during play.
+            Pre-event predictions, not updated during play.
           </p>
         )}
 
         {trackRecord?.available && trackRecord.markets.length > 0 && (
-          <>
+          <div className="space-y-1">
             <p className="text-xs text-fg-secondary">
-              {summarizeTrackRecord(orderedSkillMarkets(trackRecord.markets), trackRecord.events)}
+              <span className="font-medium">Forward out-of-sample track record.</span>{' '}
+              {summarizeTrackRecord(trackRecord, orderedSkillMarkets(trackRecord.markets))}
             </p>
+            <p className="text-xs text-fg-tertiary">
+              Every figure below compares the served board against one reference: predicting the
+              field average for every player.
+            </p>
+            {provenanceBlocks(trackRecord).map((b) => (
+              <div key={b.title} className="text-xs text-fg-tertiary">
+                <span className="font-medium text-fg-secondary">
+                  {b.title} · {b.events} event{b.events === 1 ? '' : 's'}, {b.players} players
+                  graded:
+                </span>{' '}
+                {orderedSkillMarkets(b.markets).map((m, i) => (
+                  <span key={m.market}>
+                    {i > 0 && '· '}
+                    {MARKET_LABELS[m.market]}{' '}
+                    <span
+                      className={`font-mono ${m.clearsBaseline ? 'text-accent' : 'text-fg-tertiary'}`}
+                      title={m.clearsBaseline ? CLEARS_TOOLTIP : TOO_EARLY_TOOLTIP}
+                    >
+                      {formatSkill(m.brier_skill)}
+                    </span>
+                    {!m.clearsBaseline && <span className="italic"> (too early to say)</span>}{' '}
+                  </span>
+                ))}
+                {b.note && <span className="italic">{b.note}</span>}
+              </div>
+            ))}
             {regimeCaveat(trackRecord) && (
               <p className="text-xs italic text-fg-tertiary">{regimeCaveat(trackRecord)}</p>
             )}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-tertiary">
-              <span className="font-medium text-fg-secondary">
-                Forward out-of-sample track record ({trackRecord.events} event
-                {trackRecord.events === 1 ? '' : 's'} since training, {trackRecord.players_graded}{' '}
-                players graded
-                {trackRecord.events_to_meaningful > 0 &&
-                  ` · ~${trackRecord.events_to_meaningful} more to a stable interval`}
-                ):
-              </span>
-              {orderedSkillMarkets(trackRecord.markets).map((m, i) => (
-                <span key={m.market}>
-                  {i > 0 && '· '}
-                  {MARKET_LABELS[m.market]}{' '}
-                  <span
-                    className={`font-mono ${m.confirmed ? 'text-accent' : 'text-fg-tertiary'}`}
-                    title={
-                      m.confirmed
-                        ? 'Skill confirmed — the 90% block-bootstrap CI clears zero.'
-                        : 'Provisional — not enough graded events yet for a confidence interval that clears zero.'
-                    }
-                  >
-                    {formatSkill(m.brier_skill)} skill
-                  </span>
-                  {!m.confirmed && <span className="italic"> (provisional)</span>}
-                </span>
-              ))}
-            </div>
-          </>
+            {settlingFooter(trackRecord) && (
+              <p className="text-xs text-fg-tertiary">{settlingFooter(trackRecord)}</p>
+            )}
+          </div>
         )}
       </header>
 
@@ -429,7 +510,7 @@ export function Leaderboard() {
           <p className="text-fg-secondary">Loading predictions…</p>
           <p className="text-xs text-fg-tertiary">
             The first load after a while warms live tour data from DataGolf and can take a
-            minute — it&rsquo;s fast afterwards.
+            minute. It&rsquo;s fast afterwards.
           </p>
         </div>
       )}
@@ -458,13 +539,13 @@ export function Leaderboard() {
             <p className="font-medium text-fg">How to read this board</p>
             <ul className="mt-1.5 list-disc space-y-1 pl-4 marker:text-fg-tertiary">
               <li>
-                Players are ranked by <span className="text-accent">Top 20</span> — the market where
-                the model is most reliable, together with Make Cut.
+                Players are ranked by <span className="text-accent">Top 20</span>, the market where
+                the board is most reliable, together with Make Cut.
               </li>
               <li>
-                <span className="text-fg">Win</span> is intentionally de-emphasised: the model reads
-                overall contention well but does not reliably single out one winner — weigh a
-                player&rsquo;s chances by Top 10 / Top 20 / Make Cut, not the Win column.
+                <span className="text-fg">Win</span> is intentionally de-emphasised: the board reads
+                overall contention well but does not reliably single out one winner. Weigh a
+                player&rsquo;s chances by Top 10 / Top 20 / Make Cut rather than the Win column.
               </li>
               <li>Click any column header to re-sort, or a player to view their strokes-gained trends.</li>
             </ul>
