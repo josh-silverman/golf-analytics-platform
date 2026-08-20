@@ -125,6 +125,11 @@ class ForwardTrackRecordPayload(BaseModel):
     events_path_a: int = 0
     events_cold_start_only: int = 0
     events_regime_unknown: int = 0
+    # Provenance split: live pre-event captures vs post-hoc backfill
+    # reconstructions. One graded snapshot per tournament (live capture
+    # preferred), so these two always sum to ``events``.
+    events_captured: int = 0
+    events_backfilled: int = 0
 
 
 class ForwardBackfillEventPayload(BaseModel):

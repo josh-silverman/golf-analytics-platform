@@ -59,6 +59,7 @@ def _snapshot(
     outcomes: tuple[BoardSnapshotOutcome, ...] = (),
     source: str = "captured",
     dg_direct_count: int | None = None,
+    captured_at: str = "2026-05-31T12:00:00+00:00",
 ) -> BoardSnapshot:
     return BoardSnapshot(
         tournament_id=tournament_id,
@@ -69,7 +70,7 @@ def _snapshot(
         feature_set_hash="deadbeef",
         model_trained_through=trained_through,
         as_of="2026-05-31",
-        captured_at="2026-05-31T12:00:00+00:00",
+        captured_at=captured_at,
         outcomes=outcomes,
         source=source,
         dg_direct_count=dg_direct_count,
@@ -134,21 +135,24 @@ def test_is_out_of_sample_requires_trained_before_event() -> None:
 
 
 class _GradeCatalog:
-    """Catalog stub for grading: one completed tournament + graded field."""
+    """Catalog stub for grading: completed tournament(s) sharing one field.
 
-    def __init__(self, *, start_date: date, status: TournamentStatus, no_cut: bool = False) -> None:
+    ``ids`` lists the tournament ids served (every one identical except the
+    id), so tests can grade several distinct events without a real catalog.
+    """
+
+    def __init__(
+        self,
+        *,
+        start_date: date,
+        status: TournamentStatus,
+        no_cut: bool = False,
+        ids: tuple[int, ...] = (1,),
+    ) -> None:
         self._no_cut = no_cut
-        self._t = Tournament(
-            id=1,
-            course_id=1,
-            name="The Demo",
-            season=2026,
-            start_date=start_date,
-            end_date=start_date,
-            purse=None,
-            field_strength=None,
-            status=status,
-        )
+        self._ids = set(ids)
+        self._start_date = start_date
+        self._status = status
         # Player 10 won (pos 1), 11 made cut (pos 30), 12 missed cut.
         self._field = [
             TournamentEntry(
@@ -181,10 +185,22 @@ class _GradeCatalog:
         ]
 
     async def get_tournament(self, tournament_id: int) -> Tournament | None:
-        return self._t if tournament_id == 1 else None
+        if tournament_id not in self._ids:
+            return None
+        return Tournament(
+            id=tournament_id,
+            course_id=1,
+            name="The Demo",
+            season=2026,
+            start_date=self._start_date,
+            end_date=self._start_date,
+            purse=None,
+            field_strength=None,
+            status=self._status,
+        )
 
     async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
-        if tournament_id != 1:
+        if tournament_id not in self._ids:
             return []
         if not self._no_cut:
             return list(self._field)
@@ -306,19 +322,116 @@ async def test_forward_grader_splits_events_by_serving_regime(tmp_path) -> None:
     )
     # Path A configured but DataGolf contributed nothing → cold-start only.
     await archive.persist(
-        _snapshot(tournament_id=1, version="b", outcomes=_THREE, dg_direct_count=0)
+        _snapshot(tournament_id=2, version="a", outcomes=_THREE, dg_direct_count=0)
     )
     # Captured before coverage was recorded → regime genuinely unknown.
     await archive.persist(
-        _snapshot(tournament_id=1, version="c", outcomes=_THREE, dg_direct_count=None)
+        _snapshot(tournament_id=3, version="a", outcomes=_THREE, dg_direct_count=None)
     )
-    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    catalog = _GradeCatalog(
+        start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED, ids=(1, 2, 3)
+    )
     result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
     assert result is not None
     assert result.events == 3
     assert result.events_path_a == 1
     assert result.events_cold_start_only == 1
     assert result.events_regime_unknown == 1
+
+
+# ---------------------------------------------------------------------------
+# One graded snapshot per tournament
+#
+# Retraining changes the model_version_id, so the archive legitimately holds
+# several snapshots of the same event: a live capture under the old version
+# and a backfill reconstruction under the new one (this happened for real —
+# The Open and Rocket Classic, 2026-08). Grading them all counts the
+# tournament twice. The canonical pick is the earliest live capture; a
+# backfill only stands in when no live capture exists.
+# ---------------------------------------------------------------------------
+
+
+async def test_forward_grader_counts_a_tournament_once_across_model_versions(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(
+        _snapshot(version="path_a@old", source="captured", outcomes=_THREE, dg_direct_count=3)
+    )
+    await archive.persist(
+        _snapshot(version="path_a@new", source="backfilled", outcomes=_THREE, dg_direct_count=0)
+    )
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.events == 1
+    assert result.players_graded == 3  # one board's worth, not two
+    assert result.events_captured == 1
+    assert result.events_backfilled == 0
+    assert result.events_path_a == 1  # the live capture's regime, not the backfill's
+
+
+async def test_live_capture_beats_an_earlier_backfill(tmp_path) -> None:
+    """Primary evidence wins on provenance, not on timestamp."""
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(
+        _snapshot(
+            version="path_a@new",
+            source="backfilled",
+            outcomes=_THREE,
+            dg_direct_count=0,
+            captured_at="2026-05-01T00:00:00+00:00",  # earlier than the live capture
+        )
+    )
+    await archive.persist(
+        _snapshot(
+            version="path_a@old",
+            source="captured",
+            outcomes=_THREE,
+            dg_direct_count=3,
+            captured_at="2026-05-31T12:00:00+00:00",
+        )
+    )
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.events == 1
+    assert result.events_captured == 1
+    assert result.events_path_a == 1  # graded the live capture
+
+
+async def test_earliest_live_capture_wins_within_a_source(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(
+        _snapshot(
+            version="path_a@old",
+            outcomes=_THREE,
+            dg_direct_count=0,
+            captured_at="2026-05-20T00:00:00+00:00",  # first capture
+        )
+    )
+    await archive.persist(
+        _snapshot(
+            version="path_a@new",
+            outcomes=_THREE,
+            dg_direct_count=3,
+            captured_at="2026-05-31T12:00:00+00:00",  # later re-capture after retrain
+        )
+    )
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.events == 1
+    assert result.events_cold_start_only == 1  # the earliest capture's regime
+
+
+async def test_backfill_stands_in_when_no_live_capture_exists(tmp_path) -> None:
+    archive = FileBoardArchive(tmp_path)
+    await archive.persist(_snapshot(source="backfilled", outcomes=_THREE))
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    result = await compute_forward_track_record(archive=archive, catalog=catalog)  # type: ignore[arg-type]
+    assert result is not None
+    assert result.events == 1
+    assert result.events_captured == 0
+    assert result.events_backfilled == 1
 
 
 # ---------------------------------------------------------------------------
