@@ -11,6 +11,7 @@ survived in the live store.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
 
 _EXPORT_URL = "/api/v1/analytics/archive/export"
 _IMPORT_URL = "/api/v1/analytics/archive/import"
+_INSPECT_URL = "/api/v1/analytics/archive/inspect"
 
 
 def _board(tournament_id: int = 1, version: str = "path_a@v2") -> BoardSnapshot:
@@ -213,6 +215,59 @@ def archive_ctx(app: FastAPI, tmp_path, monkeypatch) -> Iterator[TestClient]:
         yield c
     for dep in (get_board_archive, get_matchup_archive):
         app.dependency_overrides.pop(dep, None)
+
+
+async def test_inspect_reports_canonical_and_oos_without_probabilities(
+    archive_ctx: TestClient, app: FastAPI
+) -> None:
+    boards = app.dependency_overrides[get_board_archive]()
+    matchups = app.dependency_overrides[get_matchup_archive]()
+    # Two snapshots of one event (the post-retrain shape) plus one that its
+    # model cannot certify as out-of-sample.
+    await boards.persist(_board(1, version="path_a@old"))
+    await boards.persist(
+        replace(
+            _board(1, version="path_a@new"),
+            source="backfilled",
+            captured_at="2026-05-30T12:00:00+00:00",
+        )
+    )
+    await boards.persist(replace(_board(2), model_trained_through="2026-06-15"))
+    await matchups.persist(_matchup())
+
+    r = archive_ctx.get(_INSPECT_URL, headers={"X-Admin-Token": "secret"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["boards"] == 3
+    assert body["matchups"] == 1
+
+    by_version = {b["model_version_id"]: b for b in body["board_snapshots"]}
+    # The live capture is canonical even though the backfill was written later
+    # and both cover the same tournament.
+    assert by_version["path_a@old"]["canonical"] is True
+    assert by_version["path_a@new"]["canonical"] is False
+    # Trained through 2026-06-15 for an event starting 2026-06-01 → not certifiable.
+    assert by_version["path_a@v2"]["out_of_sample"] is False
+    assert by_version["path_a@old"]["out_of_sample"] is True
+    # Metadata only: counts, never the probabilities themselves.
+    assert by_version["path_a@old"]["outcomes"] == 1
+    assert "win_prob" not in json.dumps(body)
+
+
+async def test_inspect_filters_by_tournament(archive_ctx: TestClient, app: FastAPI) -> None:
+    boards = app.dependency_overrides[get_board_archive]()
+    await boards.persist(_board(1))
+    await boards.persist(_board(2))
+
+    r = archive_ctx.get(f"{_INSPECT_URL}?tournament_id=2", headers={"X-Admin-Token": "secret"})
+    body = r.json()
+    assert body["boards"] == 2  # total is still reported
+    assert [b["tournament_id"] for b in body["board_snapshots"]] == [2]
+
+
+def test_inspect_is_admin_gated(archive_ctx: TestClient) -> None:
+    assert archive_ctx.get(_INSPECT_URL).status_code == 404
+    assert archive_ctx.get(_INSPECT_URL, headers={"X-Admin-Token": "nope"}).status_code == 404
 
 
 def test_endpoints_reject_missing_and_wrong_token(archive_ctx: TestClient) -> None:

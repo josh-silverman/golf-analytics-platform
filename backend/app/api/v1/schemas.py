@@ -141,10 +141,14 @@ class ForwardTrackRecordPayload(BaseModel):
 
 
 class ForwardBackfillEventPayload(BaseModel):
-    """One event whose pre-event board was captured by the backfill run."""
+    """One event the backfill captured, or would capture on a dry run."""
 
     tournament_id: int
     name: str
+    start_date: date | None = None
+    # Dry runs list every candidate; this flags the ones an actual run would
+    # skip because a snapshot for that (tournament, model version) exists.
+    already_captured: bool = False
 
 
 class ForwardBackfillPayload(BaseModel):
@@ -155,12 +159,69 @@ class ForwardBackfillPayload(BaseModel):
     archive — leakage-free) and captures it immutably, so the forward record has
     real data from day one instead of accruing only from the next live event.
     Idempotent: an event already captured is skipped, never overwritten.
+
+    On a dry run nothing is written, ``captured`` is 0, and ``events`` lists
+    every candidate (including already-captured ones, flagged) rather than only
+    what was stored.
     """
 
     examined: int
     captured: int
     skipped: int
     events: list[ForwardBackfillEventPayload] = []
+    dry_run: bool = False
+
+
+class ArchiveBoardSummaryPayload(BaseModel):
+    """One stored board snapshot, without its probabilities.
+
+    Metadata only, deliberately: this is a debugging view, and the numbers it
+    omits are the DataGolf-derived ones that must not end up in workflow logs.
+    """
+
+    tournament_id: int
+    tournament_name: str
+    tournament_start_date: str
+    model_name: str
+    model_version_id: str | None
+    model_trained_through: str | None
+    as_of: str
+    captured_at: str
+    source: str
+    outcomes: int
+    dg_direct_count: int | None
+    # Derived, and the two questions this view exists to answer. ``out_of_sample``
+    # is computed from the snapshot's own dates; ``canonical`` marks the snapshot
+    # the grader would actually score for this tournament (see
+    # ``forward_track_record.canonical_by_tournament``).
+    out_of_sample: bool
+    canonical: bool
+
+
+class ArchiveMatchupSummaryPayload(BaseModel):
+    """One stored matchup snapshot, without its prices."""
+
+    event_name: str
+    year: int
+    market: str
+    captured_at: str
+    rows: int
+
+
+class ArchiveInspectPayload(BaseModel):
+    """Read-only view of what the archives actually hold.
+
+    Answers "why isn't this event graded?" without pulling the full export:
+    whether a snapshot exists at all, whether its model can certify it
+    out-of-sample, and whether it is the one the grader picks for its
+    tournament. Whether the event has *completed* still needs the catalog, so
+    that question is not answered here.
+    """
+
+    boards: int
+    matchups: int
+    board_snapshots: list[ArchiveBoardSummaryPayload] = []
+    matchup_snapshots: list[ArchiveMatchupSummaryPayload] = []
 
 
 class ArchiveExportPayload(BaseModel):

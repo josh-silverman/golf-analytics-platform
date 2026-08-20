@@ -30,6 +30,7 @@ Two immutable archives, one grader, one backup path.
 | Matchup archive | `services/matchup_line_record.py` | One pre-event matchup board per `(calendar_year, event_slug)` |
 | Forward grader | `services/forward_track_record.py` | Grades completed, out-of-sample boards → `GET /analytics/track-record/forward` |
 | Export/restore | `services/archive_export.py` | `GET/POST /analytics/archive/export|import`, backed up to the private `pinpoint-ledger` repo |
+| Inspector | `api/v1/analytics.py` | `GET /analytics/archive/inspect`, read-only metadata for debugging (§4.4) |
 
 Storage backend is chosen by `board_archive_backend`: `redis` in
 production (`render.yaml`), `file` in dev and tests. Both implement the
@@ -250,10 +251,11 @@ retry found every event already captured, and the workflow reported
 fact just been reconstructed.
 
 Never trust a job's own summary as the state of the ledger. Verify
-against the record itself: `/analytics/track-record/forward` for event
-counts, `/status` for `last_board_build_at`, or the export dump. This
-also means retries are safe by design (first write wins), so a
-timeout-then-retry is not a failure.
+against the record itself: `/analytics/archive/inspect` for what is
+actually stored (§4.4), `/analytics/track-record/forward` for graded
+event counts, or `/status` for `last_board_build_at`. This also means
+retries are safe by design (first write wins), so a timeout-then-retry
+is not a failure.
 
 ### 3.4 `app/db/` and the alembic migration are vestigial
 
@@ -305,13 +307,106 @@ capture. It commits to `pinpoint-ledger` only when content changed.
 
 ### 4.3 Run an admin endpoint
 
-You will not have `ADMIN_API_TOKEN` locally. The established pattern is a
-temporary `workflow_dispatch`-only workflow that carries the secret,
-dispatched once, then deleted in a follow-up commit — archive writes stay
-deliberate, human-triggered acts rather than standing automation that
-could overwrite production keys on a schedule. Precedents:
-`archive-restore-oneoff.yml`, `archive-import-july-boards.yml`,
-`forward-backfill-oneoff.yml`, all created, used, and removed.
+You will not have `ADMIN_API_TOKEN` locally: it exists only as a Render
+env var and a GitHub Actions secret. Dispatch
+`.github/workflows/admin-trigger.yml` instead
+(`gh workflow run admin-trigger.yml -f operation=<op>`), then read the
+result with `gh run view <id> --log`.
+
+It is deliberately `workflow_dispatch`-only. Manual dispatch is the
+authorization boundary, since only someone with write access to the repo
+can trigger it and GitHub records who did. **Do not add `schedule`,
+`workflow_call`, or `repository_dispatch` to it.** `workflow_call` is the
+dangerous one: it would let any other workflow invoke an archive write as
+a job step, which is how `matchup-capture.yml` chains `archive-export.yml`
+today, and that would end the "writes are human-triggered" property. A
+write that genuinely needs to run on a schedule gets its own
+single-purpose workflow with one narrow endpoint.
+
+What it can reach is exactly the `operation` dropdown:
+`backfill-dry-run`, `backfill`, `archive-inspect`, `archive-import`,
+`matchup-capture`. The endpoint path is never free text, so a typo cannot
+send a request somewhere unintended.
+
+What it cannot reach, and the rule for adding to it: `/archive/export` is
+excluded because the workflow prints response bodies, Actions logs on this
+public repo are public, and the export response contains DataGolf-derived
+probabilities that may not be redistributed (§2.8). Export therefore has
+its own workflow that streams to the private ledger and logs only counts.
+Before adding any operation here, apply the same test: **is this
+response safe to print in a public log?**
+
+Every write behind the workflow is first-write-wins, so a mis-dispatched
+run cannot destroy anything; the worst case is a no-op.
+
+The older pattern (create a temporary one-off workflow, dispatch it,
+delete it in a follow-up commit) is retired. It cost four commits and two
+deploys per action. `archive-restore-oneoff.yml`,
+`archive-import-july-boards.yml`, and `forward-backfill-oneoff.yml` were
+its instances; all are deleted.
+
+### 4.4 Work out why an event is not in the record
+
+Two read-only tools, both admin-gated, both reachable from the trigger
+workflow above.
+
+`GET /analytics/archive/inspect` (`operation=archive-inspect`, optional
+`tournament_id`) lists what the archives actually hold as metadata, with
+no probabilities, so it is safe to read in a log and cheap compared with
+a full export. Per snapshot it reports `source`, `model_version_id`,
+`model_trained_through`, `captured_at`, the outcome count,
+`dg_direct_count`, and the two derived answers that matter:
+`out_of_sample` (can this snapshot's model certify the event at all,
+§2.6) and `canonical` (is this the snapshot the grader actually scores
+for its tournament, §2.3). `canonical` is computed by the same
+`canonical_by_tournament` helper the grader uses, so the debugging view
+cannot disagree with the grader about which snapshot counts.
+
+Working through the usual causes: no snapshot listed at all means capture
+never ran (lazy capture, §3.6); a snapshot with `out_of_sample: false`
+means the serving model was trained on or after the event start; a
+snapshot with `canonical: false` means another snapshot for the same
+tournament outranks it, which is normal after a retrain. Whether the
+event has *completed* is the one gate this view cannot answer, because
+that comes from the catalog rather than the archive.
+
+`POST /analytics/track-record/forward/backfill?dry_run=true`
+(`operation=backfill-dry-run`) answers "what would a backfill
+reconstruct?" without writing anything or building a board. It returns
+every candidate in the lookback window with its start date and an
+`already_captured` flag. Use it before any real backfill: the window is
+otherwise only derivable by reading `_BACKFILL_LOOKBACK_DAYS` and the
+cutoff logic by hand, which is how the pre-flight estimate on 2026-08-20
+came out wrong. A dry run runs only the cheap checks, so a real run can
+still skip a listed candidate whose board turns out to be empty.
+
+### 4.5 Know when a deploy has landed
+
+Render's `autoDeploy` gives no completion signal, and pushing to `main`
+does not mean the new code is serving yet. Polling for a *field or route
+that only exists in the new build* is the reliable check, because it
+tests the running code rather than a build status:
+
+```bash
+# Wait for a new route (A0's export endpoint):
+until curl -fsS --max-time 90 \
+  https://pga-analytics-api.onrender.com/api/openapi.json \
+  | grep -q "archive/inspect"; do sleep 30; done
+
+# Or a new response field (A2's provenance split):
+until curl -fsS --max-time 90 \
+  https://pga-analytics-api.onrender.com/api/v1/analytics/track-record/forward \
+  | grep -q "markets_captured"; do sleep 30; done
+```
+
+Typical latency is 1 to 3 minutes on the free tier, longer if the
+instance is cold. Pick a marker that is genuinely new in the deploy being
+waited on; a field that already existed will match immediately and report
+success against the old build. `/api/openapi.json` is the cheapest marker
+source for a new route, since it needs no auth and no DataGolf call.
+
+Frontend deploys go to Vercel from the same push on their own schedule,
+so a green API poll does not imply the page has updated.
 
 ---
 

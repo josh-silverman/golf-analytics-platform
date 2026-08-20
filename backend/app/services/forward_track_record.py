@@ -123,6 +123,29 @@ def _event_has_a_cut(field: list[TournamentEntry]) -> bool:
     return any(e.status == EntryStatus.MISSED_CUT for e in field)
 
 
+def canonical_by_tournament(snapshots: list[BoardSnapshot]) -> dict[int, BoardSnapshot]:
+    """The one snapshot per tournament that the forward record grades.
+
+    The archive legitimately holds several snapshots of one event — retraining
+    changes the ``model_version_id``, so an event can be captured live under one
+    version and reconstructed by the backfill under another — but grading them
+    all would count the tournament twice (twice the events, twice the bootstrap
+    blocks). The canonical snapshot is the earliest live capture: ``captured``
+    beats ``backfilled`` regardless of timestamp (primary evidence over
+    reconstruction), earliest ``captured_at`` breaking ties within a source.
+
+    Shared with the read-only archive inspector so the debugging view cannot
+    disagree with the grader about which snapshot actually counts.
+    """
+    canonical: dict[int, BoardSnapshot] = {}
+    for snap in snapshots:
+        rank = (snap.source != "captured", snap.captured_at)
+        held = canonical.get(snap.tournament_id)
+        if held is None or rank < (held.source != "captured", held.captured_at):
+            canonical[snap.tournament_id] = snap
+    return canonical
+
+
 async def compute_forward_track_record(
     *,
     archive: BoardArchive,
@@ -133,21 +156,7 @@ async def compute_forward_track_record(
     if not snapshots:
         return None
 
-    # One graded snapshot per tournament. The archive legitimately holds
-    # several — retraining changes the model_version_id, so the same event can
-    # be captured live under one version and reconstructed by the backfill
-    # under another — but grading them all would count the tournament twice
-    # (twice the events, twice the bootstrap blocks). The canonical snapshot
-    # is the earliest live capture ("captured" beats "backfilled" regardless
-    # of timestamp — primary evidence over reconstruction), earliest
-    # ``captured_at`` breaking ties within a source.
-    canonical: dict[int, BoardSnapshot] = {}
-    for snap in snapshots:
-        rank = (snap.source != "captured", snap.captured_at)
-        held = canonical.get(snap.tournament_id)
-        if held is None or rank < (held.source != "captured", held.captured_at):
-            canonical[snap.tournament_id] = snap
-    snapshots = list(canonical.values())
+    snapshots = list(canonical_by_tournament(snapshots).values())
 
     # Per-market, grouped by event (the block-bootstrap unit) — one pool for
     # the combined record and one per provenance, so captured and backfilled

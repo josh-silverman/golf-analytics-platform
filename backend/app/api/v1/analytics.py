@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -15,8 +15,11 @@ from app.api.v1.deps import (
     get_prediction_service,
 )
 from app.api.v1.schemas import (
+    ArchiveBoardSummaryPayload,
     ArchiveExportPayload,
     ArchiveImportPayload,
+    ArchiveInspectPayload,
+    ArchiveMatchupSummaryPayload,
     CalibrationReportPayload,
     ForwardBackfillEventPayload,
     ForwardBackfillPayload,
@@ -44,6 +47,7 @@ from app.services.board_archive import (  # noqa: TC001
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
 from app.services.forward_track_record import (  # noqa: TC001
     MarketSkill,
+    canonical_by_tournament,
     compute_forward_track_record,
 )
 from app.services.matchup_line_record import (
@@ -190,6 +194,7 @@ async def backfill_forward_track_record(
     catalog: Annotated[CatalogService, Depends(get_catalog_service)],
     archive: Annotated[BoardArchive, Depends(get_board_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
+    dry_run: bool = False,
 ) -> ForwardBackfillPayload:
     """Seed the forward record from recent completed out-of-sample events.
 
@@ -200,6 +205,14 @@ async def backfill_forward_track_record(
     stores the resulting board immutably. Admitted only when the served model was
     trained strictly before the event, so every backfilled board is genuinely
     out-of-sample. Idempotent: an already-captured event is skipped.
+
+    ``?dry_run=true`` writes nothing and returns the candidate list instead:
+    which events are in scope, when they started, and which already have a
+    snapshot. It runs only the cheap checks (OOS cutoff, lookback window,
+    ``archive.has``) and never builds a board, so it answers "what would this
+    reconstruct?" in one fast call rather than by hand-deriving the window from
+    the source. A real run can still skip a listed candidate that turns out to
+    have no field or an uncertifiable cutoff once its board is built.
 
     Admin-gated: requires the ``X-Admin-Token`` header to match
     ``settings.admin_api_token``. When that setting is unset the endpoint is
@@ -212,7 +225,7 @@ async def backfill_forward_track_record(
     cutoff = service.model_trained_through
     if cutoff is None:
         # Served model has no known training cutoff → nothing can be certified OOS.
-        return ForwardBackfillPayload(examined=0, captured=0, skipped=0)
+        return ForwardBackfillPayload(examined=0, captured=0, skipped=0, dry_run=dry_run)
 
     floor = reference_today() - timedelta(days=_BACKFILL_LOOKBACK_DAYS)
     page = await catalog.list_tournaments(status=TournamentStatus.COMPLETED, limit=200)
@@ -223,6 +236,33 @@ async def backfill_forward_track_record(
         key=lambda t: t.start_date,
         reverse=True,
     )
+
+    if dry_run:
+        # Cheap checks only: never build a board, never write. Lists every
+        # candidate so the reader sees the full window, with the ones a real
+        # run would skip flagged rather than omitted.
+        listed: list[ForwardBackfillEventPayload] = []
+        already = 0
+        for t in candidates:
+            has_snapshot = service.model_version_id is not None and await archive.has(
+                t.id, service.model_version_id
+            )
+            already += 1 if has_snapshot else 0
+            listed.append(
+                ForwardBackfillEventPayload(
+                    tournament_id=t.id,
+                    name=t.name,
+                    start_date=t.start_date,
+                    already_captured=has_snapshot,
+                )
+            )
+        return ForwardBackfillPayload(
+            examined=len(candidates),
+            captured=0,
+            skipped=already,
+            events=listed,
+            dry_run=True,
+        )
 
     captured: list[ForwardBackfillEventPayload] = []
     skipped = 0
@@ -252,7 +292,11 @@ async def backfill_forward_track_record(
             source="backfilled",
         )
         if await archive.persist(snapshot):
-            captured.append(ForwardBackfillEventPayload(tournament_id=t.id, name=t.name))
+            captured.append(
+                ForwardBackfillEventPayload(
+                    tournament_id=t.id, name=t.name, start_date=t.start_date
+                )
+            )
         else:
             skipped += 1
 
@@ -383,6 +427,74 @@ async def export_archive(
 
     doc = await export_archives(boards=board_archive, matchups=matchup_archive)
     return ArchiveExportPayload.model_validate(doc)
+
+
+@router.get("/archive/inspect")
+async def inspect_archive(
+    board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+    tournament_id: int | None = None,
+) -> ArchiveInspectPayload:
+    """What the archives actually hold, as metadata rather than a full dump.
+
+    The debugging counterpart to ``/archive/export``: when an event is missing
+    from the forward record, this says whether a snapshot exists, whether its
+    model can certify it out-of-sample, and whether it is the one the grader
+    picks for that tournament (several snapshots per event are normal after a
+    retrain). Probabilities and prices are omitted, both to keep the response
+    small and to keep DataGolf-derived numbers out of workflow logs.
+
+    Optional ``?tournament_id=`` narrows the board list to one event. Whether
+    the event has completed is not answered here; that needs the catalog.
+
+    Admin-gated like the export, and read-only: it writes nothing.
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    boards = await board_archive.list_all()
+    canonical = canonical_by_tournament(boards)
+    selected = [b for b in boards if tournament_id is None or b.tournament_id == tournament_id]
+    selected.sort(key=lambda b: (b.tournament_start_date, b.captured_at))
+
+    board_payloads = [
+        ArchiveBoardSummaryPayload(
+            tournament_id=b.tournament_id,
+            tournament_name=b.tournament_name,
+            tournament_start_date=b.tournament_start_date,
+            model_name=b.model_name,
+            model_version_id=b.model_version_id,
+            model_trained_through=b.model_trained_through,
+            as_of=b.as_of,
+            captured_at=b.captured_at,
+            source=b.source,
+            outcomes=len(b.outcomes),
+            dg_direct_count=b.dg_direct_count,
+            out_of_sample=b.is_out_of_sample(date.fromisoformat(b.tournament_start_date)),
+            canonical=canonical.get(b.tournament_id) is b,
+        )
+        for b in selected
+    ]
+
+    matchups = await matchup_archive.list_all()
+    matchups.sort(key=lambda m: (m.year, m.captured_at))
+    return ArchiveInspectPayload(
+        boards=len(boards),
+        matchups=len(matchups),
+        board_snapshots=board_payloads,
+        matchup_snapshots=[
+            ArchiveMatchupSummaryPayload(
+                event_name=m.event_name,
+                year=m.year,
+                market=m.market,
+                captured_at=m.captured_at,
+                rows=len(m.rows),
+            )
+            for m in matchups
+        ],
+    )
 
 
 @router.post("/archive/import")

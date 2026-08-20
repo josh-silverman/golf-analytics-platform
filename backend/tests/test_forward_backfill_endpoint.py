@@ -152,6 +152,47 @@ def test_backfill_disabled_when_no_token_configured(backfill_ctx, monkeypatch) -
     assert r.status_code == 404  # unset secret → endpoint doesn't exist
 
 
+async def test_dry_run_lists_candidates_and_writes_nothing(backfill_ctx) -> None:
+    client, service, archive = backfill_ctx
+    r = client.post(f"{_BACKFILL_URL}?dry_run=true", headers={"X-Admin-Token": "secret"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["dry_run"] is True
+    assert body["examined"] == 2
+    assert body["captured"] == 0
+    # Every candidate is listed, newest first, with its start date so the
+    # window is readable without re-deriving it from the source.
+    assert [e["tournament_id"] for e in body["events"]] == [102, 101]
+    assert body["events"][0]["start_date"] == "2026-05-22"
+    assert all(e["already_captured"] is False for e in body["events"])
+    # Nothing written, and no expensive board build attempted.
+    assert await archive.list_all() == []
+    assert service.predict_calls == 0
+
+
+async def test_dry_run_flags_already_captured_candidates(backfill_ctx) -> None:
+    client, service, archive = backfill_ctx
+    client.post(_BACKFILL_URL, headers={"X-Admin-Token": "secret"})  # real run first
+    calls_after_real_run = service.predict_calls
+
+    r = client.post(f"{_BACKFILL_URL}?dry_run=true", headers={"X-Admin-Token": "secret"})
+    body = r.json()
+    assert body["examined"] == 2
+    assert body["skipped"] == 2  # both now have snapshots
+    assert all(e["already_captured"] is True for e in body["events"])
+    assert service.predict_calls == calls_after_real_run  # still no rebuilds
+    assert len(await archive.list_all()) == 2  # dry run added nothing
+
+
+def test_dry_run_is_admin_gated(backfill_ctx) -> None:
+    client, _, _ = backfill_ctx
+    assert client.post(f"{_BACKFILL_URL}?dry_run=true").status_code == 404
+    assert (
+        client.post(f"{_BACKFILL_URL}?dry_run=true", headers={"X-Admin-Token": "nope"}).status_code
+        == 404
+    )
+
+
 async def test_backfill_captures_then_is_idempotent(backfill_ctx) -> None:
     client, service, archive = backfill_ctx
     r = client.post(_BACKFILL_URL, headers={"X-Admin-Token": "secret"})
