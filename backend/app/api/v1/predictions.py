@@ -14,8 +14,8 @@ from app.api.v1.deps import (
 )
 from app.api.v1.schemas import PlayerOutcomePayload, TournamentPredictionsPayload
 from app.config import get_settings
-from app.domain.enums import TournamentStatus
-from app.services.board_archive import BoardArchive, snapshot_from_predictions  # noqa: TC001
+from app.services.board_archive import BoardArchive  # noqa: TC001
+from app.services.board_capture import capture_pre_event_board
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
 from app.services.predictions import (  # noqa: TC001
     PredictionService,
@@ -64,28 +64,18 @@ async def _capture_board(
 ) -> None:
     """Immutably capture a pre-event board for the forward OOS track record.
 
-    No-op for completed events (their outcome is already known), when the
-    training cutoff is unknown (can't certify OOS), or when a snapshot already
-    exists. Never raises — archival must not break serving.
+    Delegates the decision to ``services/board_capture``, which both this
+    lazy path and the scheduled capture endpoint share, so the start guard
+    cannot apply to only one of them. Never raises — archival must not break
+    serving, and the scheduled path is what surfaces problems loudly.
     """
     try:
-        if predictions.model_trained_through is None:
-            return
-        if not predictions.outcomes:
-            # No field yet (an event whose pairings aren't set) — don't pin an
-            # empty board; the first capture with a real field should win.
-            return
-        if await archive.has(predictions.tournament_id, predictions.model_version_id):
-            return
-        tournament = await catalog.get_tournament(predictions.tournament_id)
-        if tournament is None or tournament.status == TournamentStatus.COMPLETED:
-            return
-        snapshot = snapshot_from_predictions(
-            predictions,
-            tournament_start_date=tournament.start_date,
-            model_trained_through=predictions.model_trained_through,
+        await capture_pre_event_board(
+            catalog=catalog,
+            archive=archive,
+            predictions=predictions,
+            today=reference_today(),
         )
-        await archive.persist(snapshot)
     except Exception:  # noqa: BLE001 — best-effort; serving must never fail on this
         return
 

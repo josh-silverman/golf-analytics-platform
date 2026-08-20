@@ -139,7 +139,7 @@ D2 (grading commentary) ── after A4/B2
 
 ## Phase B — automate the weekly cycle
 
-### B1. Scheduled board capture
+### B1. Scheduled board capture ✅ (built 2026-08-20; capture guard + Wednesday cron, see docs/ledger.md §2.2 and §3.6)
 - **What**: A cron (Wed evening + Thu morning retry, mirroring matchup
   capture) that triggers capture for the current event instead of relying
   on organic traffic — either by GETting `/predictions/{current}` or via

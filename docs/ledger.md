@@ -67,20 +67,44 @@ Consequences to preserve:
   `tests/test_archive_export.py`
   (`test_import_never_overwrites_an_existing_snapshot`).
 
-### 2.2 Capture only before the event completes **[enforced]**
+### 2.2 Capture only before the event starts **[enforced]**
 
-`_capture_board` (`api/v1/predictions.py`) refuses to capture when the
-tournament is `COMPLETED`, when the model's training cutoff is unknown,
-or when the field is empty. Capture is best-effort and never raises:
-archival must not break serving.
+`services/board_capture.py` holds the one capture decision, shared by the
+lazy path (`api/v1/predictions.py`) and the scheduled path
+(`POST /analytics/track-record/capture-upcoming`). A guard on only one
+path is a guard a future caller bypasses, which is why it lives in one
+module rather than in each endpoint.
 
-The completed-event refusal is what stops a "prediction" from being
-written after the result is known. Combined with 2.1, the first capture
-for an event is necessarily pre-event.
+A board may be captured only while the event has **not started**. Both
+signals are checked, and either one refuses:
 
-Note the backfill endpoint deliberately *does* build boards for completed
-events. That is safe only because of the constraints in 2.4 and the
-provenance label in 2.5. Do not relax either one.
+- `status != UPCOMING` — the provider's own judgment, the only signal
+  that reacts to an actual tee-off rather than to the calendar.
+- `today >= start_date` — a calendar backstop for a provider whose status
+  has not flipped yet. Strict, with no same-day exception: tee times span
+  time zones (an Open Championship morning wave is under way before 07:00
+  UTC), so no hour on the start day is universally pre-event.
+
+This matters because capture is permanent. Under Path A the
+DataGolf-direct probabilities are read from the *live* pre-tournament
+endpoint for any not-completed event, so a board built after tee-off
+carries numbers that reflect play in progress while presenting itself as
+a pre-event board, and 2.1 pins it forever. Feature `as_of` is capped to
+the eve and stays clean either way; the contamination vector is the
+DataGolf read, not the features. The cost of the strictness is that an
+event starting the same day the job runs is refused rather than captured:
+deliberate, because a missing board is recoverable by backfill and a
+contaminated one is not.
+
+The guard lives in the capture policy, **not** in the archive's
+`persist`, because the backfill legitimately writes boards for events
+that have already finished (as reconstructions, marked
+`source="backfilled"`, see 2.5). Storage stays policy-free. Do not move
+the guard down into the archive, and do not relax the backfill's
+constraints in 2.4/2.5 to compensate.
+
+Pinned by `tests/test_board_capture.py`, which exercises each signal on a
+day the other would allow.
 
 ### 2.3 Grade one snapshot per tournament; captured beats backfilled **[enforced]**
 
@@ -295,14 +319,29 @@ they are live.
 mock provider and the real UTC date otherwise. Date arithmetic that looks
 broken in tests is usually this.
 
-### 3.6 Board serving is cached; capture is not idempotent-by-cache
+### 3.6 A viewable board does not mean a captured board
 
 `/predictions/{id}` caches the assembled board in Redis for 6 hours,
 keyed by `(tournament, as_of)`. A cache hit returns before the capture
-path runs, so "load the leaderboard" does not reliably produce a capture.
-Capture is lazy and traffic-dependent — scheduled capture is roadmap B1,
-not built. Do not assume an event was captured just because its board is
-viewable.
+path runs, so loading the leaderboard does not reliably produce a
+capture, and after the event starts the guard (2.2) refuses regardless.
+
+Scheduled capture (B1, built 2026-08-20) is what makes capture timing
+deterministic: `.github/workflows/board-capture.yml` runs Wednesday 21:00
+UTC with a 23:30 UTC retry. Both runs are on Wednesday, unlike
+`matchup-capture.yml`'s Thursday retry, because the start guard would
+refuse a Thursday attempt for a Thursday-start event by design; the
+retry's real job is the case where the field was not published yet at
+21:00. Events that start on a Wednesday get no scheduled capture, since
+21:00 is already same-day for them.
+
+The job exits non-zero when the endpoint reports `healthy: false`, which
+means an event in the window did not end up with a board. That is
+deliberately loud: a missed pre-event window cannot be recovered by
+re-running the job, only reconstructed as a backfill.
+
+To check whether a specific event was captured, read
+`archive-inspect` (§4.4) rather than inferring it from the leaderboard.
 
 ---
 
@@ -342,7 +381,7 @@ single-purpose workflow with one narrow endpoint.
 
 What it can reach is exactly the `operation` dropdown:
 `backfill-dry-run`, `backfill`, `archive-inspect`, `archive-import`,
-`matchup-capture`. The endpoint path is never free text, so a typo cannot
+`matchup-capture`, `capture-upcoming`. The endpoint path is never free text, so a typo cannot
 send a request somewhere unintended.
 
 What it cannot reach, and the rule for adding to it: `/archive/export` is
@@ -440,7 +479,6 @@ Do not assume these exist. Roadmap detail in `docs/plans/01-roadmap.md`.
 | A1 git SHA provenance | Not built. Neither `ModelVersion` nor `BoardSnapshot` records the code revision. |
 | A4 named baselines | Not built. The only baseline is the field base rate. No DataGolf-raw column, no closing-line column. |
 | A5 closing-line capture | Not built. `get_outright_odds` exists on the provider; nothing captures it. |
-| B1 scheduled board capture | Not built. Capture is lazy; see 3.6. |
 | B2 scheduled settle and grade | Not built. |
 | D1 integrity checker | Not built. Nothing currently diffs production against the ledger. |
 
