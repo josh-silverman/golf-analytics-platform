@@ -79,6 +79,15 @@ class Settings(BaseSettings):
             " archives in the shared instance."
         ),
     )
+    settlements_path: str = Field(
+        default="./settlements",
+        description=(
+            "Root directory for immutable per-tournament settlement records"
+            " (results pinned at first grade). Used only when"
+            " board_archive_backend='file'; the redis backend stores all three"
+            " archives in the shared instance."
+        ),
+    )
     board_archive_backend: Literal["file", "redis"] = Field(
         default="file",
         description=(

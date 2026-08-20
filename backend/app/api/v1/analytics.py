@@ -13,6 +13,7 @@ from app.api.v1.deps import (
     get_matchup_archive,
     get_model_registry,
     get_prediction_service,
+    get_settlement_archive,
 )
 from app.api.v1.schemas import (
     ArchiveBoardSummaryPayload,
@@ -20,6 +21,7 @@ from app.api.v1.schemas import (
     ArchiveImportPayload,
     ArchiveInspectPayload,
     ArchiveMatchupSummaryPayload,
+    ArchiveSettlementSummaryPayload,
     CalibrationReportPayload,
     ForwardBackfillEventPayload,
     ForwardBackfillPayload,
@@ -57,6 +59,7 @@ from app.services.matchup_line_record import (
     snapshot_from_feed,
 )
 from app.services.predictions import PredictionService  # noqa: TC001
+from app.services.settlement_archive import SettlementArchive  # noqa: TC001 — FastAPI DI
 from app.services.track_record import compute_track_record
 
 # A completed OOS event more than this many days before today is old enough that
@@ -144,6 +147,7 @@ def _bin_payload(b: ReliabilityBin) -> ReliabilityBinPayload:
 async def get_forward_track_record(
     catalog: Annotated[CatalogService, Depends(get_catalog_service)],
     archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    settlements: Annotated[SettlementArchive, Depends(get_settlement_archive)],
 ) -> ForwardTrackRecordPayload:
     """Genuinely out-of-sample track record from captured pre-event boards.
 
@@ -152,7 +156,9 @@ async def get_forward_track_record(
     seen these events in training. Accumulates forward from the first captured
     pre-event board; ``available`` is false until one completed OOS board exists.
     """
-    tr = await compute_forward_track_record(archive=archive, catalog=catalog)
+    tr = await compute_forward_track_record(
+        archive=archive, catalog=catalog, settlements=settlements
+    )
     if tr is None:
         return ForwardTrackRecordPayload(available=False)
     return ForwardTrackRecordPayload(
@@ -406,6 +412,7 @@ async def get_matchup_line_record(
 async def export_archive(
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    settlement_archive: Annotated[SettlementArchive, Depends(get_settlement_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
 ) -> ArchiveExportPayload:
     """Dump both forward archives (board + matchup snapshots) as one document.
@@ -425,7 +432,9 @@ async def export_archive(
     if not token or x_admin_token != token:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
-    doc = await export_archives(boards=board_archive, matchups=matchup_archive)
+    doc = await export_archives(
+        boards=board_archive, matchups=matchup_archive, settlements=settlement_archive
+    )
     return ArchiveExportPayload.model_validate(doc)
 
 
@@ -433,6 +442,7 @@ async def export_archive(
 async def inspect_archive(
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    settlement_archive: Annotated[SettlementArchive, Depends(get_settlement_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
     tournament_id: int | None = None,
 ) -> ArchiveInspectPayload:
@@ -480,9 +490,34 @@ async def inspect_archive(
 
     matchups = await matchup_archive.list_all()
     matchups.sort(key=lambda m: (m.year, m.captured_at))
+
+    all_settlements = await settlement_archive.list_all()
+    settlements = [
+        s for s in all_settlements if tournament_id is None or s.tournament_id == tournament_id
+    ]
+    settlements.sort(key=lambda s: s.tournament_start_date)
+    settlement_payloads = []
+    for s in settlements:
+        made = sum(1 for e in s.entries if e.status == "made_cut")
+        missed = sum(1 for e in s.entries if e.status == "missed_cut")
+        settlement_payloads.append(
+            ArchiveSettlementSummaryPayload(
+                tournament_id=s.tournament_id,
+                tournament_name=s.tournament_name,
+                tournament_start_date=s.tournament_start_date,
+                provider=s.provider,
+                settled_at=s.settled_at,
+                players=len(s.entries),
+                made_cut=made,
+                missed_cut=missed,
+                other=len(s.entries) - made - missed,
+            )
+        )
+
     return ArchiveInspectPayload(
         boards=len(boards),
         matchups=len(matchups),
+        settlements=len(all_settlements),
         board_snapshots=board_payloads,
         matchup_snapshots=[
             ArchiveMatchupSummaryPayload(
@@ -494,6 +529,7 @@ async def inspect_archive(
             )
             for m in matchups
         ],
+        settlement_records=settlement_payloads,
     )
 
 
@@ -502,6 +538,7 @@ async def import_archive(
     payload: ArchiveExportPayload,
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
+    settlement_archive: Annotated[SettlementArchive, Depends(get_settlement_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
 ) -> ArchiveImportPayload:
     """Restore both forward archives from an export dump.
@@ -519,7 +556,10 @@ async def import_archive(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
     result = await import_archives(
-        payload.model_dump(), boards=board_archive, matchups=matchup_archive
+        payload.model_dump(),
+        boards=board_archive,
+        matchups=matchup_archive,
+        settlements=settlement_archive,
     )
     return ArchiveImportPayload(
         boards_stored=result.boards_stored,
@@ -528,6 +568,9 @@ async def import_archive(
         matchups_stored=result.matchups_stored,
         matchups_skipped=result.matchups_skipped,
         matchups_errors=result.matchups_errors,
+        settlements_stored=result.settlements_stored,
+        settlements_skipped=result.settlements_skipped,
+        settlements_errors=result.settlements_errors,
     )
 
 

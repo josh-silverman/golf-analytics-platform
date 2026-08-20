@@ -32,10 +32,12 @@ from typing import TYPE_CHECKING, Any
 
 from app.services.board_archive import _from_dict as _board_from_dict
 from app.services.matchup_line_record import _from_dict as _matchup_from_dict
+from app.services.settlement_archive import _from_dict as _settlement_from_dict
 
 if TYPE_CHECKING:
     from app.services.board_archive import BoardArchive
     from app.services.matchup_line_record import MatchupArchive
+    from app.services.settlement_archive import SettlementArchive
 
 # Bumped when the document layout changes shape (not when snapshot fields
 # drift — the snapshot deserializers already tolerate unknown/missing keys).
@@ -52,23 +54,39 @@ class ArchiveImportResult:
     matchups_stored: int
     matchups_skipped: int
     matchups_errors: int
+    settlements_stored: int = 0
+    settlements_skipped: int = 0
+    settlements_errors: int = 0
 
 
 async def export_archives(
     *,
     boards: BoardArchive,
     matchups: MatchupArchive,
+    settlements: SettlementArchive | None = None,
 ) -> dict[str, Any]:
-    """Every snapshot from both archives as one deterministic document."""
+    """Every snapshot from the archives as one deterministic document.
+
+    ``settlements`` is optional for older callers; the key is present (and
+    empty) either way so the document shape is stable. Records are immutable
+    once written, so their ``settled_at`` timestamps do not break the
+    unchanged-archive → byte-identical-export property.
+    """
     board_snaps = sorted(
         await boards.list_all(),
         key=lambda s: (s.tournament_id, s.model_version_id or ""),
     )
     matchup_snaps = sorted(await matchups.list_all(), key=lambda s: (s.year, s.slug))
+    settlement_recs = (
+        sorted(await settlements.list_all(), key=lambda r: r.tournament_id)
+        if settlements is not None
+        else []
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "boards": [asdict(s) for s in board_snaps],
         "matchups": [asdict(s) for s in matchup_snaps],
+        "settlements": [asdict(r) for r in settlement_recs],
     }
 
 
@@ -77,6 +95,7 @@ async def import_archives(
     *,
     boards: BoardArchive,
     matchups: MatchupArchive,
+    settlements: SettlementArchive | None = None,
 ) -> ArchiveImportResult:
     """Re-seed the archives from an export document, first-write-wins."""
     b_stored = b_skipped = b_errors = 0
@@ -105,6 +124,19 @@ async def import_archives(
         else:
             m_skipped += 1
 
+    s_stored = s_skipped = s_errors = 0
+    if settlements is not None:
+        for raw in payload.get("settlements") or []:
+            try:
+                record = _settlement_from_dict(copy.deepcopy(raw))
+            except (ValueError, TypeError, AttributeError):
+                s_errors += 1
+                continue
+            if await settlements.persist(record):
+                s_stored += 1
+            else:
+                s_skipped += 1
+
     return ArchiveImportResult(
         boards_stored=b_stored,
         boards_skipped=b_skipped,
@@ -112,4 +144,7 @@ async def import_archives(
         matchups_stored=m_stored,
         matchups_skipped=m_skipped,
         matchups_errors=m_errors,
+        settlements_stored=s_stored,
+        settlements_skipped=s_skipped,
+        settlements_errors=s_errors,
     )

@@ -141,6 +141,8 @@ class _GradeCatalog:
     id), so tests can grade several distinct events without a real catalog.
     """
 
+    source_name = "stub-provider"
+
     def __init__(
         self,
         *,
@@ -153,6 +155,7 @@ class _GradeCatalog:
         self._ids = set(ids)
         self._start_date = start_date
         self._status = status
+        self.field_reads = 0
         # Player 10 won (pos 1), 11 made cut (pos 30), 12 missed cut.
         self._field = [
             TournamentEntry(
@@ -200,6 +203,7 @@ class _GradeCatalog:
         )
 
     async def get_tournament_field(self, tournament_id: int) -> list[TournamentEntry]:
+        self.field_reads += 1
         if tournament_id not in self._ids:
             return []
         if not self._no_cut:
@@ -540,3 +544,159 @@ async def test_no_cut_event_does_not_inflate_pooled_make_cut_skill(tmp_path) -> 
     # Same graded make-cut sample as before: the no-cut event added nothing.
     assert mc_after.n == mc_before.n
     assert mc_after.brier_skill == pytest.approx(mc_before.brier_skill)
+
+
+# ---------------------------------------------------------------------------
+# Settlement pinning (A3)
+#
+# With a settlement archive, the first grade of a completed event pins its
+# results immutably; every later grade reads the pin and never re-reads the
+# provider. A provider-side revision must not be able to rewrite an already-
+# graded event, and pinning must not change grading semantics — only where
+# the inputs come from.
+# ---------------------------------------------------------------------------
+
+from dataclasses import asdict as _asdict  # noqa: E402
+
+from app.services.settlement_archive import FileSettlementArchive  # noqa: E402
+
+
+def _same_record(a, b) -> bool:
+    """Bit-identical records, tolerating NaN CIs (json renders NaN stably)."""
+    return json.dumps(_asdict(a), sort_keys=True) == json.dumps(_asdict(b), sort_keys=True)
+
+
+def _wd_entry(player_id: int = 13) -> TournamentEntry:
+    return TournamentEntry(
+        id=90,
+        tournament_id=1,
+        player_id=player_id,
+        status=EntryStatus.WITHDREW,
+        final_position=None,
+        final_score_to_par=None,
+        official_money_cents=None,
+    )
+
+
+async def test_first_grade_pins_settlement_and_ignores_provider_mutation(tmp_path) -> None:
+    boards = FileBoardArchive(tmp_path / "boards")
+    settlements = FileSettlementArchive(tmp_path / "settlements")
+    await boards.persist(_snapshot(outcomes=_THREE))
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+
+    first = await compute_forward_track_record(
+        archive=boards,
+        catalog=catalog,
+        settlements=settlements,  # type: ignore[arg-type]
+    )
+    assert first is not None
+    (pin,) = await settlements.list_all()
+    assert pin.tournament_id == 1
+    assert pin.provider == "stub-provider"
+    assert {e.status for e in pin.entries} == {"made_cut", "missed_cut"}
+
+    # Provider revises history: the missed-cut player now claims a win.
+    catalog._field = [
+        TournamentEntry(
+            id=e.id,
+            tournament_id=e.tournament_id,
+            player_id=e.player_id,
+            status=EntryStatus.MADE_CUT,
+            final_position=1 if e.player_id == 12 else 40,
+            final_score_to_par=None,
+            official_money_cents=None,
+        )
+        for e in catalog._field
+    ]
+
+    reads_before = catalog.field_reads
+    second = await compute_forward_track_record(
+        archive=boards,
+        catalog=catalog,
+        settlements=settlements,  # type: ignore[arg-type]
+    )
+    assert second is not None
+    # Grades identical, and the provider's field was never re-read.
+    assert _same_record(first, second)
+    assert catalog.field_reads == reads_before
+
+    # Control: without the settlement archive, the mutation changes the grade.
+    unpinned = await compute_forward_track_record(archive=boards, catalog=catalog)  # type: ignore[arg-type]
+    assert unpinned is not None
+    assert not _same_record(first, unpinned)
+
+
+async def test_grading_from_settlement_matches_grading_from_provider(tmp_path) -> None:
+    """Pinning changes the input source, never the numbers.
+
+    Run the same scenarios through the provider path and the settlement path
+    (fresh pin from the identical field): every record must be bit-identical.
+    Covers a normal cut event, a no-cut event (make-cut exclusion), and a
+    field with a withdrawal (ungradeable player).
+    """
+    scenarios = {
+        "normal": _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED),
+        "no_cut": _GradeCatalog(
+            start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED, no_cut=True
+        ),
+    }
+    wd = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    wd._field = [*wd._field, _wd_entry()]
+    scenarios["with_wd"] = wd
+
+    outcomes = (*_THREE, BoardSnapshotOutcome(13, 0.05, 0.1, 0.2, 0.3, 0.6))
+    for name, catalog in scenarios.items():
+        boards = FileBoardArchive(tmp_path / name / "boards")
+        await boards.persist(_snapshot(outcomes=outcomes))
+        via_provider = await compute_forward_track_record(archive=boards, catalog=catalog)  # type: ignore[arg-type]
+        via_settlement = await compute_forward_track_record(
+            archive=boards,
+            catalog=catalog,  # type: ignore[arg-type]
+            settlements=FileSettlementArchive(tmp_path / name / "settlements"),
+        )
+        assert via_provider is not None and via_settlement is not None, name
+        assert _same_record(via_provider, via_settlement), name
+
+
+async def test_withdrawal_is_pinned_but_stays_ungradeable(tmp_path) -> None:
+    boards = FileBoardArchive(tmp_path / "boards")
+    settlements = FileSettlementArchive(tmp_path / "settlements")
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    catalog._field = [*catalog._field, _wd_entry()]
+    await boards.persist(
+        _snapshot(outcomes=(*_THREE, BoardSnapshotOutcome(13, 0.05, 0.1, 0.2, 0.3, 0.6)))
+    )
+    result = await compute_forward_track_record(
+        archive=boards,
+        catalog=catalog,
+        settlements=settlements,  # type: ignore[arg-type]
+    )
+    assert result is not None
+    assert result.players_graded == 3  # the WD player is excluded, as before
+    (pin,) = await settlements.list_all()
+    assert any(e.status == "withdrew" for e in pin.entries)  # but the pin keeps him
+
+
+async def test_settlement_not_pinned_for_incomplete_or_fieldless_events(tmp_path) -> None:
+    boards = FileBoardArchive(tmp_path / "boards")
+    settlements = FileSettlementArchive(tmp_path / "settlements")
+    await boards.persist(_snapshot(outcomes=_THREE))
+    # In-progress event: not graded, so nothing may be pinned either.
+    catalog = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.IN_PROGRESS)
+    result = await compute_forward_track_record(
+        archive=boards,
+        catalog=catalog,
+        settlements=settlements,  # type: ignore[arg-type]
+    )
+    assert result is None
+    assert await settlements.list_all() == []
+    # Completed but the provider returns no field: nothing to pin, event skipped.
+    empty = _GradeCatalog(start_date=date(2026, 6, 1), status=TournamentStatus.COMPLETED)
+    empty._field = []
+    result = await compute_forward_track_record(
+        archive=boards,
+        catalog=empty,
+        settlements=settlements,  # type: ignore[arg-type]
+    )
+    assert result is None
+    assert await settlements.list_all() == []
