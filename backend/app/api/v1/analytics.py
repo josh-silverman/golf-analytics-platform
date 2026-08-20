@@ -22,6 +22,8 @@ from app.api.v1.schemas import (
     ArchiveInspectPayload,
     ArchiveMatchupSummaryPayload,
     ArchiveSettlementSummaryPayload,
+    BoardCaptureEventPayload,
+    BoardCapturePayload,
     CalibrationReportPayload,
     ForwardBackfillEventPayload,
     ForwardBackfillPayload,
@@ -46,6 +48,7 @@ from app.services.board_archive import (  # noqa: TC001
     BoardArchive,
     snapshot_from_predictions,
 )
+from app.services.board_capture import CaptureOutcome, capture_pre_event_board
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
 from app.services.forward_track_record import (  # noqa: TC001
     MarketSkill,
@@ -67,6 +70,13 @@ from app.services.track_record import compute_track_record
 # about *recent* served accuracy. Bounds the per-run work regardless of how much
 # history the catalog returns.
 _BACKFILL_LOOKBACK_DAYS = 120
+
+# How far ahead a scheduled capture run looks. From a Wednesday run this is
+# exactly this week's events (Thursday through Monday starts) without
+# reaching into next week, where a board would be pinned before the field is
+# settled — first write wins, so capturing too early is as permanent as
+# capturing too late.
+_CAPTURE_LOOKAHEAD_DAYS = 5
 
 router = APIRouter(tags=["analytics"], prefix="/analytics")
 
@@ -192,6 +202,85 @@ def _market_payloads(markets: tuple[MarketSkill, ...]) -> list[ForwardMarketSkil
         )
         for m in markets
     ]
+
+
+@router.post("/track-record/capture-upcoming")
+async def capture_upcoming_boards(
+    service: Annotated[PredictionService, Depends(get_prediction_service)],
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+    days_ahead: int = _CAPTURE_LOOKAHEAD_DAYS,
+) -> BoardCapturePayload:
+    """Capture pre-event boards for every upcoming event starting soon.
+
+    Makes capture timing deterministic instead of depending on someone
+    loading the leaderboard before the event (see ``docs/ledger.md`` §3.6).
+    Called by the Wednesday cron in ``.github/workflows/board-capture.yml``.
+
+    Covers *every* upcoming event inside the window rather than a single
+    "current event": opposite-field weeks put two tournaments on the same
+    dates, and ``get_current_tournament`` returns one of them (preferring an
+    in-progress event, which is precisely the one that must not be
+    captured), so a single-event job would never capture the second.
+
+    Idempotent: an event with a snapshot for the serving model version is
+    reported ``already_captured`` and nothing is written. Every write goes
+    through the shared start guard in ``services/board_capture``, so an
+    event that has already begun is refused rather than pinned.
+
+    Admin-gated: requires ``X-Admin-Token`` matching
+    ``settings.admin_api_token``; 404 when the secret is unset.
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    days_ahead = max(1, min(days_ahead, 30))
+    today = reference_today()
+    horizon = today + timedelta(days=days_ahead)
+    page = await catalog.list_tournaments(status=TournamentStatus.UPCOMING, limit=200)
+    # Strictly after today: the start guard refuses a same-day capture, so
+    # listing such an event here would only produce a guaranteed refusal.
+    candidates = sorted(
+        (t for t in page.items if today < t.start_date <= horizon),
+        key=lambda t: t.start_date,
+    )
+
+    events: list[BoardCaptureEventPayload] = []
+    for t in candidates:
+        preds = await service.predict_tournament(t.id, as_of=today)
+        if preds is None:
+            events.append(
+                BoardCaptureEventPayload(
+                    tournament_id=t.id,
+                    name=t.name,
+                    start_date=t.start_date,
+                    outcome=CaptureOutcome.TOURNAMENT_NOT_FOUND.value,
+                )
+            )
+            continue
+        outcome = await capture_pre_event_board(
+            catalog=catalog, archive=archive, predictions=preds, today=today
+        )
+        events.append(
+            BoardCaptureEventPayload(
+                tournament_id=t.id,
+                name=t.name,
+                start_date=t.start_date,
+                outcome=outcome.value,
+                outcomes_captured=len(preds.outcomes),
+            )
+        )
+
+    return BoardCapturePayload(
+        examined=len(candidates),
+        captured=sum(1 for e in events if e.outcome == CaptureOutcome.CAPTURED.value),
+        # An empty window (an off week) is healthy; a listed event that did
+        # not end up with a board is not.
+        healthy=all(CaptureOutcome(e.outcome).is_healthy for e in events),
+        events=events,
+    )
 
 
 @router.post("/track-record/forward/backfill")

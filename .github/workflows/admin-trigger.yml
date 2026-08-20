@@ -48,6 +48,7 @@ on:
           - archive-inspect
           - archive-import
           - matchup-capture
+          - capture-upcoming
       tournament_id:
         description: "archive-inspect only: narrow to one tournament id (blank = all)"
         required: false
@@ -105,6 +106,16 @@ jobs:
             matchup-capture)
               echo "method=POST" >> "$GITHUB_OUTPUT"
               echo "path=/api/v1/analytics/matchups/capture" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            capture-upcoming)
+              # Manual equivalent of board-capture.yml's scheduled run. Safe to
+              # dispatch any time: the capture guard refuses events that have
+              # started and already-captured events are a no-op. Unlike the
+              # cron, this does not fail on an unhealthy result — read the
+              # per-event outcomes in the response.
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/track-record/capture-upcoming" >> "$GITHUB_OUTPUT"
               echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
               ;;
             *)

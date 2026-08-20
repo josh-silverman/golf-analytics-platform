@@ -1,0 +1,82 @@
+name: Capture weekly prediction boards
+
+# Pins this week's pre-event boards on a schedule instead of hoping someone
+# loads the leaderboard before the event. Capture used to be lazy and
+# traffic-dependent (docs/ledger.md §3.6), which made the timing of every
+# entry in the forward record accidental.
+#
+# Covers every upcoming event in the window, not one "current" event:
+# opposite-field weeks run two tournaments on the same dates and a
+# single-event job would never capture the second.
+#
+# WHY BOTH RUNS ARE ON WEDNESDAY, unlike matchup-capture.yml's Thursday
+# retry. A board may only be captured before play begins: capture is
+# first-write-wins, so a board built after tee-off is pinned forever and
+# silently poisons that event's record (under Path A the DataGolf-direct
+# probabilities come from the live endpoint, so they reflect play in
+# progress even though feature as-of is capped to the eve). The capture
+# guard therefore refuses any event whose start date has arrived, with no
+# same-day exception — tee times span time zones, so no hour on the start
+# day is universally safe. A Thursday retry would be refused by design and
+# would only ever report a missed window, so the retry is a second
+# Wednesday run instead. Its real job is the case where the field was not
+# published yet at 21:00.
+#
+# Events starting on a Wednesday (rare, some limited-field events) get no
+# scheduled capture: the 21:00 run is already same-day for them. That is the
+# intended trade, since a missing board can be reconstructed by the backfill
+# while a contaminated one cannot be undone.
+#
+# FAILS LOUDLY. The endpoint returns `healthy: false` when any event in the
+# window did not end up with a board (field never published, window missed,
+# no certifiable training cutoff). This job exits non-zero on that, so a
+# silently missed week surfaces as a failed workflow rather than a green
+# check with a 200 response. An off week with no upcoming events is healthy.
+#
+# Requires the ADMIN_API_TOKEN repository secret to match the Render
+# service's env var; without it the endpoint answers 404 and this fails.
+
+on:
+  schedule:
+    - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET), field settled, pre-event
+    - cron: "30 23 * * 3" # Wed 23:30 UTC retry, still before any Thursday start
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /analytics/track-record/capture-upcoming
+        run: |
+          set -euo pipefail
+          # Long timeout: a board is a field-wide feature extraction per event,
+          # and an opposite-field week has two. --retry covers the Render free
+          # tier's ~40s cold start. A client-side timeout does not mean the
+          # server stopped; capture is first-write-wins, so the retry is a
+          # no-op if the first attempt already landed.
+          curl -fsS --max-time 580 --retry 2 --retry-delay 30 --retry-all-errors \
+            -X POST \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            https://pga-analytics-api.onrender.com/api/v1/analytics/track-record/capture-upcoming \
+            -o result.json
+          echo "--- capture result ---"
+          jq . result.json
+
+          # Report per-event outcomes, then fail if any event in the window
+          # did not get a board. Event names and dates only; no probabilities,
+          # so this stays safe in a public log.
+          jq -r '.events[] | "  \(.start_date)  \(.name): \(.outcome) (\(.outcomes_captured) players)"' result.json
+          if [ "$(jq -r '.healthy' result.json)" != "true" ]; then
+            echo "::error::A board was not captured for every event in the window. See outcomes above; a missed pre-event window cannot be recovered by re-running this job."
+            exit 1
+          fi
+          echo "captured: $(jq -r '.captured') of $(jq -r '.examined') event(s) examined"
+
+  # Back the fresh capture up to the private ledger immediately rather than
+  # waiting for the nightly export, per docs/ledger.md §4.2.
+  export:
+    needs: capture
+    uses: ./.github/workflows/archive-export.yml
+    secrets: inherit

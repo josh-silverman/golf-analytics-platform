@@ -172,6 +172,39 @@ class ForwardBackfillPayload(BaseModel):
     dry_run: bool = False
 
 
+class BoardCaptureEventPayload(BaseModel):
+    """One event's outcome from a scheduled capture run."""
+
+    tournament_id: int
+    name: str
+    start_date: date
+    # A ``CaptureOutcome`` value: captured, already_captured,
+    # event_already_started, no_field, no_training_cutoff,
+    # tournament_not_found.
+    outcome: str
+    outcomes_captured: int = 0
+
+
+class BoardCapturePayload(BaseModel):
+    """Result of a scheduled pre-event board capture run.
+
+    Covers every upcoming event starting inside the lookahead window, not
+    just one, because opposite-field weeks are routine on tour: capturing
+    only "the current event" would systematically miss the second event
+    every time two run in parallel.
+
+    ``healthy`` is false when any event in the window ended in an outcome
+    that means it did not get a board, which is what the scheduled job keys
+    its exit status off so a missed capture window is loud rather than a
+    quiet 200.
+    """
+
+    examined: int
+    captured: int
+    healthy: bool
+    events: list[BoardCaptureEventPayload] = []
+
+
 class ArchiveBoardSummaryPayload(BaseModel):
     """One stored board snapshot, without its probabilities.
 
