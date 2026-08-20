@@ -42,7 +42,10 @@ from app.services.board_archive import (  # noqa: TC001
     snapshot_from_predictions,
 )
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
-from app.services.forward_track_record import compute_forward_track_record
+from app.services.forward_track_record import (  # noqa: TC001
+    MarketSkill,
+    compute_forward_track_record,
+)
 from app.services.matchup_line_record import (
     MatchupArchive,  # noqa: TC001 — FastAPI DI
     MatchupHistorySource,
@@ -158,19 +161,27 @@ async def get_forward_track_record(
         events_regime_unknown=tr.events_regime_unknown,
         events_captured=tr.events_captured,
         events_backfilled=tr.events_backfilled,
-        markets=[
-            ForwardMarketSkillPayload(
-                market=m.market,
-                n=m.n,
-                base_rate=m.base_rate,
-                brier=m.brier,
-                brier_skill=m.brier_skill,
-                ci_lower=m.ci_lower,
-                ci_upper=m.ci_upper,
-            )
-            for m in tr.markets
-        ],
+        players_captured=tr.players_captured,
+        players_backfilled=tr.players_backfilled,
+        markets=_market_payloads(tr.markets),
+        markets_captured=_market_payloads(tr.markets_captured),
+        markets_backfilled=_market_payloads(tr.markets_backfilled),
     )
+
+
+def _market_payloads(markets: tuple[MarketSkill, ...]) -> list[ForwardMarketSkillPayload]:
+    return [
+        ForwardMarketSkillPayload(
+            market=m.market,
+            n=m.n,
+            base_rate=m.base_rate,
+            brier=m.brier,
+            brier_skill=m.brier_skill,
+            ci_lower=m.ci_lower,
+            ci_upper=m.ci_upper,
+        )
+        for m in markets
+    ]
 
 
 @router.post("/track-record/forward/backfill")

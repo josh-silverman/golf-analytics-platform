@@ -26,6 +26,17 @@ export interface ForwardTrackRecord {
   events_path_a?: number
   events_cold_start_only?: number
   events_regime_unknown?: number
+  // Provenance split: events recorded live before play vs reconstructed
+  // afterwards by the backfill. `markets` pools both; the per-provenance
+  // aggregates below let the UI show them separately, which is the only
+  // honest presentation while most of the record is reconstruction.
+  // Optional: an older backend omits all six.
+  events_captured?: number
+  events_backfilled?: number
+  players_captured?: number
+  players_backfilled?: number
+  markets_captured?: ForwardMarketSkill[]
+  markets_backfilled?: ForwardMarketSkill[]
 }
 
 async function fetchForwardTrackRecord(): Promise<ForwardTrackRecord> {

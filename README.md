@@ -110,7 +110,16 @@ Three principles governed the work from the start:
   and an admin-gated backfill (`POST /analytics/track-record/forward/backfill`) seeds it
   by replaying the served pipeline over events that completed before capture shipped —
   leakage-free (as-of capped to the eve, DataGolf's pre-event archive, admitted only when
-  trained strictly before the event). Each board also records **how many players were
+  trained strictly before the event). A backfilled board is still a **reconstruction**:
+  it is what the pipeline, as it exists at backfill time, would have served for that
+  event. It is not a record of what the site actually showed that week, and code changes
+  between the event and the backfill can make the two differ. Every snapshot therefore
+  carries a `source` field (`captured` live pre-event vs `backfilled`), the grader
+  reports the two classes separately (`events_captured` / `events_backfilled`, plus
+  per-provenance market aggregates), and the leaderboard shows them as separate rows
+  rather than pooling them into one number. As of 2026-08-20 the record is 9 events:
+  2 captured live, 7 reconstructed after a storage loss (the free-tier Key Value store
+  had no persistence; the archive now has both disk persistence and a nightly export). Each board also records **how many players were
   actually served DataGolf-direct**, because `model_version_id` is stamped `path_a@…`
   when Path A is *configured* — before any DataGolf call — and so cannot distinguish a
   healthy Path A board from one that cold-started the entire field. The endpoint reports
@@ -596,8 +605,16 @@ architecture plus product differentiation. An independent strategic review
 
 ## Forward record
 
-The forward out-of-sample track record above is machine-graded and aggregated. The
-underlying weekly work is published event-by-event in
+The forward out-of-sample track record above is machine-graded and aggregated. Two
+caveats govern how much any aggregate from it can claim. First, provenance: most of
+the current record (7 of 9 events) consists of backfilled reconstructions rather than
+live captures, and the grader and leaderboard report the two separately for that
+reason. Second, attribution: under Path A the served board is DataGolf's own
+probabilities for roughly 95% of a covered field, so the record measures what the
+platform served, which is mostly DataGolf, and only measures the in-house model's
+independent skill on the cold-start remainder.
+
+The underlying weekly work is published event-by-event in
 [`tournament-analyses/`](tournament-analyses/): the served board, DataGolf's raw
 probabilities, and the de-vigged sportsbook line for that event, with the top
 divergences and a written call. Once an event completes, a companion `-results.md`
