@@ -29,6 +29,7 @@ Two immutable archives, one grader, one backup path.
 | Board archive | `services/board_archive.py` | One pre-event prediction board per `(tournament_id, model_version_id)` |
 | Matchup archive | `services/matchup_line_record.py` | One pre-event matchup board per `(calendar_year, event_slug)` |
 | Forward grader | `services/forward_track_record.py` | Grades completed, out-of-sample boards → `GET /analytics/track-record/forward` |
+| Settlement archive | `services/settlement_archive.py` | One pinned results record per tournament, written at first grade (§2.4) |
 | Export/restore | `services/archive_export.py` | `GET/POST /analytics/archive/export|import`, backed up to the private `pinpoint-ledger` repo |
 | Inspector | `api/v1/analytics.py` | `GET /analytics/archive/inspect`, read-only metadata for debugging (§4.4) |
 
@@ -105,24 +106,40 @@ Pinned by four tests in `tests/test_board_archive.py`
 `test_earliest_live_capture_wins_within_a_source`,
 `test_backfill_stands_in_when_no_live_capture_exists`).
 
-### 2.4 Never grade an event that has not settled **[enforced, but see the gap]**
+### 2.4 Never grade an event that has not settled **[enforced]**
 
 Two gates, both required:
 
 - Event level: the grader skips any tournament whose status is not
   `COMPLETED`.
 - Player level: `_labels()` returns `None` for any entry that is not
-  `MADE_CUT` or `MISSED_CUT`, so withdrawals and still-active players are
-  excluded rather than scored as losses.
+  `MADE_CUT` or `MISSED_CUT`, so withdrawals, disqualifications, and
+  still-active players are excluded rather than scored as losses. Their
+  statuses are still stored in the settlement record — pinned but
+  ungradeable — and a stored status this build does not recognise is
+  treated the same way, never guessed at.
 
-**The gap:** settlement results are re-read from the live provider on
-every request and are never stored. The historical record is therefore
-not self-contained — it depends on DataGolf still being reachable, still
-subscribed, and still returning the same results it returned last week. A
-provider-side data revision would silently change a published historical
-number with no diff and no alarm. Durable settlement snapshots are
-roadmap item A3 (`docs/plans/01-roadmap.md`), not built. Until then,
-treat any single grading run as a measurement, not a record.
+**Results are pinned at first grade (A3, built 2026-08-20).** The grader
+reads each event's results from its immutable `SettlementRecord`
+(per-player final position and status, `settled_at`, provider name); the
+provider is consulted only to *create* a missing settlement, never to
+re-read one that exists. First write wins, like the boards, so a
+provider-side data revision can no longer rewrite an already-graded
+event. Settlements travel in the export/import and appear in
+`archive-inspect`. Pinned by
+`test_first_grade_pins_settlement_and_ignores_provider_mutation` and
+`test_settlements_round_trip_and_refuse_overwrite`; semantic equivalence
+with the old provider-path grading is pinned by
+`test_grading_from_settlement_matches_grading_from_provider`.
+
+**Initial pinning was deliberate, not accidental.** The 9 events graded
+before A3 existed had no settlement records, so the first grading run
+after the deploy pinned the provider's *current* view as truth for events
+that finished weeks earlier. That is the best available evidence
+(DataGolf's settled results for completed events are stable in practice),
+but those pins are reconstructions of settlement truth, not captures made
+at settlement time — `settled_at` on them records when the pin happened,
+not when the event settled. Accepted by Josh, 2026-08-20.
 
 ### 2.5 Captured and backfilled must stay distinguishable **[convention]**
 
@@ -368,7 +385,11 @@ means the serving model was trained on or after the event start; a
 snapshot with `canonical: false` means another snapshot for the same
 tournament outranks it, which is normal after a retrain. Whether the
 event has *completed* is the one gate this view cannot answer, because
-that comes from the catalog rather than the archive.
+that comes from the catalog rather than the archive — though a
+`settlement_records` entry for the event is proof it completed and was
+graded at least once (the pin is written at first grade, §2.4), so a
+board with no settlement usually means "not completed yet" or "never
+graded since completing".
 
 `POST /analytics/track-record/forward/backfill?dry_run=true`
 (`operation=backfill-dry-run`) answers "what would a backfill
@@ -417,7 +438,6 @@ Do not assume these exist. Roadmap detail in `docs/plans/01-roadmap.md`.
 | Item | Status |
 |---|---|
 | A1 git SHA provenance | Not built. Neither `ModelVersion` nor `BoardSnapshot` records the code revision. |
-| A3 durable settlement records | Not built. See 2.4. |
 | A4 named baselines | Not built. The only baseline is the field base rate. No DataGolf-raw column, no closing-line column. |
 | A5 closing-line capture | Not built. `get_outright_odds` exists on the provider; nothing captures it. |
 | B1 scheduled board capture | Not built. Capture is lazy; see 3.6. |

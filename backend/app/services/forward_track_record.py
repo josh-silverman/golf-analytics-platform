@@ -16,14 +16,17 @@ from typing import TYPE_CHECKING
 
 from app.domain.enums import EntryStatus, TournamentStatus
 from app.ml.backtest import _bootstrap_skill_ci, _brier
+from app.services.settlement_archive import settlement_from_field
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     import numpy as np
     from numpy.typing import NDArray
 
-    from app.domain.models import TournamentEntry
     from app.services.board_archive import BoardArchive, BoardSnapshot
     from app.services.catalog import CatalogService
+    from app.services.settlement_archive import SettlementArchive
 
 _MARKETS = ("win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob")
 
@@ -103,7 +106,7 @@ def _labels(final_position: int | None, status: EntryStatus) -> dict[str, int] |
     }
 
 
-def _event_has_a_cut(field: list[TournamentEntry]) -> bool:
+def _event_has_a_cut(statuses: Iterable[EntryStatus]) -> bool:
     """Did this event actually cut anyone?
 
     The FedExCup playoff events and several limited-field events play all four
@@ -120,7 +123,7 @@ def _event_has_a_cut(field: list[TournamentEntry]) -> bool:
     as its strongest. Excluded from the make-cut aggregate only; every other
     market on those events grades normally.
     """
-    return any(e.status == EntryStatus.MISSED_CUT for e in field)
+    return any(s == EntryStatus.MISSED_CUT for s in statuses)
 
 
 def canonical_by_tournament(snapshots: list[BoardSnapshot]) -> dict[int, BoardSnapshot]:
@@ -150,8 +153,16 @@ async def compute_forward_track_record(
     *,
     archive: BoardArchive,
     catalog: CatalogService,
+    settlements: SettlementArchive | None = None,
 ) -> ForwardTrackRecord | None:
-    """Grade every completed, out-of-sample captured board. ``None`` if none yet."""
+    """Grade every completed, out-of-sample captured board. ``None`` if none yet.
+
+    With a ``settlements`` archive, results are read from the pinned
+    settlement record for each event; the provider is consulted only to
+    create a missing pin (first grade of a newly completed event), never to
+    re-read one that exists. Without one (older callers, unit tests), results
+    are read from the provider directly — the pre-settlement behaviour.
+    """
     snapshots = await archive.list_all()
     if not snapshots:
         return None
@@ -182,11 +193,41 @@ async def compute_forward_track_record(
         if not snap.is_out_of_sample(tournament.start_date):
             continue  # model saw this event in training → not OOS, skip
 
-        field = await catalog.get_tournament_field(snap.tournament_id)
-        label_by_player = {e.player_id: _labels(e.final_position, e.status) for e in field}
+        # Results: from the pinned settlement when an archive is provided, so
+        # a provider-side revision can never rewrite an already-graded event.
+        # Both sources reduce to the same (player, position, status) rows and
+        # flow through the same labelling below, so pinning cannot change the
+        # grading semantics — only where the inputs come from.
+        results: list[tuple[int, int | None, EntryStatus]] = []
+        if settlements is not None:
+            stored = await settlements.get(snap.tournament_id)
+            if stored is None:
+                field = await catalog.get_tournament_field(snap.tournament_id)
+                if not field:
+                    continue  # no field → nothing to pin, nothing to grade
+                candidate = settlement_from_field(tournament, field, provider=catalog.source_name)
+                if await settlements.persist(candidate):
+                    stored = candidate
+                else:
+                    # Lost a first-write race: whatever landed first is the
+                    # truth; this run's provider read is discarded.
+                    stored = await settlements.get(snap.tournament_id) or candidate
+            for e in stored.entries:
+                st = e.entry_status()
+                if st is not None:  # unrecognised stored status → ungradeable
+                    results.append((e.player_id, e.final_position, st))
+        else:
+            field = await catalog.get_tournament_field(snap.tournament_id)
+            results = [(e.player_id, e.final_position, e.status) for e in field]
+
+        label_by_player = {pid: _labels(pos, st) for pid, pos, st in results}
         probs_by_player = {o.player_id: o for o in snap.outcomes}
         # Markets this event can legitimately be graded on.
-        gradeable = [m for m in _MARKETS if m != "make_cut_prob" or _event_has_a_cut(field)]
+        gradeable = [
+            m
+            for m in _MARKETS
+            if m != "make_cut_prob" or _event_has_a_cut(st for _, _, st in results)
+        ]
 
         ev_y: dict[str, list[float]] = {m: [] for m in _MARKETS}
         ev_p: dict[str, list[float]] = {m: [] for m in _MARKETS}

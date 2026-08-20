@@ -208,6 +208,21 @@ class ArchiveMatchupSummaryPayload(BaseModel):
     rows: int
 
 
+class ArchiveSettlementSummaryPayload(BaseModel):
+    """One pinned settlement record, summarised by status counts."""
+
+    tournament_id: int
+    tournament_name: str
+    tournament_start_date: str
+    provider: str
+    settled_at: str
+    players: int
+    made_cut: int
+    missed_cut: int
+    # WD / DQ / unrecognised statuses — present in the pin, ungradeable.
+    other: int
+
+
 class ArchiveInspectPayload(BaseModel):
     """Read-only view of what the archives actually hold.
 
@@ -220,8 +235,10 @@ class ArchiveInspectPayload(BaseModel):
 
     boards: int
     matchups: int
+    settlements: int = 0
     board_snapshots: list[ArchiveBoardSummaryPayload] = []
     matchup_snapshots: list[ArchiveMatchupSummaryPayload] = []
+    settlement_records: list[ArchiveSettlementSummaryPayload] = []
 
 
 class ArchiveExportPayload(BaseModel):
@@ -241,6 +258,7 @@ class ArchiveExportPayload(BaseModel):
     schema_version: int
     boards: list[dict[str, object]] = []
     matchups: list[dict[str, object]] = []
+    settlements: list[dict[str, object]] = []
 
 
 class ArchiveImportPayload(BaseModel):
@@ -258,6 +276,9 @@ class ArchiveImportPayload(BaseModel):
     matchups_stored: int
     matchups_skipped: int
     matchups_errors: int
+    settlements_stored: int = 0
+    settlements_skipped: int = 0
+    settlements_errors: int = 0
 
 
 class MatchupCapturePayload(BaseModel):

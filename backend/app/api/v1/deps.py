@@ -32,6 +32,11 @@ from app.services.matchup_line_record import (
     RedisMatchupArchive,
 )
 from app.services.predictions import PathASource, PredictionService
+from app.services.settlement_archive import (
+    FileSettlementArchive,
+    RedisSettlementArchive,
+    SettlementArchive,
+)
 
 if TYPE_CHECKING:
     from datetime import date
@@ -124,6 +129,21 @@ def get_matchup_archive() -> MatchupArchive:
 
         return RedisMatchupArchive(redis_client)
     return FileMatchupArchive(Path(settings.matchup_archive_path))
+
+
+@lru_cache(maxsize=1)
+def get_settlement_archive() -> SettlementArchive:
+    """Process-cached settlement archive (results pinned at first grade).
+
+    Same backend split as the other two archives: the pinned results are
+    ledger data and must outlive redeploys in production.
+    """
+    settings = get_settings()
+    if settings.board_archive_backend == "redis":
+        from app.cache.redis import redis_client
+
+        return RedisSettlementArchive(redis_client)
+    return FileSettlementArchive(Path(settings.settlements_path))
 
 
 def _resolve_active_model() -> tuple[Model, str, str | None]:

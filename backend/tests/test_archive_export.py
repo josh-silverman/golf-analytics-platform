@@ -19,7 +19,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.v1.analytics as analytics_module
-from app.api.v1.deps import get_board_archive, get_matchup_archive
+from app.api.v1.deps import (
+    get_board_archive,
+    get_matchup_archive,
+    get_settlement_archive,
+)
 from app.services.archive_export import export_archives, import_archives
 from app.services.board_archive import (
     BoardSnapshot,
@@ -31,6 +35,11 @@ from app.services.matchup_line_record import (
     FileMatchupArchive,
     MatchupRow,
     MatchupSnapshot,
+)
+from app.services.settlement_archive import (
+    FileSettlementArchive,
+    SettlementEntry,
+    SettlementRecord,
 )
 
 if TYPE_CHECKING:
@@ -93,6 +102,21 @@ def _archives(root: Path) -> tuple[FileBoardArchive, FileMatchupArchive]:
     boards = FileBoardArchive(root / "boards")
     matchups = FileMatchupArchive(root / "matchups")
     return boards, matchups
+
+
+def _settlement(tournament_id: int = 1, winner_position: int = 1) -> SettlementRecord:
+    return SettlementRecord(
+        tournament_id=tournament_id,
+        tournament_name=f"Event {tournament_id}",
+        tournament_start_date="2026-06-01",
+        provider="mock",
+        settled_at="2026-06-05T12:00:00+00:00",
+        entries=(
+            SettlementEntry(player_id=10, final_position=winner_position, status="made_cut"),
+            SettlementEntry(player_id=12, final_position=None, status="missed_cut"),
+            SettlementEntry(player_id=13, final_position=None, status="withdrew"),
+        ),
+    )
 
 
 # --- Service level -----------------------------------------------------------
@@ -198,14 +222,60 @@ async def test_import_does_not_mutate_the_caller_payload(tmp_path) -> None:
     assert json.dumps(doc, sort_keys=True) == before
 
 
+async def test_settlements_round_trip_and_refuse_overwrite(tmp_path) -> None:
+    boards, matchups = _archives(tmp_path / "src")
+    settlements = FileSettlementArchive(tmp_path / "src" / "settlements")
+    await settlements.persist(_settlement(1))
+
+    doc = await export_archives(boards=boards, matchups=matchups, settlements=settlements)
+    doc = json.loads(json.dumps(doc))
+    assert len(doc["settlements"]) == 1
+
+    dst_boards, dst_matchups = _archives(tmp_path / "dst")
+    dst_settlements = FileSettlementArchive(tmp_path / "dst" / "settlements")
+    result = await import_archives(
+        doc, boards=dst_boards, matchups=dst_matchups, settlements=dst_settlements
+    )
+    assert result.settlements_stored == 1
+    assert await dst_settlements.list_all() == await settlements.list_all()
+
+    # A dump claiming a different winner cannot overwrite the pinned result.
+    doc["settlements"][0]["entries"][0]["final_position"] = 99
+    result = await import_archives(
+        doc, boards=dst_boards, matchups=dst_matchups, settlements=dst_settlements
+    )
+    assert result.settlements_stored == 0
+    assert result.settlements_skipped == 1
+    (kept,) = await dst_settlements.list_all()
+    assert kept.entries[0].final_position == 1
+
+
+async def test_import_tolerates_dumps_without_settlements(tmp_path) -> None:
+    """An export written before A3 has no settlements key; restore still works."""
+    boards, matchups = _archives(tmp_path / "src")
+    await boards.persist(_board(1))
+    doc = json.loads(json.dumps(await export_archives(boards=boards, matchups=matchups)))
+    doc.pop("settlements", None)  # simulate a pre-A3 dump
+
+    dst_boards, dst_matchups = _archives(tmp_path / "dst")
+    dst_settlements = FileSettlementArchive(tmp_path / "dst" / "settlements")
+    result = await import_archives(
+        doc, boards=dst_boards, matchups=dst_matchups, settlements=dst_settlements
+    )
+    assert result.boards_stored == 1
+    assert result.settlements_stored == result.settlements_errors == 0
+
+
 # --- Endpoint level ----------------------------------------------------------
 
 
 @pytest.fixture
 def archive_ctx(app: FastAPI, tmp_path, monkeypatch) -> Iterator[TestClient]:
     boards, matchups = _archives(tmp_path)
+    settlements = FileSettlementArchive(tmp_path / "settlements")
     app.dependency_overrides[get_board_archive] = lambda: boards
     app.dependency_overrides[get_matchup_archive] = lambda: matchups
+    app.dependency_overrides[get_settlement_archive] = lambda: settlements
     monkeypatch.setattr(
         analytics_module,
         "get_settings",
@@ -213,7 +283,7 @@ def archive_ctx(app: FastAPI, tmp_path, monkeypatch) -> Iterator[TestClient]:
     )
     with TestClient(app) as c:
         yield c
-    for dep in (get_board_archive, get_matchup_archive):
+    for dep in (get_board_archive, get_matchup_archive, get_settlement_archive):
         app.dependency_overrides.pop(dep, None)
 
 
@@ -263,6 +333,31 @@ async def test_inspect_filters_by_tournament(archive_ctx: TestClient, app: FastA
     body = r.json()
     assert body["boards"] == 2  # total is still reported
     assert [b["tournament_id"] for b in body["board_snapshots"]] == [2]
+
+
+async def test_endpoints_carry_settlements_end_to_end(
+    archive_ctx: TestClient, app: FastAPI, tmp_path
+) -> None:
+    settlements = app.dependency_overrides[get_settlement_archive]()
+    await settlements.persist(_settlement(7))
+
+    # Inspect summarises the pin by status counts, without per-player results.
+    r = archive_ctx.get(_INSPECT_URL, headers={"X-Admin-Token": "secret"})
+    body = r.json()
+    assert body["settlements"] == 1
+    (rec,) = body["settlement_records"]
+    assert rec["tournament_id"] == 7
+    assert (rec["made_cut"], rec["missed_cut"], rec["other"]) == (1, 1, 1)
+    assert rec["provider"] == "mock"
+
+    # Export includes it; importing into a fresh archive restores it.
+    dump = archive_ctx.get(_EXPORT_URL, headers={"X-Admin-Token": "secret"}).json()
+    assert len(dump["settlements"]) == 1
+    fresh = FileSettlementArchive(tmp_path / "restored-settlements")
+    app.dependency_overrides[get_settlement_archive] = lambda: fresh
+    r2 = archive_ctx.post(_IMPORT_URL, json=dump, headers={"X-Admin-Token": "secret"})
+    assert r2.json()["settlements_stored"] == 1
+    assert await fresh.list_all() == await settlements.list_all()
 
 
 def test_inspect_is_admin_gated(archive_ctx: TestClient) -> None:

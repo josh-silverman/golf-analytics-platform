@@ -99,7 +99,7 @@ D2 (grading commentary) ── after A4/B2
   model versions → one graded event; captured/backfilled counts surface
   in `/analytics/track-record/forward`.
 
-### A3. Immutable settlement records
+### A3. Immutable settlement records ✅ (built 2026-08-20; see docs/ledger.md §2.4, incl. the initial-pinning decision)
 - **What**: On first grade of a completed event, persist a
   `ResultSnapshot` (per-player final position + entry status, settled_at,
   provider name) into the same archive infrastructure, first-write-wins.
