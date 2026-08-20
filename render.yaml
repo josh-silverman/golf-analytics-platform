@@ -53,6 +53,16 @@ services:
 
   - type: keyvalue
     name: pga-redis
-    plan: free
+    # Starter ($10/mo) instead of free: free Key Value has NO persistence, so
+    # any restart of the instance erased the forward archives — the one loss
+    # the platform can't recover from by recomputing. Paid instances persist
+    # to disk; after applying this, also set the persistence mode to
+    # "Journal + Snapshot" in the Render dashboard (not expressible here).
+    # The archive-export workflow remains the off-site backup either way.
+    plan: starter
+    # The instance holds best-effort caches AND the forward archives. If
+    # memory ever fills, evicting archive keys would silently destroy ledger
+    # history — fail writes instead (caches already tolerate write errors).
+    maxmemoryPolicy: noeviction
     # Internal-only: no external IPs may reach the cache.
     ipAllowList: []
