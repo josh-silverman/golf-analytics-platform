@@ -72,7 +72,7 @@ jobs:
             echo "::error::A board was not captured for every event in the window. See outcomes above; a missed pre-event window cannot be recovered by re-running this job."
             exit 1
           fi
-          echo "captured: $(jq -r '.captured') of $(jq -r '.examined') event(s) examined"
+          echo "captured: $(jq -r '.captured' result.json) of $(jq -r '.examined' result.json) event(s) examined"
 
   # Back the fresh capture up to the private ledger immediately rather than
   # waiting for the nightly export, per docs/ledger.md §4.2.
