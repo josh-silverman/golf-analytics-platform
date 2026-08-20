@@ -35,6 +35,8 @@ from app.api.v1.schemas import (
     MatchupThresholdPayload,
     OutcomeCalibrationPayload,
     ReliabilityBinPayload,
+    SettleEventPayload,
+    SettlePayload,
     TrackRecordPayload,
 )
 from app.config import get_settings
@@ -202,6 +204,59 @@ def _market_payloads(markets: tuple[MarketSkill, ...]) -> list[ForwardMarketSkil
         )
         for m in markets
     ]
+
+
+@router.post("/track-record/settle")
+async def settle_and_grade(
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    settlements: Annotated[SettlementArchive, Depends(get_settlement_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+) -> SettlePayload:
+    """Pin results for newly completed events and regrade the forward record.
+
+    Settling is a side effect of grading (§2.4 of ``docs/ledger.md``): the
+    grader writes an immutable ``SettlementRecord`` for any completed,
+    out-of-sample event that lacks one. That already happens on any request
+    to ``/track-record/forward``, so this endpoint does not add capability —
+    it makes the timing deterministic, the same reason scheduled capture
+    exists, and reports which events were newly pinned.
+
+    Idempotent by construction: settlements are first-write-wins, so a
+    second run for the same event pins nothing and reports no new events.
+
+    Cost is proportional to the number of *newly* completed events, not to
+    the size of the record: an event that already has a settlement is graded
+    without touching the provider at all.
+
+    Admin-gated: requires ``X-Admin-Token`` matching
+    ``settings.admin_api_token``; 404 when the secret is unset.
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    before = {r.tournament_id for r in await settlements.list_all()}
+    tr = await compute_forward_track_record(
+        archive=archive, catalog=catalog, settlements=settlements
+    )
+    after = await settlements.list_all()
+
+    return SettlePayload(
+        available=tr is not None,
+        events_graded=tr.events if tr is not None else 0,
+        settlements_total=len(after),
+        newly_settled=[
+            SettleEventPayload(
+                tournament_id=r.tournament_id,
+                name=r.tournament_name,
+                start_date=r.tournament_start_date,
+                players=len(r.entries),
+            )
+            for r in sorted(after, key=lambda r: r.tournament_start_date)
+            if r.tournament_id not in before
+        ],
+    )
 
 
 @router.post("/track-record/capture-upcoming")

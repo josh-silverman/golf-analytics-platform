@@ -49,6 +49,7 @@ on:
           - archive-import
           - matchup-capture
           - capture-upcoming
+          - settle
       tournament_id:
         description: "archive-inspect only: narrow to one tournament id (blank = all)"
         required: false
@@ -106,6 +107,16 @@ jobs:
             matchup-capture)
               echo "method=POST" >> "$GITHUB_OUTPUT"
               echo "path=/api/v1/analytics/matchups/capture" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            settle)
+              # Manual equivalent of settle-and-grade.yml's scheduled run.
+              # Pins results for newly completed events and regrades. Safe any
+              # time: settlements are first-write-wins. Unlike the cron, this
+              # does not verify against the record afterwards — use
+              # archive-inspect for that.
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/track-record/settle" >> "$GITHUB_OUTPUT"
               echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
               ;;
             capture-upcoming)

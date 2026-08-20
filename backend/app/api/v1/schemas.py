@@ -205,6 +205,36 @@ class BoardCapturePayload(BaseModel):
     events: list[BoardCaptureEventPayload] = []
 
 
+class SettleEventPayload(BaseModel):
+    """One event whose results this run pinned for the first time."""
+
+    tournament_id: int
+    name: str
+    start_date: str
+    players: int
+
+
+class SettlePayload(BaseModel):
+    """Result of a scheduled settle-and-grade run.
+
+    Settling is a side effect of grading: the grader pins results for any
+    completed, out-of-sample event that does not have a settlement yet
+    (§2.4). This endpoint runs that pass deliberately so results are pinned
+    on a schedule rather than whenever the first visitor happens to load the
+    leaderboard, and reports which events were newly pinned.
+
+    Treat these numbers as a report, not as proof. The run can exceed a
+    client timeout while the server keeps working, so the scheduled job
+    verifies the outcome against the archive and the forward record instead
+    of trusting this response.
+    """
+
+    available: bool
+    events_graded: int = 0
+    settlements_total: int = 0
+    newly_settled: list[SettleEventPayload] = []
+
+
 class ArchiveBoardSummaryPayload(BaseModel):
     """One stored board snapshot, without its probabilities.
 
