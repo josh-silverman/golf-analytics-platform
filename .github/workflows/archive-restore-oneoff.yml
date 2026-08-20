@@ -1,0 +1,40 @@
+name: One-off archive restore drill
+
+# TEMPORARY — created to restore the forward archives after the Key Value
+# Starter-plan upgrade wiped them (Render warns free→paid upgrades reset
+# instance data), and to prove the recovery path documented in
+# docs/runbook.md ("Restore the forward archives after a Key Value wipe")
+# actually works end to end. Manual dispatch only, no schedule. Delete this
+# file once the drill is confirmed — restore should stay a deliberate,
+# human-triggered act (see archive-export.yml for the standing backup job),
+# not automation that can overwrite production archive keys on a cron.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch the last committed dump from the private ledger
+        env:
+          LEDGER_DEPLOY_KEY: ${{ secrets.LEDGER_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$LEDGER_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone --depth 1 git@github.com:josh-silverman/pinpoint-ledger.git ledger
+
+      - name: POST /analytics/archive/import
+        run: |
+          curl -fsS --max-time 120 --retry 3 --retry-delay 20 --retry-all-errors \
+            -X POST \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data @ledger/golf-analytics/archive-export.json \
+            https://pga-analytics-api.onrender.com/api/v1/analytics/archive/import \
+            | tee import-result.json
+          echo
+          echo "--- import result ---"
+          cat import-result.json
