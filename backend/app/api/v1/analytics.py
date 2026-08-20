@@ -156,6 +156,8 @@ async def get_forward_track_record(
         events_path_a=tr.events_path_a,
         events_cold_start_only=tr.events_cold_start_only,
         events_regime_unknown=tr.events_regime_unknown,
+        events_captured=tr.events_captured,
+        events_backfilled=tr.events_backfilled,
         markets=[
             ForwardMarketSkillPayload(
                 market=m.market,

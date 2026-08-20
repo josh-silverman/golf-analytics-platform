@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from app.domain.models import TournamentEntry
-    from app.services.board_archive import BoardArchive
+    from app.services.board_archive import BoardArchive, BoardSnapshot
     from app.services.catalog import CatalogService
 
 _MARKETS = ("win_prob", "top_5_prob", "top_10_prob", "top_20_prob", "make_cut_prob")
@@ -58,6 +58,12 @@ class ForwardTrackRecord:
     events_path_a: int = 0
     events_cold_start_only: int = 0
     events_regime_unknown: int = 0
+    # Provenance split of the graded events: a live pre-event capture is
+    # primary evidence; a backfill is a post-hoc reconstruction by whatever
+    # code was current when it ran. Pooled in the aggregate, but reported so
+    # the record never silently passes one off as the other.
+    events_captured: int = 0
+    events_backfilled: int = 0
 
 
 # Heuristic: block-bootstrap CIs over events stabilise for the strong markets
@@ -120,6 +126,22 @@ async def compute_forward_track_record(
     if not snapshots:
         return None
 
+    # One graded snapshot per tournament. The archive legitimately holds
+    # several — retraining changes the model_version_id, so the same event can
+    # be captured live under one version and reconstructed by the backfill
+    # under another — but grading them all would count the tournament twice
+    # (twice the events, twice the bootstrap blocks). The canonical snapshot
+    # is the earliest live capture ("captured" beats "backfilled" regardless
+    # of timestamp — primary evidence over reconstruction), earliest
+    # ``captured_at`` breaking ties within a source.
+    canonical: dict[int, BoardSnapshot] = {}
+    for snap in snapshots:
+        rank = (snap.source != "captured", snap.captured_at)
+        held = canonical.get(snap.tournament_id)
+        if held is None or rank < (held.source != "captured", held.captured_at):
+            canonical[snap.tournament_id] = snap
+    snapshots = list(canonical.values())
+
     # Per-market, grouped by event (the block-bootstrap unit).
     y_by_event: dict[str, list[list[float]]] = {m: [] for m in _MARKETS}
     p_by_event: dict[str, list[list[float]]] = {m: [] for m in _MARKETS}
@@ -128,6 +150,8 @@ async def compute_forward_track_record(
     path_a_events = 0
     cold_start_events = 0
     unknown_regime_events = 0
+    captured_events = 0
+    backfilled_events = 0
 
     for snap in snapshots:
         tournament = await catalog.get_tournament(snap.tournament_id)
@@ -157,6 +181,10 @@ async def compute_forward_track_record(
             continue
         events += 1
         players += graded_here
+        if snap.source == "captured":
+            captured_events += 1
+        else:
+            backfilled_events += 1
         share = snap.dg_direct_share
         if share is None:
             unknown_regime_events += 1
@@ -201,6 +229,8 @@ async def compute_forward_track_record(
         events_path_a=path_a_events,
         events_cold_start_only=cold_start_events,
         events_regime_unknown=unknown_regime_events,
+        events_captured=captured_events,
+        events_backfilled=backfilled_events,
     )
 
 
