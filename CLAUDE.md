@@ -1,7 +1,35 @@
 # Pinpoint Analytics (golf-analytics-platform)
 
-PGA Tour prediction platform. FastAPI backend, React frontend, Postgres
-and Redis, deployed on Render.
+PGA Tour prediction platform. FastAPI backend, React frontend, Redis,
+deployed on Render. (`app/db/` and the alembic migration are vestigial and
+unused — see [docs/ledger.md](docs/ledger.md) §3.4 before wiring anything
+into them.)
+
+## Before touching the prediction ledger
+
+Read [docs/ledger.md](docs/ledger.md). It is the contract list for the
+forward record: the immutable board and matchup archives, the grader, and
+the export/restore path. Required reading before changing anything under
+`app/services/{board_archive,matchup_line_record,forward_track_record,archive_export}.py`,
+the capture path in `app/api/v1/predictions.py`, or the admin endpoints in
+`app/api/v1/analytics.py`.
+
+The four that bite hardest:
+
+- **First write wins** on every archive persist. Never add an overwrite,
+  upsert, or delete path. This is what makes the record falsifiable.
+- **One graded snapshot per tournament**, captured beating backfilled
+  regardless of timestamp.
+- **Captured and backfilled stay distinguishable** in every reported
+  number. Never present a pooled figure as a live track record.
+- **`/status`'s `model_version_id` is not the version boards carry.**
+  Boards are stamped `path_a@<v2 cold-start id>`; `/status` reports the
+  registry-active v3 model. Different identifiers, both look
+  authoritative.
+
+The doc also covers the traps (a timed-out admin job that actually
+succeeded, `path_a@…` not meaning Path A ran, lazy capture), the restore
+procedure, and what is deliberately not built yet.
 
 ## Before writing audience-facing prose
 
@@ -42,10 +70,7 @@ failure mode is silent (the base `DataProvider` default returns `{}`
 rather than raising). Boards served before that date still carry the bug,
 which is what the 3M Open grading measured.
 
-Boards now record `dg_direct_count` (how many players were actually served
-DataGolf-direct), because `model_version_id` is stamped `path_a@<id>` before
-any DataGolf call and therefore cannot distinguish a healthy Path A board
-from one that cold-started the whole field. `/analytics/track-record/forward`
-reports the regime split, and the leaderboard shows a caveat line when the
-graded set mixes regimes. Boards captured before this shipped report
-`dg_direct_count: null` and are counted as "unknown", not as covered.
+Boards now record `dg_direct_count` so a healthy Path A board can be told
+apart from one that cold-started the whole field, since `model_version_id`
+cannot express the difference. Details and the resulting regime split in
+[docs/ledger.md](docs/ledger.md) §3.2.
