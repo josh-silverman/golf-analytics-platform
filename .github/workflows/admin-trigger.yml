@@ -1,0 +1,158 @@
+name: Admin trigger
+
+# The one way to reach an admin endpoint on the deployed API. Replaces the
+# create-workflow / dispatch / delete-workflow dance that every admin action
+# used to cost (four commits and two deploys per run).
+#
+# WHY IT IS DISPATCH-ONLY. Manual dispatch is the authorization boundary:
+# `workflow_dispatch` can only be triggered by someone with write access to
+# this repo, and GitHub records who triggered it. There is deliberately NO
+# `schedule`, NO `workflow_call`, NO `repository_dispatch`, and no push or PR
+# trigger. `workflow_call` is the one that matters most: it would let any
+# other workflow in the repo invoke an archive write as a job step (that is
+# exactly how matchup-capture.yml chains archive-export.yml), which would end
+# the "writes are human-triggered" property. Do not add it. If a write ever
+# needs to run on a schedule, give it its own single-purpose workflow with a
+# narrow endpoint rather than widening this one.
+#
+# WHAT IT CAN REACH. Only the operations in the `operation` dropdown below.
+# The endpoint path is never taken as free text, so a typo cannot send a
+# request somewhere unintended, and the dropdown doubles as the current list
+# of admin operations.
+#
+# WHAT IT CANNOT REACH, and why:
+#   - /analytics/archive/export. Its response is the full archive dump,
+#     including DataGolf-derived probabilities. This workflow prints response
+#     bodies, and Actions logs on a public repo are public, so exporting here
+#     would redistribute data DataGolf licenses for personal use only. Export
+#     runs in archive-export.yml instead, which streams the dump to a private
+#     repo and logs only counts.
+#   - Anything not in the dropdown, including any endpoint added later. Adding
+#     an operation is a deliberate edit to this file, and the test to apply is
+#     the same one: is this response safe to print in a public log?
+#
+# Every write behind this workflow is first-write-wins, so a mis-dispatched
+# run cannot overwrite or destroy an existing snapshot; the worst case is a
+# no-op. See docs/ledger.md for the invariants and the recovery procedure.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Which admin operation to run"
+        required: true
+        type: choice
+        options:
+          - backfill-dry-run
+          - backfill
+          - archive-inspect
+          - archive-import
+          - matchup-capture
+      tournament_id:
+        description: "archive-inspect only: narrow to one tournament id (blank = all)"
+        required: false
+        type: string
+      ledger_file:
+        description: "archive-import only: file in the private ledger repo to restore from"
+        required: false
+        default: golf-analytics/archive-export.json
+        type: string
+
+# No GITHUB_TOKEN scope is needed: nothing here reads or writes this repo.
+# The ledger clone for archive-import authenticates with its own deploy key.
+permissions: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve operation
+        id: op
+        env:
+          OPERATION: ${{ inputs.operation }}
+          TOURNAMENT_ID: ${{ inputs.tournament_id }}
+        run: |
+          set -euo pipefail
+          case "$OPERATION" in
+            backfill-dry-run)
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/track-record/forward/backfill?dry_run=true" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            backfill)
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/track-record/forward/backfill" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            archive-inspect)
+              path="/api/v1/analytics/archive/inspect"
+              if [ -n "$TOURNAMENT_ID" ]; then
+                # Digits only: this is the one input that reaches a URL.
+                case "$TOURNAMENT_ID" in
+                  ''|*[!0-9]*) echo "tournament_id must be a positive integer" >&2; exit 1 ;;
+                esac
+                path="$path?tournament_id=$TOURNAMENT_ID"
+              fi
+              echo "method=GET" >> "$GITHUB_OUTPUT"
+              echo "path=$path" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            archive-import)
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/archive/import" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=true" >> "$GITHUB_OUTPUT"
+              ;;
+            matchup-capture)
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/matchups/capture" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unknown operation: $OPERATION" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Fetch restore payload from the private ledger
+        if: steps.op.outputs.needs_ledger == 'true'
+        env:
+          LEDGER_DEPLOY_KEY: ${{ secrets.LEDGER_DEPLOY_KEY }}
+          LEDGER_FILE: ${{ inputs.ledger_file }}
+        run: |
+          set -euo pipefail
+          # Reject path traversal: this string selects a file to upload.
+          case "$LEDGER_FILE" in
+            /*|*..*) echo "ledger_file must be a relative path inside the repo" >&2; exit 1 ;;
+          esac
+          mkdir -p ~/.ssh
+          printf '%s\n' "$LEDGER_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone --depth 1 git@github.com:josh-silverman/pinpoint-ledger.git ledger
+          test -f "ledger/$LEDGER_FILE" || { echo "No such file in ledger: $LEDGER_FILE" >&2; exit 1; }
+          cp "ledger/$LEDGER_FILE" payload.json
+          # Counts only. The file itself is DataGolf-derived and must not be logged.
+          echo "payload: $(jq '.boards | length' payload.json) boards, $(jq '.matchups | length' payload.json) matchups"
+
+      - name: Call the API
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+          METHOD: ${{ steps.op.outputs.method }}
+          API_PATH: ${{ steps.op.outputs.path }}
+          NEEDS_LEDGER: ${{ steps.op.outputs.needs_ledger }}
+        run: |
+          set -euo pipefail
+          BASE=https://pga-analytics-api.onrender.com
+          # Long timeout plus retries: the free tier cold-starts (~40s), and a
+          # real backfill rebuilds a board per event. A client-side timeout does
+          # NOT mean the server stopped; every write is first-write-wins, so the
+          # retry is a no-op if the first attempt already landed. Verify the
+          # outcome against the record, never against this log (docs/ledger.md).
+          args=(-fsS --max-time 580 --retry 2 --retry-delay 30 --retry-all-errors
+                -X "$METHOD" -H "X-Admin-Token: $ADMIN_TOKEN")
+          if [ "$NEEDS_LEDGER" = "true" ]; then
+            args+=(-H "Content-Type: application/json" --data @payload.json)
+          fi
+          curl "${args[@]}" "$BASE$API_PATH" -o response.json
+          echo "--- response ---"
+          jq . response.json 2>/dev/null || cat response.json
