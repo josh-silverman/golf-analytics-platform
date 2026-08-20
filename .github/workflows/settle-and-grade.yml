@@ -49,17 +49,26 @@ jobs:
         run: |
           set -uo pipefail
           API=https://pga-analytics-api.onrender.com/api/v1
-          # Deliberately not gating on this call: a client-side timeout does
-          # not mean the server stopped, and the verify step below is the
-          # real check. `|| true` keeps a timeout from masking the record.
+          rc=0
           curl -fsS --max-time 580 --retry 2 --retry-delay 30 --retry-all-errors \
             -X POST -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
-            "$API/track-record/settle" -o settle.json || true
-          if [ -s settle.json ]; then
+            "$API/analytics/track-record/settle" -o settle.json || rc=$?
+
+          # A timeout and an HTTP error are different things and must not be
+          # treated alike. Tolerating a timeout is deliberate (the server may
+          # well have finished; the verify step decides). Tolerating an HTTP
+          # error is not: it would let a permanently broken settle call pass
+          # green every week for as long as the record happened to stay
+          # self-consistent, which is exactly what a 404 from a mistyped URL
+          # did on the first live run of this job.
+          if [ "$rc" -eq 0 ]; then
             echo "--- settle response (a report, not proof) ---"
             jq . settle.json
+          elif [ "$rc" -eq 28 ]; then
+            echo "::warning::Settle call exceeded the client timeout. The server may have finished; the verify step decides."
           else
-            echo "Settle call returned nothing (timeout or error). The verify step decides."
+            echo "::error::Settle call failed with curl exit $rc, which is not a timeout. Note that the admin gate answers 404 for a bad token *and* the router answers 404 for a wrong path, so check the URL as well as the secret."
+            exit 1
           fi
 
       - name: Verify against the record

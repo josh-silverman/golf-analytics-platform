@@ -313,6 +313,26 @@ event counts, or `/status` for `last_board_build_at`. This also means
 retries are safe by design (first write wins), so a timeout-then-retry
 is not a failure.
 
+**The corollary, learned the hard way.** Verifying against the record is
+necessary but not sufficient: a job whose call fails outright still
+passes a record check whenever the record was already consistent. The
+first live run of `settle-and-grade.yml` did exactly that, reporting
+success while every settle request 404'd on a mistyped URL, because the
+nine existing events were already settled and consistent. So distinguish
+a timeout from an error rather than tolerating both: `curl` exit 28 is a
+timeout and is safe to continue past, while any other non-zero exit means
+the call did not reach the endpoint and should fail the job.
+
+### 3.3a A 404 does not tell you which thing was wrong
+
+Admin endpoints answer `404` for a bad or missing token, on purpose, so
+they do not advertise their existence (§2.9). FastAPI also answers `404`
+for a path that no route matches. The two are indistinguishable in a
+client log, so when an admin call 404s, check the URL prefix before
+assuming the secret is wrong. Every analytics route sits under
+`/api/v1/analytics/…`; a `$API` variable that stops at `/api/v1` needs
+`/analytics` added per call.
+
 ### 3.4 `app/db/` and the alembic migration are vestigial
 
 Nothing outside `app/db/` imports it (verify with
