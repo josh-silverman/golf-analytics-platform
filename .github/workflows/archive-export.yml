@@ -48,7 +48,7 @@ jobs:
           # counts only — the content is DataGolf-derived and these logs are
           # public.
           jq -e '.schema_version == 1' export.json > /dev/null
-          echo "boards: $(jq '.boards | length' export.json)  matchups: $(jq '.matchups | length' export.json)  settlements: $(jq '.settlements | length' export.json)"
+          echo "boards: $(jq '.boards | length' export.json)  matchups: $(jq '.matchups | length' export.json)  settlements: $(jq '.settlements | length' export.json)  closing_lines: $(jq '.closing_lines | length' export.json)"
 
       - name: Commit to the private ledger repo
         env:
