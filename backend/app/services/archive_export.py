@@ -31,11 +31,13 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from app.services.board_archive import _from_dict as _board_from_dict
+from app.services.closing_line_archive import _from_dict as _closing_from_dict
 from app.services.matchup_line_record import _from_dict as _matchup_from_dict
 from app.services.settlement_archive import _from_dict as _settlement_from_dict
 
 if TYPE_CHECKING:
     from app.services.board_archive import BoardArchive
+    from app.services.closing_line_archive import ClosingLineArchive
     from app.services.matchup_line_record import MatchupArchive
     from app.services.settlement_archive import SettlementArchive
 
@@ -57,6 +59,9 @@ class ArchiveImportResult:
     settlements_stored: int = 0
     settlements_skipped: int = 0
     settlements_errors: int = 0
+    closing_lines_stored: int = 0
+    closing_lines_skipped: int = 0
+    closing_lines_errors: int = 0
 
 
 async def export_archives(
@@ -64,13 +69,15 @@ async def export_archives(
     boards: BoardArchive,
     matchups: MatchupArchive,
     settlements: SettlementArchive | None = None,
+    closing_lines: ClosingLineArchive | None = None,
 ) -> dict[str, Any]:
     """Every snapshot from the archives as one deterministic document.
 
-    ``settlements`` is optional for older callers; the key is present (and
-    empty) either way so the document shape is stable. Records are immutable
-    once written, so their ``settled_at`` timestamps do not break the
-    unchanged-archive → byte-identical-export property.
+    ``settlements`` and ``closing_lines`` are optional for older callers; their
+    keys are present (and empty) either way so the document shape is stable.
+    Records are immutable once written, so their ``settled_at`` / ``captured_at``
+    timestamps do not break the unchanged-archive → byte-identical-export
+    property.
     """
     board_snaps = sorted(
         await boards.list_all(),
@@ -82,11 +89,17 @@ async def export_archives(
         if settlements is not None
         else []
     )
+    closing_snaps = (
+        sorted(await closing_lines.list_all(), key=lambda s: (s.year, s.slug))
+        if closing_lines is not None
+        else []
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "boards": [asdict(s) for s in board_snaps],
         "matchups": [asdict(s) for s in matchup_snaps],
         "settlements": [asdict(r) for r in settlement_recs],
+        "closing_lines": [asdict(s) for s in closing_snaps],
     }
 
 
@@ -96,6 +109,7 @@ async def import_archives(
     boards: BoardArchive,
     matchups: MatchupArchive,
     settlements: SettlementArchive | None = None,
+    closing_lines: ClosingLineArchive | None = None,
 ) -> ArchiveImportResult:
     """Re-seed the archives from an export document, first-write-wins."""
     b_stored = b_skipped = b_errors = 0
@@ -137,6 +151,19 @@ async def import_archives(
             else:
                 s_skipped += 1
 
+    c_stored = c_skipped = c_errors = 0
+    if closing_lines is not None:
+        for raw in payload.get("closing_lines") or []:
+            try:
+                closing_snap = _closing_from_dict(copy.deepcopy(raw))
+            except (ValueError, TypeError, AttributeError):
+                c_errors += 1
+                continue
+            if await closing_lines.persist(closing_snap):
+                c_stored += 1
+            else:
+                c_skipped += 1
+
     return ArchiveImportResult(
         boards_stored=b_stored,
         boards_skipped=b_skipped,
@@ -147,4 +174,7 @@ async def import_archives(
         settlements_stored=s_stored,
         settlements_skipped=s_skipped,
         settlements_errors=s_errors,
+        closing_lines_stored=c_stored,
+        closing_lines_skipped=c_skipped,
+        closing_lines_errors=c_errors,
     )

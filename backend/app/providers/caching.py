@@ -401,6 +401,13 @@ class CachingProviderWrapper(DataProvider):
     async def fetch_live_matchups(self, market: str = "tournament_matchups") -> dict[str, Any]:
         return await self._provider.fetch_live_matchups(market)  # type: ignore[attr-defined,no-any-return]
 
+    async def fetch_live_outrights(self, market: str) -> dict[str, Any]:
+        # Same reason as the matchup pass-throughs: without it the closing-line
+        # capture endpoint's hasattr() check fails on the wrapped provider and
+        # the weekly capture 409s forever while looking deployed. Uncached on
+        # purpose — the raw feed is wanted fresh, once a week.
+        return await self._provider.fetch_live_outrights(market)  # type: ignore[attr-defined,no-any-return]
+
     async def fetch_historical_matchup_event_list(self) -> list[dict[str, Any]]:
         return await self._provider.fetch_historical_matchup_event_list()  # type: ignore[attr-defined,no-any-return]
 

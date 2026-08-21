@@ -253,6 +253,11 @@ class ArchiveBoardSummaryPayload(BaseModel):
     source: str
     outcomes: int
     dg_direct_count: int | None
+    # Rows of DataGolf's own pre-event probabilities pinned with this board
+    # (A4a). ``None`` on snapshots captured before that existed — which is the
+    # fast way to tell whether an event can carry a DataGolf baseline column at
+    # all, since it can never be added retroactively.
+    dg_baseline: int | None = None
     # Derived, and the two questions this view exists to answer. ``out_of_sample``
     # is computed from the snapshot's own dates; ``canonical`` marks the snapshot
     # the grader would actually score for this tournament (see
@@ -286,6 +291,31 @@ class ArchiveSettlementSummaryPayload(BaseModel):
     other: int
 
 
+class ClosingLineMarketPayload(BaseModel):
+    """One market inside a captured outright snapshot, prices omitted."""
+
+    market: str
+    offered: bool
+    players: int = 0
+    books: int = 0
+    detail: str | None = None
+
+
+class ArchiveClosingLineSummaryPayload(BaseModel):
+    """One stored outright snapshot, without any prices.
+
+    Same discipline as the board summary: this is read in public workflow
+    logs, so it carries counts and names only.
+    """
+
+    event_name: str
+    year: int
+    tournament_id: int | None = None
+    tournament_start_date: str | None = None
+    captured_at: str
+    markets: list[ClosingLineMarketPayload] = []
+
+
 class ArchiveInspectPayload(BaseModel):
     """Read-only view of what the archives actually hold.
 
@@ -299,9 +329,11 @@ class ArchiveInspectPayload(BaseModel):
     boards: int
     matchups: int
     settlements: int = 0
+    closing_lines: int = 0
     board_snapshots: list[ArchiveBoardSummaryPayload] = []
     matchup_snapshots: list[ArchiveMatchupSummaryPayload] = []
     settlement_records: list[ArchiveSettlementSummaryPayload] = []
+    closing_line_snapshots: list[ArchiveClosingLineSummaryPayload] = []
 
 
 class ArchiveExportPayload(BaseModel):
@@ -322,6 +354,7 @@ class ArchiveExportPayload(BaseModel):
     boards: list[dict[str, object]] = []
     matchups: list[dict[str, object]] = []
     settlements: list[dict[str, object]] = []
+    closing_lines: list[dict[str, object]] = []
 
 
 class ArchiveImportPayload(BaseModel):
@@ -342,6 +375,30 @@ class ArchiveImportPayload(BaseModel):
     settlements_stored: int = 0
     settlements_skipped: int = 0
     settlements_errors: int = 0
+    closing_lines_stored: int = 0
+    closing_lines_skipped: int = 0
+    closing_lines_errors: int = 0
+
+
+class ClosingLineCapturePayload(BaseModel):
+    """Result of the weekly pre-event outright-market capture.
+
+    ``outcome`` is a ``ClosingLineOutcome`` value; ``healthy`` is the single
+    field the scheduled job keys on, true for a fresh capture, an idempotent
+    no-op, and a genuine off week. A refusal (the event already started, or
+    the feed named an event the catalog does not know) is unhealthy on
+    purpose: that week's market baseline is gone and cannot be recovered
+    after the fact.
+    """
+
+    outcome: str
+    healthy: bool
+    event_name: str | None = None
+    year: int | None = None
+    tournament_id: int | None = None
+    tournament_start_date: str | None = None
+    markets_offered: int = 0
+    players: int = 0
 
 
 class MatchupCapturePayload(BaseModel):

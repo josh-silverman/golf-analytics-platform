@@ -291,11 +291,21 @@ Working tree clean, no stashes, `main` == `origin/main` at `0a425c9`.
    policy (noeviction vs. LRU), memory ceiling, and whether it persists
    snapshots? If eviction is possible, the export job (roadmap unit 0)
    should ship before anything else.
-2. **DataGolf subscription scope.** Matchup capture (betting-tools) worked
+2. **DataGolf subscription scope.** ~~Matchup capture (betting-tools) worked
    today, so the key likely covers `betting-tools/outrights` too — can you
-   confirm? The closing-line baseline plan assumes it. Related: any ToS
-   concern with committing exported DataGolf-derived probabilities to a
-   **public** repo? If so, exports go to a private store instead.
+   confirm?~~ **Resolved 2026-08-21: yes.** Probed the live endpoint with the
+   production key across all five markets (`win`, `top_5`, `top_10`,
+   `top_20`, `make_cut`); every one returned 200 with a full board. Coverage
+   is 12-15 books depending on market. Two shapes worth recording, both
+   found by probing rather than from the docs: a market the books are not
+   offering returns `odds` as a **message string**, not an empty list (BMW
+   Championship, a no-cut playoff event, does this on `make_cut`), and the
+   `datagolf` key inside a player row is a **nested dict** of DataGolf's own
+   baseline lines, not a price string. A5 handles both.
+   Related: any ToS concern with committing exported DataGolf-derived
+   probabilities to a **public** repo? **Resolved: yes, so exports go to the
+   private ledger repo** (A0), and the pre-existing exposure in README and
+   `tournament-analyses/` is still open.
 3. **Retrain cadence intent.** Weekly automated retraining interacts with
    R1 (one event, two model versions). Options: dedup rule in the grader
    (prefer earliest capture), or a capture policy (one snapshot per event,

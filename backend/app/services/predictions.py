@@ -189,6 +189,13 @@ class TournamentPredictions:
     # cold-started to the SG-only model, which is a materially different board
     # from the one ``model_version_id`` ("path_a@…") advertises.
     dg_direct_count: int | None = None
+    # DataGolf's raw five-market probabilities for the covered players on this
+    # board, carried so board capture can pin them alongside the board (A4a).
+    # It is the same data the DG-direct outcomes were built from, kept
+    # *pre*-``coherent_outcomes``/``normalize_field`` so the stored baseline is
+    # DataGolf's published number, not our transformation of it. ``None`` when
+    # Path A is not in use.
+    dg_baseline: dict[int, dict[str, float]] | None = None
 
 
 class PredictionService:
@@ -297,6 +304,11 @@ class PredictionService:
         # Recorded on the snapshot so the forward record can tell the two
         # regimes apart after the fact instead of pooling them.
         dg_direct_count = 0
+        # DataGolf's raw numbers for the players who actually made this board,
+        # kept for capture (A4a). Restricted to the board rather than passing
+        # ``dg_full`` through, so the pinned baseline lines up one-for-one with
+        # the outcomes it will be graded beside.
+        dg_baseline: dict[int, dict[str, float]] = {}
         for entry in field:
             player = await self._catalog.get_player(entry.player_id)
             if player is None:
@@ -309,6 +321,7 @@ class PredictionService:
                 dg = dg_full.get(entry.player_id)
                 if dg is not None:
                     dg_direct_count += 1
+                    dg_baseline[player.id] = dict(dg)
                 preds = dg if dg is not None else self._model.predict(extraction.values)
             else:
                 preds = self._model.predict(extraction.values)
@@ -351,6 +364,7 @@ class PredictionService:
             outcomes=tuple(outcomes),
             model_trained_through=self._model_trained_through,
             dg_direct_count=dg_direct_count if self._path_a is not None else None,
+            dg_baseline=dg_baseline if self._path_a is not None else None,
         )
 
 
