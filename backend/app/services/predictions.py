@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from app.domain.enums import EntryStatus, TournamentStatus
+from app.domain.enums import DgFetchStatus, EntryStatus, TournamentStatus
 from app.services.features import EventRef
 
 if TYPE_CHECKING:
@@ -196,6 +196,11 @@ class TournamentPredictions:
     # DataGolf's published number, not our transformation of it. ``None`` when
     # Path A is not in use.
     dg_baseline: dict[int, dict[str, float]] | None = None
+    # Why the DataGolf fetch produced what it did. A ``dg_direct_count`` of 0
+    # is either a legitimate cold-start or a broken fetch, and the two want
+    # opposite reactions; this is what tells them apart
+    # (``domain.enums.DgFetchStatus``).
+    dg_fetch_status: DgFetchStatus = DgFetchStatus.NOT_ATTEMPTED
 
 
 class PredictionService:
@@ -287,8 +292,12 @@ class PredictionService:
         # fetched once (archive for completed events, live for upcoming). Empty
         # dict → every player cold-starts to the SG-only model.
         dg_full: dict[int, dict[str, float]] = {}
+        dg_fetch_status = DgFetchStatus.NOT_ATTEMPTED
         if self._path_a is not None:
-            dg_full = await self._path_a.provider.get_pretournament_full_preds(
+            (
+                dg_full,
+                dg_fetch_status,
+            ) = await self._path_a.provider.get_pretournament_full_preds_with_status(
                 tournament.id, tournament.season, live=not is_completed
             )
 
@@ -365,6 +374,7 @@ class PredictionService:
             model_trained_through=self._model_trained_through,
             dg_direct_count=dg_direct_count if self._path_a is not None else None,
             dg_baseline=dg_baseline if self._path_a is not None else None,
+            dg_fetch_status=dg_fetch_status,
         )
 
 

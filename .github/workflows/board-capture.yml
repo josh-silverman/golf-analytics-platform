@@ -33,6 +33,26 @@ name: Capture weekly prediction boards
 # silently missed week surfaces as a failed workflow rather than a green
 # check with a 200 response. An off week with no upcoming events is healthy.
 #
+# THE TWO RUNS ARE NOT IDENTICAL, and the difference is the point of having
+# a retry at all. DataGolf's live pre-tournament endpoint has no event
+# parameter: it serves whatever event DataGolf currently features. Before it
+# rolls over to this week's event, a capture gets nothing for the event it
+# asked about and produces a whole-field cold-start board that is
+# indistinguishable from a legitimate one — and first-write-wins pins it.
+#
+#   21:00  allow_degraded=false. A board whose DataGolf fetch failed is
+#          refused, nothing is written, and the job exits 0 with a warning
+#          (`retryable: true`), because 23:30 is expected to do better. Any
+#          other unhealthy outcome still fails.
+#   23:30  allow_degraded=true. Captures regardless, with the fetch status
+#          recorded honestly on the snapshot. A labelled degraded board beats
+#          no board for the week, and A4b reads the label rather than
+#          inferring from a zero coverage count.
+#
+# Manual dispatch defaults to allow_degraded=false so an ad-hoc run cannot
+# casually pin a degraded board; pass the input to override when the window
+# is closing and a labelled board is the better outcome.
+#
 # Requires the ADMIN_API_TOKEN repository secret to match the Render
 # service's env var; without it the endpoint answers 404 and this fails.
 
@@ -40,7 +60,13 @@ on:
   schedule:
     - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET), field settled, pre-event
     - cron: "30 23 * * 3" # Wed 23:30 UTC retry, still before any Thursday start
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      allow_degraded:
+        description: "Pin a board even if DataGolf's fetch failed (labelled fetch_failed)"
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -49,8 +75,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: POST /analytics/track-record/capture-upcoming
+        env:
+          # Only the 23:30 retry may pin a degraded board. Anything else --
+          # the 21:00 run, and a manual dispatch that did not ask -- refuses,
+          # leaving the write open for a later attempt.
+          SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_ALLOW: ${{ inputs.allow_degraded }}
         run: |
           set -euo pipefail
+          if [ "$SCHEDULE" = "30 23 * * 3" ] || [ "$DISPATCH_ALLOW" = "true" ]; then
+            ALLOW=true
+          else
+            ALLOW=false
+          fi
+          echo "allow_degraded=$ALLOW (schedule='$SCHEDULE')"
+
           # Long timeout: a board is a field-wide feature extraction per event,
           # and an opposite-field week has two. --retry covers the Render free
           # tier's ~40s cold start. A client-side timeout does not mean the
@@ -59,16 +98,25 @@ jobs:
           curl -fsS --max-time 580 --retry 2 --retry-delay 30 --retry-all-errors \
             -X POST \
             -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
-            https://pga-analytics-api.onrender.com/api/v1/analytics/track-record/capture-upcoming \
+            "https://pga-analytics-api.onrender.com/api/v1/analytics/track-record/capture-upcoming?allow_degraded=$ALLOW" \
             -o result.json
           echo "--- capture result ---"
           jq . result.json
 
           # Report per-event outcomes, then fail if any event in the window
-          # did not get a board. Event names and dates only; no probabilities,
-          # so this stays safe in a public log.
-          jq -r '.events[] | "  \(.start_date)  \(.name): \(.outcome) (\(.outcomes_captured) players)"' result.json
+          # did not get a board. Event names, dates and the DataGolf fetch
+          # status only; no probabilities, so this stays safe in a public log.
+          jq -r '.events[] | "  \(.start_date)  \(.name): \(.outcome) (\(.outcomes_captured) players, dg \(.dg_fetch_status)/\(.dg_direct_count))"' result.json
+
           if [ "$(jq -r '.healthy' result.json)" != "true" ]; then
+            if [ "$(jq -r '.retryable' result.json)" = "true" ]; then
+              # Nothing was written and nothing is lost yet: the 23:30 run
+              # captures regardless. Failing here would email every week that
+              # DataGolf was slow to roll over, which trains the alert to be
+              # ignored -- and the alert that matters is the retry failing.
+              echo "::warning::DataGolf's feed has not rolled over to this event yet, so no board was pinned. Deferring to the 23:30 retry, which captures regardless and labels the result."
+              exit 0
+            fi
             echo "::error::A board was not captured for every event in the window. See outcomes above; a missed pre-event window cannot be recovered by re-running this job."
             exit 1
           fi

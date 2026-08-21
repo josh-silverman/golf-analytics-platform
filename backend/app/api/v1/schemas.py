@@ -179,10 +179,14 @@ class BoardCaptureEventPayload(BaseModel):
     name: str
     start_date: date
     # A ``CaptureOutcome`` value: captured, already_captured,
-    # event_already_started, no_field, no_training_cutoff,
+    # event_already_started, dg_fetch_failed, no_field, no_training_cutoff,
     # tournament_not_found.
     outcome: str
     outcomes_captured: int = 0
+    # A ``DgFetchStatus`` value for the board this run built, whether or not
+    # it was stored: ok, no_coverage, fetch_failed, not_attempted.
+    dg_fetch_status: str | None = None
+    dg_direct_count: int | None = None
 
 
 class BoardCapturePayload(BaseModel):
@@ -202,6 +206,12 @@ class BoardCapturePayload(BaseModel):
     examined: int
     captured: int
     healthy: bool
+    # True when nothing was captured *only* because a DataGolf fetch failed
+    # and a later run this evening could still do better. The 21:00 job exits
+    # zero on this and defers to the 23:30 retry, which runs with
+    # ``allow_degraded=true`` and therefore cannot report it.
+    retryable: bool = False
+    allow_degraded: bool = True
     events: list[BoardCaptureEventPayload] = []
 
 
@@ -253,6 +263,15 @@ class ArchiveBoardSummaryPayload(BaseModel):
     source: str
     outcomes: int
     dg_direct_count: int | None
+    # Why the DataGolf fetch produced what it did: ok, no_coverage,
+    # fetch_failed, not_attempted, or null on boards captured before the
+    # status was recorded. This is what separates a legitimate cold-start
+    # board from one captured against a stale feed.
+    dg_fetch_status: str | None = None
+    # Derived: may an A4b DataGolf-baseline comparison use this board? False
+    # for a failed fetch, an event DataGolf never priced, and every board
+    # captured before either field existed.
+    dg_baseline_usable: bool = False
     # Rows of DataGolf's own pre-event probabilities pinned with this board
     # (A4a). ``None`` on snapshots captured before that existed — which is the
     # fast way to tell whether an event can carry a DataGolf baseline column at

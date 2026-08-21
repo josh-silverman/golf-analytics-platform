@@ -7,7 +7,7 @@ from datetime import date
 
 import pytest
 
-from app.domain.enums import EntryStatus, TournamentStatus
+from app.domain.enums import DgFetchStatus, EntryStatus, TournamentStatus
 from app.domain.models import Player, Tournament, TournamentEntry
 from app.features.feature_sets import v1_baseline
 from app.ml.base import ConstantModel
@@ -259,6 +259,11 @@ class _StubPathAProvider:
         self, event_id: int, year: int, *, live: bool = False
     ) -> dict[int, dict[str, float]]:
         return dict(self._dg)
+
+    async def get_pretournament_full_preds_with_status(
+        self, event_id: int, year: int, *, live: bool = False
+    ) -> tuple[dict[int, dict[str, float]], DgFetchStatus]:
+        return dict(self._dg), (DgFetchStatus.OK if self._dg else DgFetchStatus.NO_COVERAGE)
 
 
 def _path_a_service(dg: dict[int, dict[str, float]]) -> PredictionService:

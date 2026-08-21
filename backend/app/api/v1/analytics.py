@@ -275,6 +275,7 @@ async def capture_upcoming_boards(
     archive: Annotated[BoardArchive, Depends(get_board_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
     days_ahead: int = _CAPTURE_LOOKAHEAD_DAYS,
+    allow_degraded: bool = True,
 ) -> BoardCapturePayload:
     """Capture pre-event boards for every upcoming event starting soon.
 
@@ -292,6 +293,13 @@ async def capture_upcoming_boards(
     reported ``already_captured`` and nothing is written. Every write goes
     through the shared start guard in ``services/board_capture``, so an
     event that has already begun is refused rather than pinned.
+
+    ``allow_degraded=false`` also refuses a board whose DataGolf fetch
+    unambiguously failed — the live feed still featuring last week's event is
+    the case that matters — so that a later run the same evening can still
+    capture a real one. The Wednesday cron passes it on the 21:00 run and not
+    on the 23:30 retry: first write wins, so a degraded early capture would
+    otherwise lock out the retry that was meant to fix it.
 
     Admin-gated: requires ``X-Admin-Token`` matching
     ``settings.admin_api_token``; 404 when the secret is unset.
@@ -325,7 +333,11 @@ async def capture_upcoming_boards(
             )
             continue
         outcome = await capture_pre_event_board(
-            catalog=catalog, archive=archive, predictions=preds, today=today
+            catalog=catalog,
+            archive=archive,
+            predictions=preds,
+            today=today,
+            allow_degraded=allow_degraded,
         )
         events.append(
             BoardCaptureEventPayload(
@@ -334,6 +346,11 @@ async def capture_upcoming_boards(
                 start_date=t.start_date,
                 outcome=outcome.value,
                 outcomes_captured=len(preds.outcomes),
+                # getattr, matching how ``snapshot_from_predictions`` reads the
+                # same duck-typed result, so a caller passing a lighter object
+                # degrades to "unrecorded" instead of raising mid-run.
+                dg_fetch_status=str(getattr(preds, "dg_fetch_status", "") or "") or None,
+                dg_direct_count=getattr(preds, "dg_direct_count", None),
             )
         )
 
@@ -343,6 +360,16 @@ async def capture_upcoming_boards(
         # An empty window (an off week) is healthy; a listed event that did
         # not end up with a board is not.
         healthy=all(CaptureOutcome(e.outcome).is_healthy for e in events),
+        # Everything unhealthy is a deferrable DataGolf-fetch refusal, so a
+        # retry this evening could still succeed and the caller need not treat
+        # this run as a failure.
+        retryable=bool(events)
+        and all(
+            CaptureOutcome(e.outcome).is_healthy or CaptureOutcome(e.outcome).is_retryable
+            for e in events
+        )
+        and any(CaptureOutcome(e.outcome).is_retryable for e in events),
+        allow_degraded=allow_degraded,
         events=events,
     )
 
@@ -694,6 +721,8 @@ async def inspect_archive(
             source=b.source,
             outcomes=len(b.outcomes),
             dg_direct_count=b.dg_direct_count,
+            dg_fetch_status=b.dg_fetch_status,
+            dg_baseline_usable=b.dg_baseline_is_usable,
             dg_baseline=len(b.dg_baseline) if b.dg_baseline is not None else None,
             out_of_sample=b.is_out_of_sample(date.fromisoformat(b.tournament_start_date)),
             canonical=canonical.get(b.tournament_id) is b,

@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from app.domain.enums import DgFetchStatus  # noqa: TC001 — returned at runtime
+
 if TYPE_CHECKING:
     from datetime import date
 
@@ -200,3 +202,24 @@ class DataProvider(ABC):
         that doesn't override this.
         """
         return {}
+
+    async def get_pretournament_full_preds_with_status(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[int, dict[str, float]], DgFetchStatus]:
+        """Full pre-event probabilities plus *why* they are what they are.
+
+        Board capture records the status on the snapshot so a degraded board
+        (the live feed still featuring last week's event) is distinguishable
+        from a legitimate cold-start one after the fact.
+
+        The default infers the status from the plain call, which can only ever
+        say OK or NO_COVERAGE — a provider that cannot fail cannot report a
+        failure. Providers that talk to a network **must** override this, or a
+        real fetch failure is silently relabelled as absent coverage.
+        """
+        preds = await self.get_pretournament_full_preds(event_id, year, live=live)
+        return preds, (DgFetchStatus.OK if preds else DgFetchStatus.NO_COVERAGE)

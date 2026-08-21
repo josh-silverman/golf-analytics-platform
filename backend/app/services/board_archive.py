@@ -28,6 +28,8 @@ from dataclasses import asdict, dataclass, fields
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
+from app.domain.enums import DgFetchStatus
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -89,6 +91,31 @@ class BoardSnapshot:
     # and non-Path-A boards); an empty tuple means Path A ran and DataGolf
     # covered nobody, which is a different and much worse thing.
     dg_baseline: tuple[BoardSnapshotOutcome, ...] | None = None
+    # Why the DataGolf fetch produced what it did, as a ``DgFetchStatus``
+    # value. Without it, ``dg_direct_count == 0`` is ambiguous between a
+    # legitimate cold-start board and one captured while DataGolf's live feed
+    # still featured last week's event — and first-write-wins means the wrong
+    # reading is permanent. ``None`` on snapshots written before this field
+    # existed. See ``domain.enums.DgFetchStatus``.
+    dg_fetch_status: str | None = None
+
+    @property
+    def dg_baseline_is_usable(self) -> bool:
+        """May a DataGolf-baseline comparison (A4b) use this board?
+
+        Requires a recorded, successful fetch **and** a pinned baseline. A
+        board whose fetch failed must be excluded rather than counted as a
+        zero-coverage event: it would drag the DataGolf column toward "no
+        prediction" for reasons that have nothing to do with DataGolf.
+        Snapshots from before the status existed answer ``False`` — the
+        reason cannot be recovered, so they cannot be trusted either way.
+        """
+        if self.dg_fetch_status is None or not self.dg_baseline:
+            return False
+        try:
+            return DgFetchStatus(self.dg_fetch_status).baseline_is_usable
+        except ValueError:
+            return False  # a status written by a newer build than this one
 
     @property
     def dg_direct_share(self) -> float | None:
@@ -274,6 +301,7 @@ def snapshot_from_predictions(
         source=source,
         dg_direct_count=getattr(predictions, "dg_direct_count", None),
         dg_baseline=_dg_baseline_rows(getattr(predictions, "dg_baseline", None)),
+        dg_fetch_status=str(getattr(predictions, "dg_fetch_status", None) or "") or None,
     )
 
 
