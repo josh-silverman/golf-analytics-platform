@@ -132,10 +132,18 @@ is a week of events permanently missing the baseline.
   fetched at grading time is not a prediction, so a board captured
   without one can never carry the column. The nine events already in the
   record are permanently without it.
+- **Also records why**: `dg_fetch_status` (`ok` / `no_coverage` /
+  `fetch_failed` / `not_attempted`) sits alongside the baseline, because a
+  coverage count of zero is ambiguous between a legitimate cold-start
+  board and one captured while DataGolf's live feed still featured last
+  week's event. The Wednesday cron refuses a failed fetch at 21:00 so the
+  23:30 retry can still do better, and captures it labelled at 23:30.
+  See `docs/ledger.md` §2.12a.
 - **Depends on**: nothing (it rides the existing capture path).
-- **Verify**: `dg_baseline` count appears in `archive/inspect` per board;
-  absent (pre-A4a) and empty (Path A covered nobody) stay
-  distinguishable through storage.
+- **Verify**: `dg_baseline` count and `dg_fetch_status` appear in
+  `archive/inspect` per board; absent (pre-A4a) and empty stay
+  distinguishable through storage; a strict run refuses a failed fetch
+  and writes nothing.
 
 ### A4b. Grade and report the named baselines
 - **What**: Grade each event's board alongside named baselines and report
@@ -148,6 +156,13 @@ is a week of events permanently missing the baseline.
 - **Depends on**: A2, A3, A4a, A5. Only grades events captured after
   A4a/A5 went live, so it is worth building once several such events
   exist rather than immediately.
+- **Required exclusion**: a board whose `dg_fetch_status` is
+  `fetch_failed` must be excluded from the DataGolf column, not counted
+  as a zero-coverage event — otherwise a stale-feed capture drags the
+  DataGolf baseline toward "predicted nothing" for reasons that have
+  nothing to do with DataGolf. Use `BoardSnapshot.dg_baseline_is_usable`
+  rather than re-deriving the test from `dg_direct_count`. Report the
+  excluded count alongside the column so the omission is visible.
 - **Verify**: unit tests with fixture boards where the model beats /
   loses to each baseline; endpoint payload shows per-baseline rows; 3M
   Open backfilled event reproduces the README table's direction.

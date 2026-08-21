@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.domain.enums import EntryStatus, TournamentStatus
+from app.domain.enums import DgFetchStatus, EntryStatus, TournamentStatus
 from app.ml.training import labels_from_entry
 from app.providers.datagolf import datagolf_provider as dgp
 from app.providers.datagolf.datagolf_provider import (
@@ -614,6 +614,66 @@ async def test_live_full_preds_discarded_when_event_differs() -> None:
     provider = _live_preds_provider("Some Other Open")
     preds = await provider.get_pretournament_full_preds(_LIVE_EVENT_ID, _THIS_YEAR, live=True)
     assert preds == {}
+
+
+async def test_fetch_status_separates_a_stale_feed_from_absent_coverage() -> None:
+    """The distinction the whole Wednesday retry policy rests on.
+
+    Both cases return no probabilities. Only one of them means "capture this
+    board and label it a cold-start"; the other means "wait, DataGolf has not
+    rolled over yet". Collapsing them to ``{}`` made the two indistinguishable
+    once a board was pinned.
+    """
+    stale = _live_preds_provider("Some Other Open")
+    preds, status = await stale.get_pretournament_full_preds_with_status(
+        _LIVE_EVENT_ID, _THIS_YEAR, live=True
+    )
+    assert preds == {}
+    assert status is DgFetchStatus.FETCH_FAILED
+
+    matched = _live_preds_provider("Live Championship")
+    preds, status = await matched.get_pretournament_full_preds_with_status(
+        _LIVE_EVENT_ID, _THIS_YEAR, live=True
+    )
+    assert set(preds) == {18417, 10091}
+    assert status is DgFetchStatus.OK
+
+
+async def test_fetch_status_reports_no_coverage_for_an_empty_but_valid_response() -> None:
+    """An event DataGolf simply does not price is not a failure."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/preds/pre-tournament":
+            return httpx.Response(
+                200, json={"event_name": "Live Championship", "baseline_history_fit": []}
+            )
+        if request.url.path == "/get-schedule":
+            season = int(request.url.params.get("season", 0))
+            return httpx.Response(200, json=_SCHEDULE if season == _THIS_YEAR else {"schedule": []})
+        return httpx.Response(404, json={"error": "not found"})
+
+    provider = DataGolfProvider(api_key="test-key", transport=httpx.MockTransport(handler))
+    _CREATED.append(provider)
+    preds, status = await provider.get_pretournament_full_preds_with_status(
+        _LIVE_EVENT_ID, _THIS_YEAR, live=True
+    )
+    assert preds == {}
+    assert status is DgFetchStatus.NO_COVERAGE
+
+
+async def test_fetch_status_reports_failure_when_the_call_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/preds/pre-tournament":
+            return httpx.Response(500, text="upstream boom")
+        return httpx.Response(404, json={"error": "not found"})
+
+    provider = DataGolfProvider(api_key="test-key", transport=httpx.MockTransport(handler))
+    _CREATED.append(provider)
+    preds, status = await provider.get_pretournament_full_preds_with_status(
+        _LIVE_EVENT_ID, _THIS_YEAR, live=True
+    )
+    assert preds == {}
+    assert status is DgFetchStatus.FETCH_FAILED
 
 
 async def test_live_three_market_preds_use_the_same_guard() -> None:

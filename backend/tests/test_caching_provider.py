@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.domain.enums import DgFetchStatus
 from app.domain.models import DataFreshness, Page, Player
 from app.providers.caching import CachingProviderWrapper
 
@@ -58,6 +59,7 @@ class StubProvider:
         self.list_players_calls = 0
         self.freshness_calls = 0
         self.full_preds_calls = 0
+        self.full_preds_status_calls = 0
         self.preds_calls = 0
         self.live_matchups_calls = 0
         self.hist_event_list_calls = 0
@@ -119,6 +121,14 @@ class StubProvider:
     ) -> dict[int, dict[str, float]]:
         self.full_preds_calls += 1
         return {1: {"win": 0.05, "top_5": 0.2, "top_10": 0.3, "top_20": 0.5, "make_cut": 0.8}}
+
+    async def get_pretournament_full_preds_with_status(
+        self, event_id: int, year: int, *, live: bool = False
+    ) -> tuple[dict[int, dict[str, float]], DgFetchStatus]:
+        # Deliberately reports a *failure with no data*, the one answer the
+        # base class's inference can never produce.
+        self.full_preds_status_calls += 1
+        return {}, DgFetchStatus.FETCH_FAILED
 
     # DataGolf-only methods, not on the base DataProvider — present here purely
     # so the pass-through pin below can call them through the wrapper.
@@ -299,6 +309,23 @@ class TestPretournamentPredsPassThrough:
         stub_provider.get_pretournament_full_preds = spy  # type: ignore[assignment]
         await wrapper.get_pretournament_full_preds(123, 2026, live=True)
         assert captured["live"] is True
+
+    async def test_fetch_status_reaches_the_underlying_provider(
+        self, wrapper: CachingProviderWrapper, stub_provider: StubProvider
+    ) -> None:
+        """Inheriting the base default here would be silent and wrong.
+
+        ``DataProvider``'s default infers the status from the plain preds
+        call, so it can only ever answer OK or NO_COVERAGE. A wrapper that
+        inherited it would relabel every real fetch failure as "DataGolf has
+        no coverage" — and the board carrying that wrong label is pinned
+        permanently by first-write-wins, which is the whole reason the status
+        exists.
+        """
+        preds, status = await wrapper.get_pretournament_full_preds_with_status(123, 2026)
+        assert stub_provider.full_preds_status_calls == 1
+        assert preds == {}
+        assert status is DgFetchStatus.FETCH_FAILED  # never NO_COVERAGE
 
 
 class TestMatchupMethodsPassThrough:

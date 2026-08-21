@@ -21,7 +21,7 @@ from app.api.v1.deps import (
     get_catalog_service,
     get_prediction_service,
 )
-from app.domain.enums import TournamentStatus
+from app.domain.enums import DgFetchStatus, TournamentStatus
 from app.domain.models import Page, Tournament
 from app.services.board_archive import FileBoardArchive
 
@@ -53,9 +53,16 @@ class _StubService:
     model_trained_through = date(2026, 5, 1)
     model_version_id = "path_a@v2"
 
-    def __init__(self, *, field_size: int = 3, empty_for: set[int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        field_size: int = 3,
+        empty_for: set[int] | None = None,
+        dg_status: DgFetchStatus = DgFetchStatus.OK,
+    ) -> None:
         self._field_size = field_size
         self._empty_for = empty_for or set()
+        self._dg_status = dg_status
 
     async def predict_tournament(self, tid: int, *, as_of: date):  # noqa: ANN202
         n = 0 if tid in self._empty_for else self._field_size
@@ -78,7 +85,9 @@ class _StubService:
                 )
                 for i in range(n)
             ],
-            dg_direct_count=n,
+            dg_direct_count=0 if self._dg_status is not DgFetchStatus.OK else n,
+            dg_baseline={},
+            dg_fetch_status=self._dg_status,
         )
 
 
@@ -155,7 +164,14 @@ def test_off_week_with_no_upcoming_events_is_healthy(app, monkeypatch, tmp_path)
     _ctx(app, monkeypatch, tmp_path, [])
     with TestClient(app) as client:
         body = client.post(_URL, headers={"X-Admin-Token": "secret"}).json()
-    assert body == {"examined": 0, "captured": 0, "healthy": True, "events": []}
+    assert body == {
+        "examined": 0,
+        "captured": 0,
+        "healthy": True,
+        "retryable": False,
+        "allow_degraded": True,
+        "events": [],
+    }
 
 
 def test_event_beyond_the_lookahead_window_is_left_alone(app, monkeypatch, tmp_path) -> None:

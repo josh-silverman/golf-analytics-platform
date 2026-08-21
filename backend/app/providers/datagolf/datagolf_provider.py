@@ -39,7 +39,7 @@ import httpx
 import structlog
 
 from app.config import get_settings
-from app.domain.enums import CourseType, EntryStatus, TournamentStatus
+from app.domain.enums import CourseType, DgFetchStatus, EntryStatus, TournamentStatus
 from app.domain.models import (
     Course,
     DataFreshness,
@@ -1405,6 +1405,50 @@ class DataGolfProvider(DataProvider):
             await self._redis_set_json(redis_key, preds, _EVENT_ROWS_TTL_S)
         return preds
 
+    async def get_pretournament_full_preds_with_status(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[int, dict[str, float]], DgFetchStatus]:
+        """``get_pretournament_full_preds``, plus why the result is what it is.
+
+        Board capture uses this rather than the plain version so the reason a
+        board has no DataGolf coverage is recorded on the snapshot instead of
+        being lost (see ``domain.enums.DgFetchStatus``). Caching is bypassed
+        for the live path in the same way the plain version bypasses it: a
+        capture wants the current truth about the feed, not a cached one.
+        """
+        if live:
+            rows, status = await self._fetch_dg_pred_rows_with_status(
+                live=True, event_id=event_id, year=year
+            )
+            preds = self._parse_dg_full_rows(rows)
+            # Rows arrived but none survived parsing (every row missing a
+            # market) — the fetch worked, the coverage is not there.
+            if status is DgFetchStatus.OK and not preds:
+                status = DgFetchStatus.NO_COVERAGE
+            return preds, status
+
+        # Archive path: a cached hit is by definition a successful fetch.
+        cached = self._dg_full_preds_cache.get((event_id, year))
+        if cached is not None:
+            return cached, (DgFetchStatus.OK if cached else DgFetchStatus.NO_COVERAGE)
+        rows, status = await self._fetch_dg_pred_rows_with_status(
+            live=False, event_id=event_id, year=year
+        )
+        preds = self._parse_dg_full_rows(rows)
+        if status is DgFetchStatus.OK and not preds:
+            status = DgFetchStatus.NO_COVERAGE
+        if status is not DgFetchStatus.FETCH_FAILED:
+            self._dg_full_preds_cache[(event_id, year)] = preds
+            if preds:
+                await self._redis_set_json(
+                    f"pga:datagolf:dg_full_preds:{event_id}:{year}", preds, _EVENT_ROWS_TTL_S
+                )
+        return preds, status
+
     def _parse_dg_full_rows(self, rows: list[Any]) -> dict[int, dict[str, float]]:
         """Map raw rows to ``{player_id: {win_prob…make_cut_prob}}``, no fin_text.
 
@@ -1488,10 +1532,37 @@ class DataGolfProvider(DataProvider):
         """Fetch raw ``baseline_history_fit`` rows (archive or live). ``[]`` on
         any 400/404/shape error so a training sweep degrades to cold-start.
 
+        Status-free wrapper kept for callers that only need the rows; the
+        reason an empty list came back is available from
+        ``_fetch_dg_pred_rows_with_status``.
+        """
+        rows, _ = await self._fetch_dg_pred_rows_with_status(
+            live=live, event_id=event_id, year=year
+        )
+        return rows
+
+    async def _fetch_dg_pred_rows_with_status(
+        self,
+        *,
+        live: bool,
+        event_id: int | None = None,
+        year: int | None = None,
+    ) -> tuple[list[dict[str, Any]], DgFetchStatus]:
+        """Rows plus *why* they are what they are.
+
+        The distinction that matters: an empty result because DataGolf has
+        nothing for this field (``NO_COVERAGE``) versus an empty result
+        because the call failed or the live feed described a different
+        tournament (``FETCH_FAILED``). Both used to collapse to ``[]``, which
+        made a broken Wednesday capture indistinguishable from a legitimate
+        cold-start board once it was pinned.
+
         The live endpoint takes no event parameter — it returns whatever event
         DataGolf currently features — so when the caller names an event, the
         response is checked against it before being handed back. See
-        ``_live_response_is_for_event``.
+        ``_live_response_is_for_event``. A 400/404 is treated as coverage
+        DataGolf does not have rather than as a failure: that is what the
+        archive returns for a 2018-2019 event.
         """
         try:
             if live:
@@ -1510,23 +1581,24 @@ class DataGolfProvider(DataProvider):
                     },
                 )
             if r.status_code in (400, 404):
-                return []
+                return [], DgFetchStatus.NO_COVERAGE
             r.raise_for_status()
             body: Any = r.json()
         except (httpx.HTTPError, ValueError):
-            return []
+            return [], DgFetchStatus.FETCH_FAILED
         if not isinstance(body, dict):
-            return []
+            return [], DgFetchStatus.FETCH_FAILED
         rows = body.get("baseline_history_fit", [])
         if not isinstance(rows, list):
-            return []
+            return [], DgFetchStatus.FETCH_FAILED
         if (
             live
             and event_id is not None
             and not await self._live_response_is_for_event(body, event_id, year)
         ):
-            return []
-        return rows
+            # The headline case: DataGolf still features last week's event.
+            return [], DgFetchStatus.FETCH_FAILED
+        return rows, (DgFetchStatus.OK if rows else DgFetchStatus.NO_COVERAGE)
 
     async def _live_response_is_for_event(
         self, body: dict[str, Any], event_id: int, year: int | None

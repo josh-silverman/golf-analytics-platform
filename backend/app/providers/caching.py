@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
     from redis.asyncio import Redis
 
-    from app.domain.enums import TournamentStatus
+    from app.domain.enums import DgFetchStatus, TournamentStatus
     from app.domain.models import BettingLine
 
 _T = TypeVar("_T")
@@ -386,6 +386,26 @@ class CachingProviderWrapper(DataProvider):
         — make-cut skill +0.127 vs the served board's +0.007.
         """
         return await self._provider.get_pretournament_full_preds(event_id, year, live=live)
+
+    async def get_pretournament_full_preds_with_status(
+        self,
+        event_id: int,
+        year: int,
+        *,
+        live: bool = False,
+    ) -> tuple[dict[int, dict[str, float]], DgFetchStatus]:
+        """Delegate — and it must be an explicit delegation, not inheritance.
+
+        ``DataProvider``'s default infers the status from the plain preds
+        call, so it can only ever answer OK or NO_COVERAGE. Inheriting it here
+        would silently relabel a real fetch failure (the live feed still
+        featuring last week's event) as "DataGolf has no coverage", which is
+        exactly the ambiguity the status exists to remove — and the board
+        carrying the wrong label would be pinned permanently.
+        """
+        return await self._provider.get_pretournament_full_preds_with_status(
+            event_id, year, live=live
+        )
 
     # ------------------------------------------------------------------
     # Matchup lines — delegate; the same silent-gap bug documented above for

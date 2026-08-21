@@ -331,12 +331,67 @@ Three states, all distinct, and code must keep them distinct:
 | Value | Meaning |
 |---|---|
 | `None` | Not recorded. Every snapshot written before 2026-08-21, and every non-Path-A board. |
-| `()` | Path A ran and DataGolf covered nobody. The degraded regime of 3.2, now visible directly. |
+| `()` | Path A ran and pinned nothing. **Why** is answered by `dg_fetch_status`, not by this field. |
 | non-empty | `len(dg_baseline) == dg_direct_count`, sorted by player id. |
 
 Reading `()` as "not recorded" (or `None` as "covered nobody") would be a
 false claim about the record, so the deserializer checks for the key's
 presence rather than its truthiness.
+
+### 2.12a Why a board has no DataGolf coverage is recorded, never inferred **[enforced]**
+
+`BoardSnapshot.dg_fetch_status` holds a `DgFetchStatus`
+(`domain/enums.py`), because a coverage count of zero cannot answer the
+question on its own:
+
+| Status | Meaning | Is the board sound? |
+|---|---|---|
+| `ok` | DataGolf returned probabilities for this event. | Yes. |
+| `no_coverage` | The fetch worked; DataGolf prices nothing for this field. | Yes — a real cold-start board. |
+| `fetch_failed` | The call errored, or the live feed described a **different tournament**. | No. Degraded. |
+| `not_attempted` | Path A not in use. | N/A. |
+| `null` | Captured before the status existed. | Unknowable. |
+
+The case that forced this: `/preds/pre-tournament` takes no event
+parameter and serves whatever event DataGolf currently features. On a
+Wednesday before it rolls over to this week's event, a capture gets
+nothing for the event it asked about and produces a whole-field
+cold-start board that looks exactly like a legitimate one — and 2.1 pins
+it forever. Verified live on 2026-08-21: asking for the TOUR Championship
+returned `{}` with a logged `datagolf_live_preds_event_mismatch` while
+DataGolf still featured the BMW Championship.
+
+**Two rules follow, and both are load-bearing.**
+
+1. **The first scheduled run of the evening refuses a `fetch_failed`
+   board** (`allow_degraded=False` → `CaptureOutcome.DG_FETCH_FAILED`,
+   nothing written). Without this the retry is useless for the one case
+   it exists for: a degraded 21:00 capture wins the first write and locks
+   out the 23:30 run. The 21:00 job exits **zero** with a warning on this
+   outcome (`retryable: true` in the payload), because the retry is
+   expected to fix it and a weekly email that DataGolf was slow trains
+   the alert to be ignored. Any other unhealthy outcome still fails.
+2. **The 23:30 retry captures regardless**, labelled. A board stamped
+   `fetch_failed` is worth more than a missing week for a playoff event,
+   and the stamp is what keeps it from being read as something it is not.
+
+**A4b must exclude `fetch_failed` boards from any DataGolf-baseline
+comparison** rather than counting them as zero-coverage events — doing
+the latter would drag the DataGolf column toward "predicted nothing" for
+reasons that have nothing to do with DataGolf. Use
+`BoardSnapshot.dg_baseline_is_usable`, which requires both a successful
+fetch and a non-empty pinned baseline; do not re-derive the test from
+`dg_direct_count`. `archive/inspect` surfaces both `dg_fetch_status` and
+the derived `dg_baseline_usable` per board.
+
+Providers that talk to a network **must** override
+`get_pretournament_full_preds_with_status`. `DataProvider`'s default
+infers the status from the plain preds call and can therefore only ever
+answer `ok` or `no_coverage` — inheriting it silently relabels every real
+failure as absent coverage. `CachingProviderWrapper` overrides it
+explicitly for exactly this reason (the same silent-gap shape as the
+2026-07-29 Path A bug), pinned by
+`tests/test_caching_provider.py::TestPretournamentPredsPassThrough`.
 
 The stored numbers are **raw DataGolf**, before `coherent_outcomes` and
 `normalize_field`. Do not "fix" this to store the served values: a
@@ -464,7 +519,7 @@ week beyond board backfill:
 
 | Job | Writes | Recoverable if missed? |
 |---|---|---|
-| `board-capture.yml` (21:00, 23:30 UTC) | the served board, plus its pinned `dg_baseline` (2.12) | the board yes, by backfill; the baseline **no** |
+| `board-capture.yml` (21:00 strict, 23:30 permissive) | the served board, plus its pinned `dg_baseline` (2.12) and `dg_fetch_status` (2.12a) | the board yes, by backfill; the baseline **no** |
 | `matchup-capture.yml` (Wed 21:00, Thu 11:00 UTC) | DataGolf's matchup line vs book prices | no |
 | `closing-line-capture.yml` (21:00, 23:30 UTC) | the outright market baseline (2.11) | no |
 
