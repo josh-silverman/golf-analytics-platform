@@ -48,6 +48,7 @@ on:
           - archive-inspect
           - archive-import
           - matchup-capture
+          - closing-line-capture
           - capture-upcoming
           - settle
       tournament_id:
@@ -107,6 +108,17 @@ jobs:
             matchup-capture)
               echo "method=POST" >> "$GITHUB_OUTPUT"
               echo "path=/api/v1/analytics/matchups/capture" >> "$GITHUB_OUTPUT"
+              echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
+              ;;
+            closing-line-capture)
+              # Manual equivalent of closing-line-capture.yml's scheduled run.
+              # Safe to dispatch any time: the start guard refuses an event
+              # that has begun and an already-captured event is a no-op. The
+              # response carries counts and event names, no prices, so it is
+              # safe to print here. Unlike the cron, this does not fail on an
+              # unhealthy result — read `outcome` in the response.
+              echo "method=POST" >> "$GITHUB_OUTPUT"
+              echo "path=/api/v1/analytics/closing-lines/capture" >> "$GITHUB_OUTPUT"
               echo "needs_ledger=false" >> "$GITHUB_OUTPUT"
               ;;
             settle)

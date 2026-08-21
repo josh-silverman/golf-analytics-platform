@@ -72,6 +72,23 @@ class BoardSnapshot:
     # event) is otherwise indistinguishable from a real Path A board. ``None``
     # on snapshots written before this field existed, and on non-Path-A boards.
     dg_direct_count: int | None = None
+    # DataGolf's own five-market probabilities for the players it covered, as
+    # they stood at capture — the named baseline A4b grades the board against.
+    # Stored here rather than re-fetched at grading time because DataGolf's
+    # pre-tournament feed is not an archive of what it said on Wednesday: it
+    # keeps updating, and for a finished event it returns numbers informed by
+    # the finish. A baseline read after the fact is not a prediction, so it
+    # has to be pinned with the board or it proves nothing.
+    #
+    # These are the *raw* DataGolf numbers, before ``coherent_outcomes`` and
+    # ``normalize_field``, so they are what DataGolf published rather than
+    # what our pipeline made of it. Restricted to players on this board, so
+    # ``len(dg_baseline) == dg_direct_count``.
+    #
+    # ``None`` means not recorded (every snapshot written before 2026-08-20,
+    # and non-Path-A boards); an empty tuple means Path A ran and DataGolf
+    # covered nobody, which is a different and much worse thing.
+    dg_baseline: tuple[BoardSnapshotOutcome, ...] | None = None
 
     @property
     def dg_direct_share(self) -> float | None:
@@ -105,8 +122,18 @@ def _from_dict(data: dict[str, Any]) -> BoardSnapshot:
     forward record must not silently lose events across a deploy.
     """
     outcomes = tuple(BoardSnapshotOutcome(**o) for o in data.pop("outcomes", []))
+    # Absent (pre-A4a snapshot) and empty (Path A covered nobody) must stay
+    # distinguishable, so this checks for the key rather than truthiness.
+    raw_baseline = data.pop("dg_baseline", None)
+    baseline = (
+        tuple(BoardSnapshotOutcome(**o) for o in raw_baseline) if raw_baseline is not None else None
+    )
     known = {f.name for f in fields(BoardSnapshot)}
-    return BoardSnapshot(outcomes=outcomes, **{k: v for k, v in data.items() if k in known})
+    return BoardSnapshot(
+        outcomes=outcomes,
+        dg_baseline=baseline,
+        **{k: v for k, v in data.items() if k in known},
+    )
 
 
 class BoardArchive(Protocol):
@@ -246,4 +273,35 @@ def snapshot_from_predictions(
         ),
         source=source,
         dg_direct_count=getattr(predictions, "dg_direct_count", None),
+        dg_baseline=_dg_baseline_rows(getattr(predictions, "dg_baseline", None)),
     )
+
+
+def _dg_baseline_rows(
+    baseline: dict[int, dict[str, float]] | None,
+) -> tuple[BoardSnapshotOutcome, ...] | None:
+    """DataGolf's raw per-player probabilities as sortable snapshot rows.
+
+    Sorted by player id so an unchanged archive still exports byte-identically
+    (``docs/ledger.md`` §2.7). ``None`` in, ``None`` out — Path A not in use.
+    A player missing a market is dropped rather than defaulted to zero, which
+    would look like a confident DataGolf prediction that it will not happen.
+    """
+    if baseline is None:
+        return None
+    rows: list[BoardSnapshotOutcome] = []
+    for player_id, markets in sorted(baseline.items()):
+        try:
+            rows.append(
+                BoardSnapshotOutcome(
+                    player_id=player_id,
+                    win_prob=markets["win_prob"],
+                    top_5_prob=markets["top_5_prob"],
+                    top_10_prob=markets["top_10_prob"],
+                    top_20_prob=markets["top_20_prob"],
+                    make_cut_prob=markets["make_cut_prob"],
+                )
+            )
+        except KeyError:
+            continue
+    return tuple(rows)

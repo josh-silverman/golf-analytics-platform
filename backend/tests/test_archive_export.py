@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 import app.api.v1.analytics as analytics_module
 from app.api.v1.deps import (
     get_board_archive,
+    get_closing_line_archive,
     get_matchup_archive,
     get_settlement_archive,
 )
@@ -29,6 +30,10 @@ from app.services.board_archive import (
     BoardSnapshot,
     BoardSnapshotOutcome,
     FileBoardArchive,
+)
+from app.services.closing_line_archive import (
+    FileClosingLineArchive,
+    snapshot_from_feeds,
 )
 from app.services.matchup_line_record import (
     BookQuote,
@@ -250,6 +255,55 @@ async def test_settlements_round_trip_and_refuse_overwrite(tmp_path) -> None:
     assert kept.entries[0].final_position == 1
 
 
+async def test_closing_lines_round_trip_and_refuse_overwrite(tmp_path) -> None:
+    """The market baseline has to survive a wipe like everything else — and
+    unlike boards it has no backfill, so a lost snapshot is lost for good."""
+    from tests.test_closing_line_archive import _feeds
+
+    boards, matchups = _archives(tmp_path / "src")
+    closing = FileClosingLineArchive(tmp_path / "src" / "closing")
+    snap = snapshot_from_feeds(_feeds(), year=2026, tournament_id=901)
+    assert snap is not None
+    await closing.persist(snap)
+
+    doc = await export_archives(boards=boards, matchups=matchups, closing_lines=closing)
+    doc = json.loads(json.dumps(doc))
+    assert len(doc["closing_lines"]) == 1
+
+    dst_boards, dst_matchups = _archives(tmp_path / "dst")
+    dst_closing = FileClosingLineArchive(tmp_path / "dst" / "closing")
+    result = await import_archives(
+        doc, boards=dst_boards, matchups=dst_matchups, closing_lines=dst_closing
+    )
+    assert result.closing_lines_stored == 1
+    assert await dst_closing.list_all() == [snap]
+
+    # A dump quoting a different price cannot overwrite the captured line.
+    doc["closing_lines"][0]["markets"][0]["lines"][0]["prices"][0]["american"] = 9999
+    result = await import_archives(
+        doc, boards=dst_boards, matchups=dst_matchups, closing_lines=dst_closing
+    )
+    assert result.closing_lines_stored == 0
+    assert result.closing_lines_skipped == 1
+    assert await dst_closing.list_all() == [snap]
+
+
+async def test_import_tolerates_dumps_without_closing_lines(tmp_path) -> None:
+    """An export written before A5 has no closing_lines key; restore still works."""
+    boards, matchups = _archives(tmp_path / "src")
+    await boards.persist(_board(1))
+    doc = json.loads(json.dumps(await export_archives(boards=boards, matchups=matchups)))
+    doc.pop("closing_lines", None)
+
+    dst_boards, dst_matchups = _archives(tmp_path / "dst")
+    dst_closing = FileClosingLineArchive(tmp_path / "dst" / "closing")
+    result = await import_archives(
+        doc, boards=dst_boards, matchups=dst_matchups, closing_lines=dst_closing
+    )
+    assert result.boards_stored == 1
+    assert result.closing_lines_stored == result.closing_lines_errors == 0
+
+
 async def test_import_tolerates_dumps_without_settlements(tmp_path) -> None:
     """An export written before A3 has no settlements key; restore still works."""
     boards, matchups = _archives(tmp_path / "src")
@@ -273,9 +327,11 @@ async def test_import_tolerates_dumps_without_settlements(tmp_path) -> None:
 def archive_ctx(app: FastAPI, tmp_path, monkeypatch) -> Iterator[TestClient]:
     boards, matchups = _archives(tmp_path)
     settlements = FileSettlementArchive(tmp_path / "settlements")
+    closing = FileClosingLineArchive(tmp_path / "closing")
     app.dependency_overrides[get_board_archive] = lambda: boards
     app.dependency_overrides[get_matchup_archive] = lambda: matchups
     app.dependency_overrides[get_settlement_archive] = lambda: settlements
+    app.dependency_overrides[get_closing_line_archive] = lambda: closing
     monkeypatch.setattr(
         analytics_module,
         "get_settings",
@@ -283,7 +339,12 @@ def archive_ctx(app: FastAPI, tmp_path, monkeypatch) -> Iterator[TestClient]:
     )
     with TestClient(app) as c:
         yield c
-    for dep in (get_board_archive, get_matchup_archive, get_settlement_archive):
+    for dep in (
+        get_board_archive,
+        get_matchup_archive,
+        get_settlement_archive,
+        get_closing_line_archive,
+    ):
         app.dependency_overrides.pop(dep, None)
 
 

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from app.api.v1.deps import (
     get_board_archive,
     get_catalog_service,
+    get_closing_line_archive,
     get_matchup_archive,
     get_model_registry,
     get_prediction_service,
@@ -17,6 +18,7 @@ from app.api.v1.deps import (
 )
 from app.api.v1.schemas import (
     ArchiveBoardSummaryPayload,
+    ArchiveClosingLineSummaryPayload,
     ArchiveExportPayload,
     ArchiveImportPayload,
     ArchiveInspectPayload,
@@ -25,6 +27,8 @@ from app.api.v1.schemas import (
     BoardCaptureEventPayload,
     BoardCapturePayload,
     CalibrationReportPayload,
+    ClosingLineCapturePayload,
+    ClosingLineMarketPayload,
     ForwardBackfillEventPayload,
     ForwardBackfillPayload,
     ForwardMarketSkillPayload,
@@ -52,6 +56,11 @@ from app.services.board_archive import (  # noqa: TC001
 )
 from app.services.board_capture import CaptureOutcome, capture_pre_event_board
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
+from app.services.closing_line_archive import (
+    ClosingLineArchive,  # noqa: TC001 — FastAPI DI
+    OutrightFeedSource,
+    capture_closing_lines,
+)
 from app.services.forward_track_record import (  # noqa: TC001
     MarketSkill,
     canonical_by_tournament,
@@ -500,6 +509,60 @@ async def capture_matchup_lines(
     )
 
 
+@router.post("/closing-lines/capture")
+async def capture_closing_line_board(
+    provider: Annotated[DataProvider, Depends(get_data_provider)],
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    archive: Annotated[ClosingLineArchive, Depends(get_closing_line_archive)],
+    x_admin_token: Annotated[str | None, Header()] = None,
+) -> ClosingLineCapturePayload:
+    """Capture this week's outright market immutably, before the event starts.
+
+    Snapshots every book's price across all five markets, plus DataGolf's own
+    baseline line, as the named market baseline the forward record will be
+    graded against (A4b). Called by the Wednesday cron in
+    ``.github/workflows/closing-line-capture.yml``.
+
+    Refuses to write for an event that has already begun, for the same reason
+    board capture does (``docs/ledger.md`` §2.2): DataGolf keeps serving
+    outrights during play, in-play prices are not marked as such, and first
+    capture wins, so a late snapshot is pinned forever as if it were
+    pre-event. Idempotent — a second run for the same event writes nothing
+    and reports ``already_captured``.
+
+    Admin-gated exactly like the matchup capture: requires ``X-Admin-Token``
+    matching ``settings.admin_api_token``; 404 when the secret is unset, 409
+    when the configured provider has no outright feed (mock).
+    """
+    token = get_settings().admin_api_token
+    if not token or x_admin_token != token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    if not hasattr(provider, "fetch_live_outrights"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Configured data provider has no outright odds feed",
+        )
+
+    result = await capture_closing_lines(
+        catalog=catalog,
+        archive=archive,
+        # hasattr above is the runtime capability gate; mypy can't narrow a
+        # nominal DataProvider to the structural protocol from it.
+        source=cast("OutrightFeedSource", provider),
+        today=reference_today(),
+    )
+    return ClosingLineCapturePayload(
+        outcome=result.outcome.value,
+        healthy=result.outcome.is_healthy,
+        event_name=result.event_name,
+        year=result.year,
+        tournament_id=result.tournament_id,
+        tournament_start_date=result.tournament_start_date,
+        markets_offered=result.markets_offered,
+        players=result.players,
+    )
+
+
 @router.get("/matchups/line-record")
 async def get_matchup_line_record(
     provider: Annotated[DataProvider, Depends(get_data_provider)],
@@ -557,6 +620,7 @@ async def export_archive(
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
     settlement_archive: Annotated[SettlementArchive, Depends(get_settlement_archive)],
+    closing_line_archive: Annotated[ClosingLineArchive, Depends(get_closing_line_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
 ) -> ArchiveExportPayload:
     """Dump both forward archives (board + matchup snapshots) as one document.
@@ -577,7 +641,10 @@ async def export_archive(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
     doc = await export_archives(
-        boards=board_archive, matchups=matchup_archive, settlements=settlement_archive
+        boards=board_archive,
+        matchups=matchup_archive,
+        settlements=settlement_archive,
+        closing_lines=closing_line_archive,
     )
     return ArchiveExportPayload.model_validate(doc)
 
@@ -587,6 +654,7 @@ async def inspect_archive(
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
     settlement_archive: Annotated[SettlementArchive, Depends(get_settlement_archive)],
+    closing_line_archive: Annotated[ClosingLineArchive, Depends(get_closing_line_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
     tournament_id: int | None = None,
 ) -> ArchiveInspectPayload:
@@ -626,6 +694,7 @@ async def inspect_archive(
             source=b.source,
             outcomes=len(b.outcomes),
             dg_direct_count=b.dg_direct_count,
+            dg_baseline=len(b.dg_baseline) if b.dg_baseline is not None else None,
             out_of_sample=b.is_out_of_sample(date.fromisoformat(b.tournament_start_date)),
             canonical=canonical.get(b.tournament_id) is b,
         )
@@ -658,10 +727,14 @@ async def inspect_archive(
             )
         )
 
+    closing = await closing_line_archive.list_all()
+    closing.sort(key=lambda c: (c.year, c.captured_at))
+
     return ArchiveInspectPayload(
         boards=len(boards),
         matchups=len(matchups),
         settlements=len(all_settlements),
+        closing_lines=len(closing),
         board_snapshots=board_payloads,
         matchup_snapshots=[
             ArchiveMatchupSummaryPayload(
@@ -674,6 +747,26 @@ async def inspect_archive(
             for m in matchups
         ],
         settlement_records=settlement_payloads,
+        closing_line_snapshots=[
+            ArchiveClosingLineSummaryPayload(
+                event_name=c.event_name,
+                year=c.year,
+                tournament_id=c.tournament_id,
+                tournament_start_date=c.tournament_start_date,
+                captured_at=c.captured_at,
+                markets=[
+                    ClosingLineMarketPayload(
+                        market=m.market,
+                        offered=m.offered,
+                        players=len(m.lines),
+                        books=len(m.books_offering),
+                        detail=m.detail,
+                    )
+                    for m in c.markets
+                ],
+            )
+            for c in closing
+        ],
     )
 
 
@@ -683,6 +776,7 @@ async def import_archive(
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
     matchup_archive: Annotated[MatchupArchive, Depends(get_matchup_archive)],
     settlement_archive: Annotated[SettlementArchive, Depends(get_settlement_archive)],
+    closing_line_archive: Annotated[ClosingLineArchive, Depends(get_closing_line_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
 ) -> ArchiveImportPayload:
     """Restore both forward archives from an export dump.
@@ -704,6 +798,7 @@ async def import_archive(
         boards=board_archive,
         matchups=matchup_archive,
         settlements=settlement_archive,
+        closing_lines=closing_line_archive,
     )
     return ArchiveImportPayload(
         boards_stored=result.boards_stored,
@@ -715,6 +810,9 @@ async def import_archive(
         settlements_stored=result.settlements_stored,
         settlements_skipped=result.settlements_skipped,
         settlements_errors=result.settlements_errors,
+        closing_lines_stored=result.closing_lines_stored,
+        closing_lines_skipped=result.closing_lines_skipped,
+        closing_lines_errors=result.closing_lines_errors,
     )
 
 

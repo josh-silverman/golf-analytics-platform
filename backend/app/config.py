@@ -88,6 +88,16 @@ class Settings(BaseSettings):
             " archives in the shared instance."
         ),
     )
+    closing_lines_path: str = Field(
+        default="./closing_lines",
+        description=(
+            "Root directory for the pre-event outright-market archive (weekly"
+            " capture of every book's price across the five markets, the named"
+            " market baseline the forward record is graded against). Used only"
+            " when board_archive_backend='file'; the redis backend stores all"
+            " four archives in the shared instance."
+        ),
+    )
     board_archive_backend: Literal["file", "redis"] = Field(
         default="file",
         description=(

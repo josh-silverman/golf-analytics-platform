@@ -179,11 +179,11 @@ def _generate_mock_american_odds(
 # ---------------------------------------------------------------------------
 
 
-def _devig_real_odds(
+def devig_field_odds(
     real_odds: dict[int, int],
     *,
     outcome_key: str,
-    vig_margin: float,
+    vig_margin: float = DEFAULT_VIG_MARGIN,
 ) -> dict[int, float]:
     """Convert real American odds → fair (de-vigged) implied probabilities.
 
@@ -191,6 +191,11 @@ def _devig_real_odds(
     field's raw implied probabilities to that total, which strips the book's
     margin without assuming it's flat. ``make_cut`` has no fixed total, so it
     falls back to dividing out a flat vig margin.
+
+    Public because the closing-line archive de-vigs captured book prices with
+    exactly this function (``services/closing_line_archive``); the market
+    baseline the forward record is graded against and the price the betting
+    board quotes must come from the same math, or the two disagree silently.
     """
     raw = {pid: american_to_implied_prob(odds, vig_margin=0.0) for pid, odds in real_odds.items()}
     target = _MARKET_TARGET_SUM.get(outcome_key)
@@ -231,7 +236,7 @@ def build_betting_board(
         return getattr(o, outcome_key, 0.0)
 
     devigged: dict[int, float] = (
-        _devig_real_odds(real_odds, outcome_key=outcome_key, vig_margin=vig_margin)
+        devig_field_odds(real_odds, outcome_key=outcome_key, vig_margin=vig_margin)
         if real_odds
         else {}
     )

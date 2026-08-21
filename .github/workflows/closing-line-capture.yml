@@ -1,0 +1,67 @@
+name: Capture pre-event closing lines
+
+# Snapshots this week's outright market (every book's price across win, top-5,
+# top-10, top-20 and make-cut, plus DataGolf's own baseline) into the immutable
+# closing-line archive. This is the named market baseline the forward record is
+# graded against: the bar a bettor actually has to clear, as opposed to the
+# field base rate, which is the easy one.
+#
+# WEDNESDAY, NOT THURSDAY MORNING, and that is a deliberate departure from the
+# roadmap's original "shortly before Thursday tee-off". The capture endpoint
+# refuses to write once an event has started, and the calendar half of that
+# guard treats the whole start date as too late, because no hour on it is
+# provably pre-tee-off across time zones (an Open Championship morning wave is
+# out before 07:00 UTC). A Thursday-morning run would therefore be refused by
+# design. What gets captured is the last pre-event market price, not the close
+# in the strict CLV sense; reporting must not call it a closing line without
+# that qualification. See app/services/closing_line_archive.py.
+#
+# Two runs, both Wednesday, mirroring board capture rather than matchup
+# capture (whose Thursday retry the guard would refuse). Capture is
+# first-write-wins, so the second run is a no-op whenever the first succeeded.
+#
+# Fails loudly when the response is unhealthy — meaning the week's market
+# baseline was NOT recorded. That is not recoverable later: a line read after
+# the event is not a prediction, so there is no backfill for this archive the
+# way there is for boards.
+#
+# Requires the ADMIN_API_TOKEN repository secret to match the Render env var.
+
+on:
+  schedule:
+    - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET), lines are posted and settled
+    - cron: "30 23 * * 3" # Wed 23:30 UTC retry, still comfortably pre-event
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /analytics/closing-lines/capture
+        run: |
+          set -euo pipefail
+          API=https://pga-analytics-api.onrender.com/api/v1
+          # --retry covers the Render free-tier cold start (~40s) and blips;
+          # curl doesn't retry POSTs without --retry-all-errors.
+          curl -fsS --max-time 300 --retry 3 --retry-delay 20 --retry-all-errors \
+            -X POST -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
+            "$API/analytics/closing-lines/capture" -o result.json
+
+          # Event name, dates and counts only — no prices, so this is safe in a
+          # public log. DataGolf's terms are personal use, no redistribution.
+          echo "--- capture result ---"
+          jq '{outcome, healthy, event_name, tournament_start_date, markets_offered, players}' result.json
+
+          if [ "$(jq -r '.healthy' result.json)" != "true" ]; then
+            echo "::error::Closing-line capture unhealthy: $(jq -r '.outcome' result.json). This week's market baseline was not recorded and cannot be captured after the fact."
+            exit 1
+          fi
+
+  # Back the capture up to the private ledger immediately rather than waiting
+  # for the nightly export, per docs/ledger.md §4.2.
+  export:
+    needs: capture
+    uses: ./.github/workflows/archive-export.yml
+    secrets: inherit

@@ -106,6 +106,12 @@ constraints in 2.4/2.5 to compensate.
 Pinned by `tests/test_board_capture.py`, which exercises each signal on a
 day the other would allow.
 
+The closing-line archive has its own copy of this guard, in
+`services/closing_line_archive.py`, for the same reason and with the same
+two signals — see 2.11. The two are separate because they gate different
+writes, but they must not diverge: if you relax one, say why the other
+should not follow.
+
 ### 2.3 Grade one snapshot per tournament; captured beats backfilled **[enforced]**
 
 The archive legitimately holds several snapshots of one event, because
@@ -248,7 +254,8 @@ skill ratings. Do not add more without asking.
 ### 2.9 Admin endpoints stay admin-gated and 404 when unconfigured **[enforced]**
 
 `/archive/export`, `/archive/import`, `/track-record/forward/backfill`,
-and `/matchups/capture` all require `X-Admin-Token` matching
+`/matchups/capture`, `/closing-lines/capture`, `/track-record/settle` and
+`/track-record/capture-upcoming` all require `X-Admin-Token` matching
 `settings.admin_api_token`, and return 404 (not 401 or 403) when the
 secret is unset or wrong, so the endpoints do not advertise their
 existence in an unconfigured deployment.
@@ -264,6 +271,77 @@ Josh's policy, 2026-08-20. A retrain mid-week changes
 is the exact condition that produces duplicate snapshots per event. 2.3
 makes that survivable at grading time, but the policy is what keeps the
 archive clean in the first place.
+
+### 2.11 Capture the market line only before the event starts **[enforced]**
+
+`services/closing_line_archive.py` snapshots the sportsbook outright
+market (`betting-tools/outrights`, all five markets, every book, plus
+DataGolf's own baseline line) once per event, first-write-wins, as the
+named market baseline A4b will grade against. `POST
+/analytics/closing-lines/capture` is the only writer; the Wednesday cron
+is `.github/workflows/closing-line-capture.yml`.
+
+Same start guard as 2.2 and for the same reason: DataGolf keeps serving
+outrights after a field tees off — verified against the live feed on
+2026-08-20, which returned a full 50-player BMW Championship board while
+round one was under way — and in-play prices carry no marker
+distinguishing them from pre-event ones. Both signals are checked, either
+refuses, and a feed event the catalog cannot resolve is **also** refused,
+because a line whose event cannot be identified is exactly the one that
+might be in-play.
+
+Two consequences worth stating outright:
+
+- **There is no backfill for this archive.** A board can be
+  reconstructed after the fact from DataGolf's pre-event archive; a
+  market line cannot, because a line read after the event is not a
+  prediction. A missed week is permanently missing, which is why the
+  workflow exits non-zero on anything other than a capture, an idempotent
+  no-op, or a genuine off week.
+- **It is not the closing line, and must not be reported as one.** The
+  guard makes Thursday morning unreachable, so the cron runs Wednesday
+  evening. What is stored is the last pre-event market price. Calling it
+  a closing line in any audience-facing surface would be an overclaim
+  about closing-line value; describe it as a pre-event market price. A
+  true close needs tee-time-aware gating, which is not built.
+
+Raw book prices are the record. `consensus_american` and `devigged_prob`
+are derived at capture for convenience and can be recomputed from the raw
+prices, so a later de-vig fix is not blocked by 2.1.
+
+Pinned by `tests/test_closing_line_archive.py` and
+`tests/test_closing_line_endpoint.py`.
+
+### 2.12 The DataGolf baseline is pinned at capture or not at all **[enforced]**
+
+`BoardSnapshot.dg_baseline` holds DataGolf's own five-market
+probabilities for the players it covered, written at capture alongside
+the board (A4a, `services/board_archive.py`).
+
+It cannot be fetched at grading time instead. DataGolf's pre-tournament
+feed is not an archive of what it said on Wednesday: it keeps updating,
+and for a completed event it returns numbers informed by the finish. A
+baseline read after the event is not a prediction, so a board captured
+without one **can never carry the column** — the nine events already in
+the record are permanently without it, and no amount of later work
+recovers them.
+
+Three states, all distinct, and code must keep them distinct:
+
+| Value | Meaning |
+|---|---|
+| `None` | Not recorded. Every snapshot written before 2026-08-21, and every non-Path-A board. |
+| `()` | Path A ran and DataGolf covered nobody. The degraded regime of 3.2, now visible directly. |
+| non-empty | `len(dg_baseline) == dg_direct_count`, sorted by player id. |
+
+Reading `()` as "not recorded" (or `None` as "covered nobody") would be a
+false claim about the record, so the deserializer checks for the key's
+presence rather than its truthiness.
+
+The stored numbers are **raw DataGolf**, before `coherent_outcomes` and
+`normalize_field`. Do not "fix" this to store the served values: a
+baseline that has been through our own pipeline is partly our own
+prediction, and beating it would prove nothing about beating DataGolf.
 
 ---
 
@@ -378,6 +456,23 @@ re-running the job, only reconstructed as a backfill.
 To check whether a specific event was captured, read
 `archive-inspect` (§4.4) rather than inferring it from the leaderboard.
 
+### 3.7 The Wednesday window closes three separate archives
+
+Three scheduled jobs write pre-event data on the same Wednesday, and all
+three are permanent-on-first-write with no recovery path for a missed
+week beyond board backfill:
+
+| Job | Writes | Recoverable if missed? |
+|---|---|---|
+| `board-capture.yml` (21:00, 23:30 UTC) | the served board, plus its pinned `dg_baseline` (2.12) | the board yes, by backfill; the baseline **no** |
+| `matchup-capture.yml` (Wed 21:00, Thu 11:00 UTC) | DataGolf's matchup line vs book prices | no |
+| `closing-line-capture.yml` (21:00, 23:30 UTC) | the outright market baseline (2.11) | no |
+
+The practical consequence: a change that has to be live "before the
+event" is really due before **Wednesday 21:00 UTC**, not before Thursday.
+A deploy that lands Thursday morning misses the week entirely, and the
+loss is silent in every surface except the workflow's own exit status.
+
 ---
 
 ## 4. Procedures
@@ -416,8 +511,9 @@ single-purpose workflow with one narrow endpoint.
 
 What it can reach is exactly the `operation` dropdown:
 `backfill-dry-run`, `backfill`, `archive-inspect`, `archive-import`,
-`matchup-capture`, `capture-upcoming`, `settle`. The endpoint path is never free text, so a typo cannot
-send a request somewhere unintended.
+`matchup-capture`, `closing-line-capture`, `capture-upcoming`, `settle`.
+The endpoint path is never free text, so a typo cannot send a request
+somewhere unintended.
 
 What it cannot reach, and the rule for adding to it: `/archive/export` is
 excluded because the workflow prints response bodies, Actions logs on this
@@ -446,7 +542,8 @@ workflow above.
 no probabilities, so it is safe to read in a log and cheap compared with
 a full export. Per snapshot it reports `source`, `model_version_id`,
 `model_trained_through`, `captured_at`, the outcome count,
-`dg_direct_count`, and the two derived answers that matter:
+`dg_direct_count`, `dg_baseline` (the pinned-baseline row count, `null`
+on pre-A4a boards — see 2.12), and the two derived answers that matter:
 `out_of_sample` (can this snapshot's model certify the event at all,
 §2.6) and `canonical` (is this the snapshot the grader actually scores
 for its tournament, §2.3). `canonical` is computed by the same
@@ -512,8 +609,9 @@ Do not assume these exist. Roadmap detail in `docs/plans/01-roadmap.md`.
 | Item | Status |
 |---|---|
 | A1 git SHA provenance | Not built. Neither `ModelVersion` nor `BoardSnapshot` records the code revision. |
-| A4 named baselines | Not built. The only baseline is the field base rate. No DataGolf-raw column, no closing-line column. |
-| A5 closing-line capture | Not built. `get_outright_odds` exists on the provider; nothing captures it. |
+| A4a DataGolf baseline storage | **Built 2026-08-21.** Boards captured from then on pin `dg_baseline`; earlier ones never will (2.12). |
+| A4b named baseline reporting | Not built. The only baseline the forward record reports is still the field base rate. The DataGolf and market columns have data accumulating but nothing grades them. |
+| A5 market-line capture | **Built 2026-08-21** (2.11). Captures only; nothing grades it yet, and it is a pre-event price, not a close. |
 | D1 integrity checker | Not built. Nothing currently diffs production against the ledger. |
 
 One more standing caveat: under Path A, roughly 95% of a covered field is

@@ -110,30 +110,72 @@ D2 (grading commentary) ── after A4/B2
 - **Verify**: unit test — grade once, mutate the mock provider's results,
   grade again → identical grades; settlement snapshot refuses overwrite.
 
-### A4. Named baseline columns in the forward record
+### A4 (split). Named baseline columns in the forward record
+
+Split into a capture-time half and a reporting half on 2026-08-21,
+because they have completely different deadlines. A4a writes data that
+can only ever be written *before* an event; A4b reads it and can be built
+at any time afterwards. Bundling them would have made the reporting work
+gate the storage work, and every week spent building the reporting half
+is a week of events permanently missing the baseline.
+
+### A4a. Store `dg_full` on the board snapshot at capture ✅ (built 2026-08-21)
+- **What**: Pin DataGolf's own five-market probabilities for the covered
+  players onto the board snapshot at capture time, alongside the board
+  itself. Raw DataGolf numbers, before `coherent_outcomes` and
+  `normalize_field`, so the stored baseline is what DataGolf published
+  rather than what our pipeline made of it. Storage only — nothing reads
+  the column yet.
+- **Why it cannot wait**: DataGolf's pre-tournament feed is not an
+  archive of what it said on Wednesday. It keeps updating, and for a
+  completed event it returns numbers informed by the finish. A baseline
+  fetched at grading time is not a prediction, so a board captured
+  without one can never carry the column. The nine events already in the
+  record are permanently without it.
+- **Depends on**: nothing (it rides the existing capture path).
+- **Verify**: `dg_baseline` count appears in `archive/inspect` per board;
+  absent (pre-A4a) and empty (Path A covered nobody) stay
+  distinguishable through storage.
+
+### A4b. Grade and report the named baselines
 - **What**: Grade each event's board alongside named baselines and report
   per-market skill for each: (1) field base rate (exists), (2) DataGolf
-  raw pre-event probabilities (store `dg_full` on the snapshot at capture
-  so the baseline is as immutable as the board; for the in-house model
-  this is only a true head-to-head on cold-start players — label it
-  honestly, per R6), (3) closing-market implied probability once A5
-  captures it. Generalizes what `backend/scripts/grade_and_next.py` did
-  by hand for the 3M Open.
-- **Depends on**: A2, A3; A5 for the market column.
+  raw pre-event probabilities (from A4a's pinned `dg_baseline`; for the
+  in-house model this is only a true head-to-head on cold-start players —
+  label it honestly, per R6), (3) market implied probability from A5's
+  captured lines. Generalizes what `backend/scripts/grade_and_next.py`
+  did by hand for the 3M Open.
+- **Depends on**: A2, A3, A4a, A5. Only grades events captured after
+  A4a/A5 went live, so it is worth building once several such events
+  exist rather than immediately.
 - **Verify**: unit tests with fixture boards where the model beats /
   loses to each baseline; endpoint payload shows per-baseline rows; 3M
   Open backfilled event reproduces the README table's direction.
 
-### A5. Closing-line capture job
+### A5. Closing-line capture job ✅ (built 2026-08-21; moved ahead of A4)
 - **What**: Snapshot `betting-tools/outrights` (all five markets, all
-  books, de-vig via the existing `services/betting.py` normalization)
-  into an immutable per-event archive, on a cron shortly before Thursday
-  tee-off — the same shape as matchup capture. This is the third named
-  baseline and the one a bettor actually has to beat.
-- **Depends on**: audit question 2 (subscription covers outrights);
-  pattern from `matchup-capture.yml`.
-- **Verify**: manual dispatch captures this week's event; second dispatch
-  is a no-op; snapshot appears in the A0 export.
+  books, de-vigged through `services/betting.py`'s field normalization)
+  into an immutable per-event archive — the same shape and immutability
+  contract as matchup capture. This is the third named baseline and the
+  one a bettor actually has to beat.
+- **Why it moved ahead of A4**: both A4a and A5 are capture-time writes
+  that cannot be applied retroactively, and the TOUR Championship capture
+  window closed Wed 2026-08-26 21:00 UTC. A4b is a reporting change with
+  no deadline at all. Ordering by deadline rather than by number was the
+  only way both capture-time halves landed before that window.
+- **Wednesday, not Thursday morning.** The plan above said "shortly
+  before Thursday tee-off". It runs Wednesday instead, because the
+  start guard (same one as board capture) treats the whole start date as
+  too late: no hour on it is provably pre-tee-off across time zones. So
+  what is captured is the last pre-event market price, **not the close in
+  the strict CLV sense**, and A4b's reporting must not call it a closing
+  line without that qualification. A true close needs tee-time-aware
+  gating, deliberately not built.
+- **Depends on**: audit question 2 — **resolved 2026-08-21**, the
+  subscription covers `betting-tools/outrights` on all five markets.
+- **Verify**: dispatch captures the upcoming event; second dispatch is a
+  no-op; snapshot appears in `archive/inspect` and in the A0 export; a
+  dispatch against a started event is refused and reports unhealthy.
 
 ---
 
@@ -154,7 +196,7 @@ D2 (grading commentary) ── after A4/B2
   settlement records for newly completed events (A3), (b) refreshes the
   cached forward record, (c) fails the workflow loudly on error (GitHub
   emails on workflow failure — the alerting channel for now, R8).
-- **Depends on**: A3; A4 makes its output worth reading.
+- **Depends on**: A3; A4b makes its output worth reading.
 - **Verify**: run against a just-completed event: settlement snapshot
   written, forward record event count increments, re-run is a no-op.
 
@@ -210,9 +252,50 @@ D2 (grading commentary) ── after A4/B2
   (served board vs. baselines, biggest hits/misses), in the established
   format of the existing 3M Open / Rocket Classic reports, PR'd for
   Josh's review rather than committed directly.
-- **Depends on**: A4 (baselines are the substance), B2 (trigger).
+- **Depends on**: A4b (baselines are the substance), B2 (trigger).
 - **Verify**: run against an already-graded historical event; numbers in
   the draft match the analytics endpoints exactly; Josh judges the prose.
+
+### D3. Calibration audit of DataGolf's published probabilities
+- **What**: Grade DataGolf's own pre-event probabilities (A4a's pinned
+  `dg_baseline`) against settled outcomes from the archive, and report
+  calibration sliced by market, field strength, player tier, and
+  favourite vs longshot. The question is narrow and answerable: where, if
+  anywhere, is DataGolf systematically mispriced? Path A serves DataGolf
+  directly to ~95% of the field, so any answer here is a claim about the
+  product's own served numbers, not about someone else's model.
+- **Depends on**: A4b, plus a meaningful number of graded events with a
+  pinned baseline (the nine events already in the record have none). Sits
+  after D2.
+
+**Two requirements are part of the unit, not process to bolt on later.**
+
+1. **Pre-registration.** Every hypothesis gets a design doc, written
+   before it touches data, stating the slice, the metric, the direction
+   of the predicted effect, and what result would falsify it. A
+   hypothesis without a written falsifiable claim is not eligible to be
+   tested.
+2. **Negative-results log.** Every tested hypothesis is recorded with its
+   outcome, whether it passed or failed. The log is append-only and lives
+   with the analysis, not in a commit message.
+
+**Why, stated plainly:** an agent iterating over hypotheses against the
+backtest harness will eventually find something. Four slice dimensions
+crossed with five markets is on the order of a hundred comparisons, and
+at p < 0.05 several of them are expected to look significant with no
+effect present at all. Without a record of how many were tried, a
+surviving result is uninterpretable — there is no way to distinguish a
+real edge from the best of a hundred coin flips, and the honest reading
+of an unlogged search is that it found nothing. This is the same
+discipline the feature-space program already followed by recording the
+blow-up-rate, course-fit and wave hypotheses as closed negatives; D3
+formalises it because an agent can run the search far faster than a
+person can remember what it tried.
+
+- **Verify**: a hypothesis with no pre-registration doc is refused by the
+  harness; the negative-results log contains every run, including the
+  ones that found nothing; a deliberately null slice (random player
+  partition) reports no effect.
 
 ---
 

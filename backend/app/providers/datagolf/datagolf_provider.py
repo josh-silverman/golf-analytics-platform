@@ -1707,6 +1707,35 @@ class DataGolfProvider(DataProvider):
     # Real sportsbook odds  —  GET /betting-tools/outrights
     # -----------------------------------------------------------------------
 
+    async def fetch_live_outrights(self, market: str) -> dict[str, Any]:
+        """Raw ``betting-tools/outrights`` feed for one DataGolf market name.
+
+        The unreduced counterpart to ``get_outright_odds`` below: every book's
+        price plus DataGolf's own baseline, exactly as the feed gave them, for
+        the weekly closing-line capture (``services/closing_line_archive``).
+        Never cached — capture wants the freshest pre-event price, and it runs
+        once a week.
+
+        ``market`` is DataGolf's own name ("win", "top_5", …), not our outcome
+        key, because the archive stores both and maps between them itself.
+        Errors and non-dict bodies degrade to ``{}``: one market failing must
+        not cost the other four, and an empty market is a shape the snapshot
+        builder already records honestly.
+        """
+        try:
+            r = await self._http.get(
+                "/betting-tools/outrights",
+                params={"tour": "pga", "market": market, "odds_format": "american"},
+            )
+            r.raise_for_status()
+        except httpx.HTTPError:
+            return {}
+        try:
+            data = r.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
     async def get_outright_odds(self, market: str) -> OutrightOdds | None:
         """Live outright odds for the current event, as a consensus across books.
 

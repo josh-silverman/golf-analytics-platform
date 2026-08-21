@@ -25,6 +25,11 @@ from app.services.board_archive import (
     RedisBoardArchive,
 )
 from app.services.catalog import CatalogService
+from app.services.closing_line_archive import (
+    ClosingLineArchive,
+    FileClosingLineArchive,
+    RedisClosingLineArchive,
+)
 from app.services.features import FeatureExtractor
 from app.services.matchup_line_record import (
     FileMatchupArchive,
@@ -144,6 +149,22 @@ def get_settlement_archive() -> SettlementArchive:
 
         return RedisSettlementArchive(redis_client)
     return FileSettlementArchive(Path(settings.settlements_path))
+
+
+@lru_cache(maxsize=1)
+def get_closing_line_archive() -> ClosingLineArchive:
+    """Process-cached pre-event outright-line archive.
+
+    Same backend split and same reason as the other three: the weekly market
+    baseline is ledger data, and a line that did not survive a redeploy cannot
+    be re-captured after the event.
+    """
+    settings = get_settings()
+    if settings.board_archive_backend == "redis":
+        from app.cache.redis import redis_client
+
+        return RedisClosingLineArchive(redis_client)
+    return FileClosingLineArchive(Path(settings.closing_lines_path))
 
 
 def _resolve_active_model() -> tuple[Model, str, str | None]:
