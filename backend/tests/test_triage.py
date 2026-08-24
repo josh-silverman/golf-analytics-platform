@@ -151,18 +151,34 @@ def test_a_document_referenced_from_prose_counts_as_used(findings) -> None:
         assert _for(findings, name) is None
 
 
-def test_ignored_and_present_is_scratch_rather_than_debris(findings) -> None:
+def test_ignored_and_present_is_scratch_rather_than_debris(tmp_path) -> None:
     """`.gitignore` read as intent: these are deliberate local files. A
     git-based tool cannot see them; a filesystem-based one calls them debris.
-    Both are wrong."""
-    found = _for(findings, "backend/diagnostics")
-    assert found is not None
-    assert found.bucket is Bucket.LOCAL_SCRATCH
+    Both are wrong.
+
+    Built from a temporary tree rather than asserted against this checkout:
+    the real examples (`backend/diagnostics`, `docs/walkthrough-notes.md`) are
+    gitignored, so they exist on a working machine and not in a fresh clone.
+    A test that only passes where the developer happens to have run a sweep
+    is testing the machine, not the rule — which is how this first went red
+    in CI.
+    """
+    (tmp_path / ".gitignore").write_text("diagnostics/\nnotes.md\n.mypy_cache\nabsent/\n")
+    (tmp_path / "diagnostics").mkdir()
+    (tmp_path / "diagnostics" / "sweep.log").write_text("x")
+    (tmp_path / "notes.md").write_text("y")
+    (tmp_path / ".mypy_cache").mkdir()
+
+    found = triage.ignored_but_present(tmp_path)
+    assert "diagnostics" in found  # a directory of local working files
+    assert "notes.md" in found  # a single ignored-by-name document
+    assert ".mypy_cache" not in found  # regenerable: not a decision
+    assert "absent" not in found  # ignored but not present is nothing at all
 
 
-def test_regenerable_caches_are_not_listed(findings) -> None:
-    """They are ignored and present, but they are not a decision."""
-    for cache in (".mypy_cache", ".ruff_cache", "node_modules"):
+def test_regenerable_caches_are_never_reported(findings) -> None:
+    """They are ignored and present, but they are not a decision anyone makes."""
+    for cache in (".mypy_cache", ".ruff_cache", "node_modules", "__pycache__"):
         assert _for(findings, cache) is None
 
 
