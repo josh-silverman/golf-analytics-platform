@@ -1,0 +1,114 @@
+# Keep register — machine-readable "this looks dead and is not, and here is why"
+#
+# Read by `python -m app.cli.triage` (backend/app/cli/triage.py). Every entry
+# records something a static analysis will confidently flag as removable,
+# together with the condition under which that reason would stop applying.
+#
+# The point is that the triage tool must never recommend removing one of these
+# without first checking whether the documented reason has lapsed. Without
+# this file it would rediscover `app/db/` as dead on every single run, which
+# is how a cleanup tool becomes something you stop reading.
+#
+# Buckets:
+#   documented      — dead by every static measure, deliberately retained.
+#   reader_pending  — written but not yet read, because the reader is a
+#                     roadmap unit that is not built.
+#
+# Lapse checks:
+#   file_contains     — reason lapses if `pattern` is found in `path`.
+#   file_not_contains — reason lapses if `pattern` is absent from `path`
+#                       (i.e. the documentation that justified it is gone).
+#   manual            — cannot be checked from a local checkout. The tool
+#                       reports the question and never recommends removal.
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+
+[[keep]]
+id = "vestigial-db"
+paths = ["backend/app/db", "backend/alembic"]
+bucket = "documented"
+citation = "docs/ledger.md §3.4"
+reason = """
+Unimported by anything outside app/db, and render.yaml provisions no Postgres,
+so every static measure calls this dead. It is kept deliberately: /readyz was
+broken in f265744 by exactly the assumption that this schema was live, and the
+ledger section exists so nobody re-derives that the hard way. Deleting the code
+deletes the warning."""
+
+[keep.lapse]
+kind = "file_contains"
+path = "render.yaml"
+pattern = "(?im)^\\s*(type:\\s*pserv|databases:)"
+means = """
+render.yaml now provisions a database, so this schema may be becoming real
+rather than vestigial. Re-read ledger §3.4 before either wiring it up or
+removing it."""
+
+# ---------------------------------------------------------------------------
+
+[[keep]]
+id = "model-registry-versions"
+paths = ["backend/models"]
+bucket = "documented"
+citation = "docs/ledger.md §2.6"
+reason = """
+Old registered model versions look like stale artifacts. They are how a board's
+model_version_id stays interpretable and how training_data_through certifies a
+snapshot as out-of-sample. Pruning them silently un-grades part of the archive."""
+
+[keep.lapse]
+kind = "manual"
+question = """
+Is any version here referenced by no board snapshot in the PRODUCTION archive?
+Not answerable from a local checkout: boards live in Redis, and the local
+prediction_boards/ directory is gitignored dev data. Answer with
+`archive-inspect` before touching anything in this directory."""
+
+# ---------------------------------------------------------------------------
+
+[[keep]]
+id = "capture-time-fields"
+paths = [
+  "backend/app/services/board_archive.py::dg_baseline",
+  "backend/app/services/board_archive.py::dg_fetch_status",
+]
+bucket = "reader_pending"
+citation = "docs/ledger.md §2.12 and §2.12a"
+reason = """
+Written on every capture since 2026-08-21; nothing reads them, because A4b is
+not built. A dead-field detector flags them entirely correctly and the correct
+action is the opposite of what it implies: these are capture-time writes that
+cannot be backfilled, so removing them destroys data no later work can
+recover."""
+
+[keep.lapse]
+kind = "file_contains"
+path = "docs/plans/01-roadmap.md"
+pattern = "### A4b[^\\n]*✅"
+means = """
+A4b is marked built, so these fields now have a reader. They are no longer
+'reader pending' — but they are still capture-time ledger data, so this entry
+should move to `documented` rather than be deleted."""
+
+# ---------------------------------------------------------------------------
+
+[[keep]]
+id = "grade-and-next"
+paths = ["backend/scripts/grade_and_next.py"]
+bucket = "reader_pending"
+citation = "docs/plans/01-roadmap.md — unit A4b"
+reason = """
+Sits among the per-event one-off analyst scripts and looks like one, but A4b
+cites it as the thing to generalize: it is the hand-rolled version of the
+named-baseline grading the roadmap intends to build."""
+
+[keep.lapse]
+kind = "file_contains"
+path = "docs/plans/01-roadmap.md"
+pattern = "### A4b[^\\n]*✅"
+means = """
+A4b is built, so the behaviour has been generalized into the app surface and
+this script is now genuinely superseded. Safe to remove once you have confirmed
+the endpoint reproduces its numbers."""
