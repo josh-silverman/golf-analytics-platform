@@ -312,6 +312,60 @@ prices, so a later de-vig fix is not blocked by 2.1.
 Pinned by `tests/test_closing_line_archive.py` and
 `tests/test_closing_line_endpoint.py`.
 
+### 2.11a A captured market line records whether it parsed **[enforced]**
+
+`MarketLines.status` and `ClosingLineSnapshot.status` hold a `LineFeedStatus`
+(`domain/enums.py`), the market-line counterpart to 2.12a's
+`DgFetchStatus`, and it exists for the same reason: a snapshot that quietly
+parsed less than it should looked identical to a healthy one, and 2.1 makes
+the wrong reading permanent.
+
+| Status | Meaning | Usable as a market baseline? |
+|---|---|---|
+| `ok` | Every price and DataGolf's own line parsed. | Yes. |
+| `not_offered` | Books are not offering this market. Every no-cut event, on `make_cut`. | N/A — a fact about the event, not a fault. |
+| `missing_baseline` | Priced fine, but *no* line carried DataGolf's baseline. | No. |
+| `suspect_prices` | A value was present but could not be an American price. | No. |
+| `no_data` | An event was named, nothing usable came back. | No. |
+| `null` | Captured before the check existed. | No — unknowable now. |
+
+Two failure modes forced this, both verified against the shipped parser on
+2026-08-24 and neither of which previously left a trace:
+
+- **A book quoting decimal odds where American was requested.** DataGolf
+  returns `4.2` (a float, not a string) rather than `"+320"`. The old parser
+  rounded that to the American price `+4`, an implied probability of **0.96
+  for every player in the market**, stored as though real. Confirmed against
+  the live feed with `odds_format=decimal`: the market now reports
+  `suspect_prices` with 1181 values refused, where before it produced four
+  markets of healthy-looking nonsense.
+- **DataGolf's `datagolf` object flattening to a bare price string.** Read as
+  `dg_baseline: None` on every line while the market still said
+  `offered: True`, silently dropping DataGolf's own line.
+
+**The range check is arithmetic, not a threshold.** American odds are
+undefined between −100 and +100: a positive price is the profit on a 100
+stake, a negative one the stake needed to win 100, and even money is exactly
+±100. A value inside that band is not a price that rounded oddly, it is a
+price in another unit. Refused values are counted (`prices_rejected`), never
+stored. `"NA"` stays distinct from a refusal: a book not pricing a player is
+absence, not drift.
+
+**Partial baseline coverage is not drift.** `missing_baseline` fires only
+when *no* line in a priced market carried one, because DataGolf does not
+model every player and a per-row check would fire every week.
+
+**Refuse then retry, exactly as in 2.12a.** The 21:00 run passes
+`allow_degraded=false` and refuses a snapshot that did not parse cleanly,
+writing nothing, so the 23:30 run can still capture a clean one; the 23:30
+run captures regardless, labelled. `retryable` is reported only on the strict
+run, since the permissive one is the last chance. A4b must exclude any
+snapshot where `ClosingLineSnapshot.is_clean` is false rather than treating
+its prices as a market baseline.
+
+Pinned by the shape-drift tests in `tests/test_closing_line_archive.py` and
+`tests/test_closing_line_endpoint.py`.
+
 ### 2.12 The DataGolf baseline is pinned at capture or not at all **[enforced]**
 
 `BoardSnapshot.dg_baseline` holds DataGolf's own five-market
@@ -521,7 +575,7 @@ week beyond board backfill:
 |---|---|---|
 | `board-capture.yml` (21:00 strict, 23:30 permissive) | the served board, plus its pinned `dg_baseline` (2.12) and `dg_fetch_status` (2.12a) | the board yes, by backfill; the baseline **no** |
 | `matchup-capture.yml` (Wed 21:00, Thu 11:00 UTC) | DataGolf's matchup line vs book prices | no |
-| `closing-line-capture.yml` (21:00, 23:30 UTC) | the outright market baseline (2.11) | no |
+| `closing-line-capture.yml` (21:00 strict, 23:30 permissive) | the outright market baseline (2.11) plus its parse status (2.11a) | no |
 
 The practical consequence: a change that has to be live "before the
 event" is really due before **Wednesday 21:00 UTC**, not before Thursday.

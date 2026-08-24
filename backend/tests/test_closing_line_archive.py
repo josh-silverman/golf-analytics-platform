@@ -13,12 +13,13 @@ from typing import Any
 
 import pytest
 
-from app.domain.enums import TournamentStatus
+from app.domain.enums import LineFeedStatus, TournamentStatus
 from app.domain.models import Page, Tournament
 from app.services.closing_line_archive import (
     ClosingLineOutcome,
     FileClosingLineArchive,
     _from_dict,
+    _market_from_feed,
     _to_json,
     capture_closing_lines,
     snapshot_from_feeds,
@@ -276,3 +277,188 @@ async def test_an_off_week_is_healthy_but_a_priceless_event_is_not(archive) -> N
     )
     assert broken.outcome is ClosingLineOutcome.NO_MARKETS
     assert not broken.outcome.is_healthy
+
+
+# ---------------------------------------------------------------------------
+# Feed shape drift (§2.11a). Both fixtures are built from shapes observed on
+# the live feed on 2026-08-24, not invented: the decimal values are what
+# DataGolf actually returns for `odds_format=decimal` (floats, not strings),
+# and the flattened `datagolf` value is the price string it would collapse to.
+# ---------------------------------------------------------------------------
+
+
+def _decimal_feed() -> dict[str, Any]:
+    """A book quoting decimal odds where American was requested.
+
+    Real values from the live TOUR Championship board: bet365 4.2,
+    draftkings 4.35, DataGolf's baseline 5.697464628240422. Under the old
+    parser these rounded to the American prices +4, +4 and +6 — an implied
+    probability of roughly 0.96 for every player, stored as though real.
+    """
+    return {
+        "event_name": "TOUR Championship",
+        "market": "win",
+        "last_updated": "2026-08-24 18:03:05 UTC",
+        "books_offering": ["bet365", "draftkings"],
+        "odds": [
+            {
+                "dg_id": 18417,
+                "player_name": "Player, One",
+                "bet365": 4.2,
+                "draftkings": 4.35,
+                "datagolf": {
+                    "baseline": 5.697464628240422,
+                    "baseline_history_fit": 5.48646671543525,
+                },
+            }
+        ],
+    }
+
+
+def _flattened_baseline_feed() -> dict[str, Any]:
+    """DataGolf's nested baseline object collapsed to a bare price string."""
+    feed = _feed("win")
+    for row in feed["odds"]:
+        row["datagolf"] = "+473"
+    return feed
+
+
+def test_decimal_odds_are_refused_rather_than_rounded_into_a_price() -> None:
+    """The failure this check exists for. A decimal 4.2 is not an American
+    price that needs rounding; it is a different unit."""
+    market = _market_from_feed(_decimal_feed(), market="win_prob", dg_market="win")
+    assert market.status == LineFeedStatus.SUSPECT_PRICES.value
+    assert market.prices_rejected == 4  # two books, plus both DataGolf values
+    # Nothing survived, so nothing was stored claiming to be a price.
+    assert market.lines == ()
+    assert market.offered is False
+
+
+def test_a_refused_price_never_reaches_the_archive_as_a_probability() -> None:
+    """Belt and braces on the consequence rather than the mechanism: whatever
+    is stored must not imply a ~96% chance for a 4-to-1 shot."""
+    market = _market_from_feed(_decimal_feed(), market="win_prob", dg_market="win")
+    for line in market.lines:
+        for price in line.prices:
+            assert abs(price.american) >= 100
+        assert (line.devigged_prob or 0.0) < 0.5
+
+
+def test_a_flattened_datagolf_object_is_distinguishable_from_absent(tmp_path) -> None:
+    """`dg_baseline: None` with `offered: True` used to be the only trace.
+    A shape change and thin coverage must not read the same."""
+    market = _market_from_feed(_flattened_baseline_feed(), market="win_prob", dg_market="win")
+    assert market.offered is True  # the book prices are still good
+    assert market.status == LineFeedStatus.SUSPECT_PRICES.value
+    assert market.baseline_rows == 0
+    assert all(line.dg_baseline is None for line in market.lines)
+
+
+def test_missing_baseline_is_reported_when_the_key_is_simply_absent() -> None:
+    """No `datagolf` key at all: nothing was mangled, but the baseline is gone
+    across the whole market, which is shape rather than coverage."""
+    feed = _feed("win")
+    for row in feed["odds"]:
+        row.pop("datagolf")
+    market = _market_from_feed(feed, market="win_prob", dg_market="win")
+    assert market.offered is True
+    assert market.status == LineFeedStatus.MISSING_BASELINE.value
+    assert market.prices_rejected == 0  # an absent key is not a mangled one
+    assert market.baseline_rows == 0
+
+
+def test_partial_baseline_coverage_is_not_treated_as_drift() -> None:
+    """DataGolf does not model every player. Only a total absence is a signal,
+    or the check fires every week on ordinary events."""
+    feed = _feed("win")
+    feed["odds"][1].pop("datagolf")
+    market = _market_from_feed(feed, market="win_prob", dg_market="win")
+    assert market.status == LineFeedStatus.OK.value
+    assert market.baseline_rows == 1
+
+
+def test_unpriced_players_are_not_counted_as_drift() -> None:
+    """ "NA" means this book is not pricing this player. Absent, not wrong."""
+    market = _market_from_feed(_feed("win"), market="win_prob", dg_market="win")
+    assert market.prices_rejected == 0  # the fixture's "NA" draftkings quote
+    assert market.status == LineFeedStatus.OK.value
+
+
+def test_snapshot_status_rolls_up_the_worst_offered_market() -> None:
+    feeds = _feeds()
+    feeds["top_10"] = _decimal_feed()
+    snap = snapshot_from_feeds(feeds, year=2026)
+    assert snap is not None
+    assert snap.status == LineFeedStatus.SUSPECT_PRICES.value
+    assert snap.is_clean is False
+
+
+def test_a_no_cut_event_still_reads_as_clean() -> None:
+    """`make_cut` not being offered is the event's shape, not a fault."""
+    snap = snapshot_from_feeds(_feeds(), year=2026)
+    assert snap is not None
+    assert snap.status == LineFeedStatus.OK.value
+    assert snap.is_clean is True
+
+
+def test_status_round_trips_through_storage() -> None:
+    feeds = _feeds()
+    feeds["win"] = _decimal_feed()
+    snap = snapshot_from_feeds(feeds, year=2026)
+    assert snap is not None
+    import json
+
+    assert _from_dict(json.loads(_to_json(snap))) == snap
+
+
+# --- the refuse-then-retry half, symmetric with §2.12a ----------------------
+
+
+async def test_strict_run_refuses_a_suspect_feed_and_writes_nothing(archive) -> None:
+    """21:00. Nothing written, so first-write-wins has not closed the door on
+    the 23:30 retry getting a clean capture."""
+    feeds = _feeds()
+    feeds["win"] = _decimal_feed()
+    result = await capture_closing_lines(
+        catalog=_Catalog([_tournament(TournamentStatus.UPCOMING)]),
+        archive=archive,
+        source=_Source(feeds),
+        today=date(2026, 8, 26),
+        allow_degraded=False,
+    )
+    assert result.outcome is ClosingLineOutcome.FEED_SUSPECT
+    assert result.outcome.is_retryable
+    assert not result.outcome.is_healthy
+    assert result.status == LineFeedStatus.SUSPECT_PRICES.value
+    assert result.prices_rejected == 4
+    assert await archive.list_all() == []
+
+
+async def test_retry_captures_the_suspect_feed_labelled(archive) -> None:
+    """23:30. A stamped degraded line beats no line for the week, and the
+    stamp is what stops A4b reading it as a market price."""
+    feeds = _feeds()
+    feeds["win"] = _decimal_feed()
+    result = await capture_closing_lines(
+        catalog=_Catalog([_tournament(TournamentStatus.UPCOMING)]),
+        archive=archive,
+        source=_Source(feeds),
+        today=date(2026, 8, 26),
+        allow_degraded=True,
+    )
+    assert result.outcome is ClosingLineOutcome.CAPTURED
+    (stored,) = await archive.list_all()
+    assert stored.status == LineFeedStatus.SUSPECT_PRICES.value
+    assert stored.is_clean is False
+
+
+async def test_a_clean_feed_is_captured_even_on_the_strict_run(archive) -> None:
+    result = await capture_closing_lines(
+        catalog=_Catalog([_tournament(TournamentStatus.UPCOMING)]),
+        archive=archive,
+        source=_Source(_feeds()),
+        today=date(2026, 8, 26),
+        allow_degraded=False,
+    )
+    assert result.outcome is ClosingLineOutcome.CAPTURED
+    assert result.status == LineFeedStatus.OK.value

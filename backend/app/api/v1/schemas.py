@@ -318,6 +318,11 @@ class ClosingLineMarketPayload(BaseModel):
     players: int = 0
     books: int = 0
     detail: str | None = None
+    # A ``LineFeedStatus`` value: ok, not_offered, missing_baseline,
+    # suspect_prices, no_data. Null on snapshots captured before the check.
+    status: str | None = None
+    prices_rejected: int = 0
+    baseline_rows: int = 0
 
 
 class ArchiveClosingLineSummaryPayload(BaseModel):
@@ -332,6 +337,12 @@ class ArchiveClosingLineSummaryPayload(BaseModel):
     tournament_id: int | None = None
     tournament_start_date: str | None = None
     captured_at: str
+    # Worst status across the offered markets, and the one field to read when
+    # asking whether this capture needs a human. ``clean`` is the derived
+    # answer: false for a mis-parsed feed and for any snapshot predating the
+    # check, so an A4b market-baseline comparison can exclude on one field.
+    status: str | None = None
+    clean: bool = False
     markets: list[ClosingLineMarketPayload] = []
 
 
@@ -412,12 +423,21 @@ class ClosingLineCapturePayload(BaseModel):
 
     outcome: str
     healthy: bool
+    # True when nothing was captured *only* because the feed did not parse
+    # into what it should have, and a later run this evening could still do
+    # better. The 21:00 job exits zero on this and defers to the retry.
+    retryable: bool = False
+    allow_degraded: bool = True
     event_name: str | None = None
     year: int | None = None
     tournament_id: int | None = None
     tournament_start_date: str | None = None
     markets_offered: int = 0
     players: int = 0
+    # ``LineFeedStatus`` roll-up for the snapshot this run built, plus how
+    # many values were refused as not-an-American-price.
+    status: str | None = None
+    prices_rejected: int = 0
 
 
 class MatchupCapturePayload(BaseModel):

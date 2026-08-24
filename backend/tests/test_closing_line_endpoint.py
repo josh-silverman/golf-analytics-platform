@@ -151,5 +151,77 @@ def test_snapshot_shows_up_in_archive_inspect(ctx) -> None:
         "top_20_prob": True,
         "make_cut_prob": False,
     }
-    # Prices must never reach this response — it is read in public logs.
-    assert "prices" not in str(snap)
+    # A market the books do not offer is a fact about the event, not a fault,
+    # so it must not drag the roll-up down — otherwise every no-cut event
+    # would read as degraded.
+    assert snap["status"] == "ok"
+    assert snap["clean"] is True
+    # Prices must never reach this response — it is read in public logs. Check
+    # the actual leak vectors rather than the substring "prices", which now
+    # legitimately appears as the `prices_rejected` count.
+    blob = str(snap)
+    for leaked in ("american", "devigged", "dg_baseline'", "bet365"):
+        assert leaked not in blob
+
+
+class _DecimalProvider:
+    """Decimal odds on the win market only, American elsewhere.
+
+    A *partial* format change on purpose: total breakage already fails loudly
+    because nothing parses, while a single drifting market captures, reports
+    healthy, and is pinned forever. That is the silent case worth a fixture.
+    Values are what DataGolf actually returns for `odds_format=decimal` —
+    floats, not strings (verified against the live feed 2026-08-24).
+    """
+
+    async def fetch_live_outrights(self, market: str) -> dict[str, Any]:
+        if market != "win":
+            return _feeds().get(market, {})
+        return {
+            "event_name": "TOUR Championship",
+            "market": market,
+            "last_updated": "2026-08-26 21:03:05 UTC",
+            "books_offering": ["bet365"],
+            "odds": [
+                {
+                    "dg_id": 18417,
+                    "player_name": "Player, One",
+                    "bet365": 4.2,
+                    "datagolf": {"baseline": 5.697464628240422},
+                }
+            ],
+        }
+
+
+def test_strict_run_refuses_a_suspect_feed_and_says_it_is_retryable(app, ctx) -> None:
+    client, archive = ctx
+    app.dependency_overrides[get_data_provider] = _DecimalProvider
+    body = client.post(f"{_URL}?allow_degraded=false", headers={"X-Admin-Token": "secret"}).json()
+    assert body["outcome"] == "feed_suspect"
+    assert body["healthy"] is False
+    assert body["retryable"] is True
+    assert body["status"] == "suspect_prices"
+    assert body["prices_rejected"] == 2  # the book price and DataGolf's baseline
+    assert body["allow_degraded"] is False
+
+
+def test_inspect_surfaces_a_suspect_capture(app, ctx) -> None:
+    """The status has to be readable from the record, not just the capture
+    response — that is the lesson of the settle run that passed green."""
+    client, _ = ctx
+    app.dependency_overrides[get_data_provider] = _DecimalProvider
+    captured = client.post(
+        f"{_URL}?allow_degraded=true", headers={"X-Admin-Token": "secret"}
+    ).json()
+    assert captured["outcome"] == "captured"
+
+    body = client.get(
+        "/api/v1/analytics/archive/inspect", headers={"X-Admin-Token": "secret"}
+    ).json()
+    snap = body["closing_line_snapshots"][0]
+    assert snap["status"] == "suspect_prices"
+    assert snap["clean"] is False
+    win = next(m for m in snap["markets"] if m["market"] == "win_prob")
+    assert win["status"] == "suspect_prices"
+    assert win["prices_rejected"] == 2
+    assert win["baseline_rows"] == 0
