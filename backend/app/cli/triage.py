@@ -146,6 +146,18 @@ _REGENERABLE = frozenset(
     }
 )
 
+# The triage tooling *describes* the repo, so a mention here is documentation,
+# not use. Excluded from the reference index because including it is a
+# self-fulfilling false negative: naming `fly.toml` in the comment above was
+# enough to make `fly.toml` look referenced from code and drop out of the
+# report entirely.
+_SELF_DESCRIBING = (
+    "backend/app/cli/triage.py",
+    "backend/tests/test_triage.py",
+    "docs/keep-register.toml",
+    "docs/plans/02-agent-candidates.md",
+)
+
 _MAX_BYTES = 2_000_000  # skip anything larger when reading for references
 
 
@@ -322,6 +334,8 @@ def build_reference_index(root: Path, tracked: list[str]) -> dict[str, str]:
     for rel in tracked:
         path = root / rel
         if path.suffix not in _SCANNABLE or not path.exists():
+            continue
+        if rel in _SELF_DESCRIBING:
             continue
         try:
             if path.stat().st_size > _MAX_BYTES:
