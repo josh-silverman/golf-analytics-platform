@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
-from app.domain.enums import TournamentStatus
+from app.domain.enums import LineFeedStatus, TournamentStatus
 from app.services.betting import (
     american_to_implied_prob,
     devig_field_odds,
@@ -137,6 +137,16 @@ class MarketLines:
     # The feed's own message when ``offered`` is false, kept verbatim so a
     # later reader can tell "no cut at this event" from "feed was broken".
     detail: str | None = None
+    # A ``LineFeedStatus`` value: whether this market is what the parser
+    # expected. ``None`` only on snapshots written before the field existed.
+    status: str | None = None
+    # Values that were numeric (or otherwise present) but could not be an
+    # American price, so were refused rather than stored. Non-zero means the
+    # feed's odds format probably changed.
+    prices_rejected: int = 0
+    # Lines that carried DataGolf's own baseline. Zero across a priced market
+    # means the ``datagolf`` object changed shape, not that coverage is thin.
+    baseline_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -151,6 +161,20 @@ class ClosingLineSnapshot:
     # only a name, and the grader needs the id to join to a board snapshot.
     tournament_id: int | None = None
     tournament_start_date: str | None = None
+    # Worst status across the offered markets — the one field a scheduled run
+    # or `archive-inspect` needs to read. ``None`` only on snapshots written
+    # before the field existed.
+    status: str | None = None
+
+    @property
+    def is_clean(self) -> bool:
+        """True when nothing about this capture needs a human to look at it."""
+        if self.status is None:
+            return False  # written before the check existed; unknowable now
+        try:
+            return LineFeedStatus(self.status).is_clean
+        except ValueError:
+            return False  # a status from a newer build than this one
 
     @property
     def slug(self) -> str:
@@ -163,17 +187,43 @@ class ClosingLineSnapshot:
         return None
 
 
-def _parse_american(raw: Any) -> int | None:
-    """Parse a DataGolf American-odds string like ``"+1200"`` / ``"-150"``."""
-    if raw is None or isinstance(raw, dict):
-        return None
+# American odds are undefined between -100 and +100: a positive price is the
+# profit on a 100 stake, a negative one the stake needed to win 100, and even
+# money is exactly ±100. A value inside that band is therefore not a price
+# that got rounded oddly, it is a price in some other format. This is
+# arithmetic rather than a tuned threshold, so it cannot fire spuriously.
+_MIN_ABS_AMERICAN = 100
+
+# Values that mean "this book is not pricing this player". Absent, not wrong.
+_UNPRICED = frozenset({"", "NA", "N/A", "-", "NONE", "NULL"})
+
+
+def _parse_american(raw: Any) -> tuple[int | None, bool]:
+    """``(price, was_rejected)`` for one raw odds value.
+
+    ``was_rejected`` separates "the book is not pricing this" from "the feed
+    handed us something that is not an American price". Both yield no price,
+    and only the second is evidence the feed changed shape — which is exactly
+    the distinction that was missing when a decimal ``4.2`` became ``+4``.
+    """
+    if raw is None or isinstance(raw, dict | list | bool):
+        return None, raw is not None
     text = str(raw).strip().replace("+", "")
-    if not text or text.upper() in ("NA", "N/A", "-", "NONE"):
-        return None
+    if text.upper() in _UNPRICED:
+        return None, False
     try:
-        return int(round(float(text)))
+        value = int(round(float(text)))
     except ValueError:
-        return None
+        return None, True
+    if abs(value) < _MIN_ABS_AMERICAN:
+        # Decimal odds ("4.2"), fractional, or a probability. Never a price.
+        return None, True
+    return value, False
+
+
+def _price(raw: Any) -> int | None:
+    """The price alone, for callers that do not track rejections."""
+    return _parse_american(raw)[0]
 
 
 def _consensus(prices: tuple[BookPrice, ...]) -> int | None:
@@ -202,31 +252,52 @@ def _market_from_feed(feed: dict[str, Any], *, market: str, dg_market: str) -> M
             offered=False,
             last_updated=last_updated,
             detail=str(raw_rows) if raw_rows else "market not offered",
+            status=LineFeedStatus.NOT_OFFERED.value,
         )
 
     lines: list[PlayerLine] = []
+    rejected = 0
+    baseline_rows = 0
     for row in raw_rows:
         if not isinstance(row, dict):
             continue
         dg_id = row.get("dg_id")
         if not isinstance(dg_id, int):
             continue
-        prices = tuple(
-            BookPrice(book=str(book), american=american)
-            for book, value in sorted(row.items())
-            if book not in _NON_BOOK_KEYS and (american := _parse_american(value)) is not None
-        )
+        prices: list[BookPrice] = []
+        for book, value in sorted(row.items()):
+            if book in _NON_BOOK_KEYS:
+                continue
+            american, was_rejected = _parse_american(value)
+            # A refused value is counted, never stored. Storing it is how a
+            # decimal 4.2 became an American +4 and a 0.96 implied
+            # probability; dropping it silently is how nobody found out.
+            rejected += int(was_rejected)
+            if american is not None:
+                prices.append(BookPrice(book=str(book), american=american))
         dg = row.get("datagolf")
-        dg = dg if isinstance(dg, dict) else {}
-        if not prices and not dg:
+        if not isinstance(dg, dict):
+            # Flattened, absent, or some other shape. Counted as a rejection
+            # only when it held something, so a row DataGolf simply does not
+            # model is not mistaken for a shape change.
+            rejected += int(dg is not None)
+            dg = {}
+        # DataGolf's own line is quoted in the same units as the books, so a
+        # format change shows up here too and counts as the same evidence.
+        baseline, baseline_bad = _parse_american(dg.get("baseline"))
+        _, history_bad = _parse_american(dg.get("baseline_history_fit"))
+        rejected += int(baseline_bad) + int(history_bad)
+        if baseline is not None:
+            baseline_rows += 1
+        if not prices and baseline is None:
             continue
         lines.append(
             PlayerLine(
                 dg_id=dg_id,
-                prices=prices,
-                dg_baseline=_parse_american(dg.get("baseline")),
-                dg_baseline_history_fit=_parse_american(dg.get("baseline_history_fit")),
-                consensus_american=_consensus(prices),
+                prices=tuple(prices),
+                dg_baseline=baseline,
+                dg_baseline_history_fit=_price(dg.get("baseline_history_fit")),  # noqa: E501
+                consensus_american=_consensus(tuple(prices)),
             )
         )
     if not lines:
@@ -236,6 +307,8 @@ def _market_from_feed(feed: dict[str, Any], *, market: str, dg_market: str) -> M
             offered=False,
             last_updated=last_updated,
             detail="no priced players in feed",
+            status=(LineFeedStatus.SUSPECT_PRICES if rejected else LineFeedStatus.NO_DATA).value,
+            prices_rejected=rejected,
         )
 
     # De-vig the consensus across the field it was quoted on. Markets with a
@@ -258,6 +331,16 @@ def _market_from_feed(feed: dict[str, Any], *, market: str, dg_market: str) -> M
         for ln in lines
     ]
     books = feed.get("books_offering")
+    # Precedence: a refused price is the louder signal, because it means the
+    # feed handed us something that is not a price at all. A market with no
+    # baseline at all is the second — partial baseline coverage is normal, so
+    # only a total absence is evidence of shape rather than of coverage.
+    if rejected:
+        status = LineFeedStatus.SUSPECT_PRICES
+    elif baseline_rows == 0:
+        status = LineFeedStatus.MISSING_BASELINE
+    else:
+        status = LineFeedStatus.OK
     return MarketLines(
         market=market,
         dg_market=dg_market,
@@ -265,7 +348,40 @@ def _market_from_feed(feed: dict[str, Any], *, market: str, dg_market: str) -> M
         lines=tuple(sorted(lines, key=lambda ln: ln.dg_id)),
         books_offering=tuple(str(b) for b in books) if isinstance(books, list) else (),
         last_updated=last_updated,
+        status=status.value,
+        prices_rejected=rejected,
+        baseline_rows=baseline_rows,
     )
+
+
+# Worst-first, so the roll-up reports the loudest problem across the five
+# markets. NOT_OFFERED is absent deliberately: a market the books do not offer
+# is a fact about the event, not a fault, and letting it outrank OK would make
+# every no-cut event look degraded.
+_STATUS_SEVERITY = (
+    LineFeedStatus.SUSPECT_PRICES,
+    LineFeedStatus.NO_DATA,
+    LineFeedStatus.MISSING_BASELINE,
+)
+
+
+def markets_from_feeds(feeds: dict[str, dict[str, Any]]) -> tuple[MarketLines, ...]:
+    """Parse all five markets. Separate from ``snapshot_from_feeds`` because a
+    run where *nothing* survived still needs to report why: "no market was
+    priced" and "every price was in the wrong format" are different failures
+    and only one of them is worth retrying."""
+    return tuple(
+        _market_from_feed(feeds.get(dg_market, {}), market=market, dg_market=dg_market)
+        for market, dg_market in MARKETS
+    )
+
+
+def _worst_status(markets: tuple[MarketLines, ...]) -> LineFeedStatus:
+    present = {m.status for m in markets}
+    for candidate in _STATUS_SEVERITY:
+        if candidate.value in present:
+            return candidate
+    return LineFeedStatus.OK
 
 
 def snapshot_from_feeds(
@@ -290,10 +406,7 @@ def snapshot_from_feeds(
     if not event_name:
         return None
 
-    markets = tuple(
-        _market_from_feed(feeds.get(dg_market, {}), market=market, dg_market=dg_market)
-        for market, dg_market in MARKETS
-    )
+    markets = markets_from_feeds(feeds)
     if not any(m.offered for m in markets):
         return None
     return ClosingLineSnapshot(
@@ -301,6 +414,7 @@ def snapshot_from_feeds(
         year=year,
         captured_at=datetime.now(UTC).isoformat(),
         markets=markets,
+        status=_worst_status(markets).value,
         tournament_id=tournament_id,
         tournament_start_date=(
             tournament_start_date.isoformat() if tournament_start_date else None
@@ -338,6 +452,9 @@ def _from_dict(data: dict[str, Any]) -> ClosingLineSnapshot:
                 books_offering=tuple(str(b) for b in raw_market.get("books_offering") or ()),
                 last_updated=raw_market.get("last_updated"),
                 detail=raw_market.get("detail"),
+                status=raw_market.get("status"),
+                prices_rejected=int(raw_market.get("prices_rejected") or 0),
+                baseline_rows=int(raw_market.get("baseline_rows") or 0),
             )
         )
     known = {f.name for f in fields(ClosingLineSnapshot)}
@@ -457,6 +574,12 @@ class ClosingLineOutcome(StrEnum):
     # An event, but not one market priced. Unhealthy: a real pre-event
     # Wednesday always has a win market up.
     NO_MARKETS = "no_markets"
+    # The feed parsed, but not into what it should be — an odds format that is
+    # not American, or DataGolf's baseline object changed shape. Refused on
+    # the first run of the evening so the retry gets a real chance at a clean
+    # one; the retry captures it labelled instead, because a stamped degraded
+    # line beats no line for the week.
+    FEED_SUSPECT = "feed_suspect"
 
     @property
     def is_healthy(self) -> bool:
@@ -472,6 +595,16 @@ class ClosingLineOutcome(StrEnum):
             ClosingLineOutcome.NO_EVENT,
         )
 
+    @property
+    def is_retryable(self) -> bool:
+        """True when a later run this same evening could still do better.
+
+        Only the suspect-feed refusal qualifies: nothing was written, so
+        first-write-wins has not closed the door. A started event will not
+        un-start and a missing catalog entry will not appear at 23:30.
+        """
+        return self is ClosingLineOutcome.FEED_SUSPECT
+
 
 @dataclass(frozen=True)
 class ClosingLineCaptureResult:
@@ -482,6 +615,10 @@ class ClosingLineCaptureResult:
     tournament_start_date: str | None = None
     markets_offered: int = 0
     players: int = 0
+    # A ``LineFeedStatus`` roll-up for the snapshot this run built, whether or
+    # not it was stored.
+    status: str | None = None
+    prices_rejected: int = 0
 
 
 async def _resolve_tournament(catalog: CatalogService, slug: str) -> Tournament | None:
@@ -506,12 +643,19 @@ async def capture_closing_lines(
     archive: ClosingLineArchive,
     source: OutrightFeedSource,
     today: date,
+    allow_degraded: bool = True,
 ) -> ClosingLineCaptureResult:
     """Capture this week's outright market as an immutable snapshot, if allowed.
 
     Order of checks mirrors ``capture_pre_event_board``: the existing-snapshot
     check comes *before* the start guard, so the normal retry reports an
     idempotent no-op rather than a refusal.
+
+    ``allow_degraded=False`` additionally refuses a snapshot whose feed did not
+    parse into what it should have (``LineFeedStatus.SUSPECT_PRICES`` and the
+    like), so a later run the same evening can still capture a clean one. It
+    defaults to ``True`` because the last run before the window closes would
+    rather have a labelled degraded line than none at all.
     """
     feeds: dict[str, dict[str, Any]] = {}
     for _, dg_market in MARKETS:
@@ -522,15 +666,35 @@ async def capture_closing_lines(
     year = today.year
     draft = snapshot_from_feeds(feeds, year=year)
     if draft is None:
-        # Distinguish "no event named" from "event named, nothing priced":
-        # the first is an off week, the second is a broken feed.
+        # Three different failures wear the same empty result, and they want
+        # different reactions: an off week is fine, an unpriced event is a
+        # loud failure, and a feed whose every value was refused is worth
+        # retrying because the format may be transient.
+        parsed = markets_from_feeds(feeds)
+        rejected = sum(m.prices_rejected for m in parsed)
         named = any(feeds.get(dg, {}).get("event_name") for _, dg in MARKETS)
+        if rejected:
+            return ClosingLineCaptureResult(
+                outcome=ClosingLineOutcome.FEED_SUSPECT,
+                event_name=next(
+                    (
+                        str(feeds[dg]["event_name"])
+                        for _, dg in MARKETS
+                        if feeds.get(dg, {}).get("event_name")
+                    ),
+                    None,
+                ),
+                year=year,
+                status=LineFeedStatus.SUSPECT_PRICES.value,
+                prices_rejected=rejected,
+            )
         return ClosingLineCaptureResult(
             outcome=ClosingLineOutcome.NO_MARKETS if named else ClosingLineOutcome.NO_EVENT
         )
 
     offered = sum(1 for m in draft.markets if m.offered)
     players = max((len(m.lines) for m in draft.markets), default=0)
+    rejected = sum(m.prices_rejected for m in draft.markets)
 
     if await archive.has(year, draft.slug):
         return ClosingLineCaptureResult(
@@ -539,6 +703,8 @@ async def capture_closing_lines(
             year=year,
             markets_offered=offered,
             players=players,
+            status=draft.status,
+            prices_rejected=rejected,
         )
 
     tournament = await _resolve_tournament(catalog, draft.slug)
@@ -549,6 +715,8 @@ async def capture_closing_lines(
             year=year,
             markets_offered=offered,
             players=players,
+            status=draft.status,
+            prices_rejected=rejected,
         )
 
     # The start guard, identical in shape to board capture's (§2.2): the
@@ -562,6 +730,25 @@ async def capture_closing_lines(
             tournament_start_date=tournament.start_date.isoformat(),
             markets_offered=offered,
             players=players,
+            status=draft.status,
+            prices_rejected=rejected,
+        )
+
+    if not allow_degraded and not draft.is_clean:
+        # Nothing written, which is the point: first-write-wins would let a
+        # 21:00 capture of a mis-formatted feed block the 23:30 retry from
+        # doing better. Checked after the start guard so an out-of-window
+        # event still reports the reason that actually matters.
+        return ClosingLineCaptureResult(
+            outcome=ClosingLineOutcome.FEED_SUSPECT,
+            event_name=draft.event_name,
+            year=year,
+            tournament_id=tournament.id,
+            tournament_start_date=tournament.start_date.isoformat(),
+            markets_offered=offered,
+            players=players,
+            status=draft.status,
+            prices_rejected=rejected,
         )
 
     snapshot = snapshot_from_feeds(
@@ -581,4 +768,6 @@ async def capture_closing_lines(
         tournament_start_date=snapshot.tournament_start_date,
         markets_offered=offered,
         players=players,
+        status=snapshot.status,
+        prices_rejected=rejected,
     )

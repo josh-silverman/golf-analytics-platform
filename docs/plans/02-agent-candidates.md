@@ -34,7 +34,7 @@ build instead.
 
 ---
 
-## 1. Pre-capture readiness check — **mostly built; scoped down**
+## 1. Pre-capture readiness check — **closed 2026-08-24**
 
 **Verdict, 2026-08-24: largely redundant, and the surviving gap is not a
 pre-flight check.** Re-examined against the `dg_fetch_status` design that
@@ -84,9 +84,12 @@ shape change either refuses at 21:00 or is captured with an honest label at
 23:30. Symmetric with §2.12a, small, and it closes the gap where the original
 proposal was actually right.
 
-**Urgency.** Low but not zero. The closing-line archive holds nothing yet, so
-no corrupt data exists — which also means this is the cheapest it will ever be
-to fix. Every week it waits is a week of lines captured without the check.
+**Built 2026-08-24**, before the archive held anything, as
+`LineFeedStatus` + the ±100 range check (ledger §2.11a). Verified against the
+live feed by asking DataGolf for `odds_format=decimal`: the strict run now
+refuses with 1181 values rejected and writes nothing, the retry captures it
+labelled, and the American feed still captures clean with zero rejections.
+This candidate is closed.
 
 **How you would know it was producing garbage.** Same shape as
 `dg_fetch_status`: seed the parser with a decimal-odds feed and a flattened
@@ -347,9 +350,8 @@ decision is made.
 
 Current state:
 
-- **1** — mostly built. What remains is a small symmetric change to the
-  closing-line archive, not an agent; it belongs in the roadmap as a unit
-  beside A5 rather than here, whenever it is scheduled.
+- **1** — closed. The redundant three-quarters were already built; the
+  surviving quarter shipped 2026-08-24 as ledger §2.11a.
 - **2** — blocked on A4b and on accumulating paired captures. Untouched.
 - **3** — no urgency, and it should not be forgotten: the README's frozen
   numbers drift further every week the record grows. Untouched.

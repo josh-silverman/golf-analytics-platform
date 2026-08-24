@@ -542,6 +542,7 @@ async def capture_closing_line_board(
     catalog: Annotated[CatalogService, Depends(get_catalog_service)],
     archive: Annotated[ClosingLineArchive, Depends(get_closing_line_archive)],
     x_admin_token: Annotated[str | None, Header()] = None,
+    allow_degraded: bool = True,
 ) -> ClosingLineCapturePayload:
     """Capture this week's outright market immutably, before the event starts.
 
@@ -573,6 +574,7 @@ async def capture_closing_line_board(
     result = await capture_closing_lines(
         catalog=catalog,
         archive=archive,
+        allow_degraded=allow_degraded,
         # hasattr above is the runtime capability gate; mypy can't narrow a
         # nominal DataProvider to the structural protocol from it.
         source=cast("OutrightFeedSource", provider),
@@ -581,12 +583,18 @@ async def capture_closing_line_board(
     return ClosingLineCapturePayload(
         outcome=result.outcome.value,
         healthy=result.outcome.is_healthy,
+        # Only meaningful on the strict run: the permissive one IS the last
+        # chance, so nothing it reports can be deferred to a later attempt.
+        retryable=result.outcome.is_retryable and not allow_degraded,
+        allow_degraded=allow_degraded,
         event_name=result.event_name,
         year=result.year,
         tournament_id=result.tournament_id,
         tournament_start_date=result.tournament_start_date,
         markets_offered=result.markets_offered,
         players=result.players,
+        status=result.status,
+        prices_rejected=result.prices_rejected,
     )
 
 
@@ -783,6 +791,8 @@ async def inspect_archive(
                 tournament_id=c.tournament_id,
                 tournament_start_date=c.tournament_start_date,
                 captured_at=c.captured_at,
+                status=c.status,
+                clean=c.is_clean,
                 markets=[
                     ClosingLineMarketPayload(
                         market=m.market,
@@ -790,6 +800,9 @@ async def inspect_archive(
                         players=len(m.lines),
                         books=len(m.books_offering),
                         detail=m.detail,
+                        status=m.status,
+                        prices_rejected=m.prices_rejected,
+                        baseline_rows=m.baseline_rows,
                     )
                     for m in c.markets
                 ],

@@ -20,6 +20,19 @@ name: Capture pre-event closing lines
 # capture (whose Thursday retry the guard would refuse). Capture is
 # first-write-wins, so the second run is a no-op whenever the first succeeded.
 #
+# THE TWO RUNS ARE NOT IDENTICAL, mirroring board-capture.yml and for the
+# same reason (docs/ledger.md §2.11a). A feed that parses into the wrong
+# thing — a book quoting decimal odds where American was asked for, or
+# DataGolf's baseline object changing shape — used to be captured silently:
+# a decimal 4.2 rounded to the American price +4, an implied probability of
+# 0.96 for every player, pinned forever by first-write-wins.
+#
+#   21:00  allow_degraded=false. A snapshot whose feed did not parse cleanly
+#          is refused, nothing is written, and the job exits 0 with a warning
+#          (`retryable: true`) so 23:30 can still get a clean one.
+#   23:30  allow_degraded=true. Captures regardless, with the status recorded
+#          honestly, because a stamped degraded line beats no line at all.
+#
 # Fails loudly when the response is unhealthy — meaning the week's market
 # baseline was NOT recorded. That is not recoverable later: a line read after
 # the event is not a prediction, so there is no backfill for this archive the
@@ -31,7 +44,13 @@ on:
   schedule:
     - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET), lines are posted and settled
     - cron: "30 23 * * 3" # Wed 23:30 UTC retry, still comfortably pre-event
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      allow_degraded:
+        description: "Capture even if the feed did not parse cleanly (labelled)"
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -40,23 +59,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: POST /analytics/closing-lines/capture
+        env:
+          # Only the 23:30 retry may pin a snapshot whose feed did not parse
+          # cleanly. Anything else refuses, leaving the write open.
+          SCHEDULE: ${{ github.event.schedule }}
+          DISPATCH_ALLOW: ${{ inputs.allow_degraded }}
         run: |
           set -euo pipefail
           API=https://pga-analytics-api.onrender.com/api/v1
+          if [ "$SCHEDULE" = "30 23 * * 3" ] || [ "$DISPATCH_ALLOW" = "true" ]; then
+            ALLOW=true
+          else
+            ALLOW=false
+          fi
+          echo "allow_degraded=$ALLOW (schedule='$SCHEDULE')"
+
           # --retry covers the Render free-tier cold start (~40s) and blips;
           # curl doesn't retry POSTs without --retry-all-errors.
           curl -fsS --max-time 300 --retry 3 --retry-delay 20 --retry-all-errors \
             -X POST -H "X-Admin-Token: ${{ secrets.ADMIN_API_TOKEN }}" \
-            "$API/analytics/closing-lines/capture" -o result.json
+            "$API/analytics/closing-lines/capture?allow_degraded=$ALLOW" -o result.json
 
-          # Event name, dates and counts only — no prices, so this is safe in a
-          # public log. DataGolf's terms are personal use, no redistribution.
+          # Event name, dates, counts and the feed status only — no prices, so
+          # this is safe in a public log. DataGolf's terms are personal use,
+          # no redistribution.
           echo "--- capture result ---"
-          jq '{outcome, healthy, event_name, tournament_start_date, markets_offered, players}' result.json
+          jq '{outcome, healthy, retryable, status, prices_rejected, event_name, tournament_start_date, markets_offered, players}' result.json
 
           if [ "$(jq -r '.healthy' result.json)" != "true" ]; then
+            if [ "$(jq -r '.retryable' result.json)" = "true" ]; then
+              # Nothing written and nothing lost yet: 23:30 captures regardless.
+              echo "::warning::Feed did not parse cleanly ($(jq -r '.status' result.json), $(jq -r '.prices_rejected' result.json) value(s) refused as not-an-American-price), so no line was pinned. Deferring to the 23:30 retry, which captures regardless and labels the result."
+              exit 0
+            fi
             echo "::error::Closing-line capture unhealthy: $(jq -r '.outcome' result.json). This week's market baseline was not recorded and cannot be captured after the fact."
             exit 1
+          fi
+
+          # Captured, but not clean: worth knowing now, since it means the
+          # parser needs updating before next Wednesday.
+          if [ "$(jq -r '.status' result.json)" != "ok" ]; then
+            echo "::warning::Captured with status $(jq -r '.status' result.json) and $(jq -r '.prices_rejected' result.json) refused value(s). The line is stored and labelled; A4b must exclude it. Check DataGolf's feed shape."
           fi
 
   # Back the capture up to the private ledger immediately rather than waiting
