@@ -6,25 +6,15 @@ for quick reference thereafter.
 
 ---
 
-> **Stale: the `fly ssh console` invocations below.** Fly was dropped as a
-> deploy target and `backend/fly.toml` was deleted on 2026-08-25, but §5
-> (bootstrap), §7 (retrain) and §9 still invoke CLI commands through
-> `fly ssh console`, which no longer resolves to anything. Render's free tier
-> has no shell, so these need a decided replacement — run locally against the
-> venv, or reach them through an admin endpoint — rather than a guessed one.
-> Marked rather than rewritten, because inventing a procedure that was never
-> run is worse than naming the gap. Affects lines invoking `app.cli.bootstrap`
-> and `app.cli.train`.
-
 ## 1. Quick-start checklist
 
 | Step | Command / action |
 |------|-----------------|
 | 1 | Buy DataGolf API key at [datagolf.com/api-access](https://datagolf.com/api-access) |
-| 2 | Deploy backend → Fly.io (§ 3) |
+| 2 | Deploy backend → Render blueprint (§ 3) |
 | 3 | Deploy frontend → Vercel (§ 4) |
 | 4 | Set secrets (§ 2) |
-| 5 | Run bootstrap pipeline (§ 5) |
+| 5 | Run the bootstrap pipeline locally, commit the model (§ 5, § 7) |
 | 6 | Visit `/benchmark` to confirm live data is flowing |
 
 ---
@@ -152,15 +142,13 @@ Push to `main` — Vercel auto-deploys on every push.
 After deploying both services and setting all secrets, run the bootstrap
 pipeline to verify the DataGolf connection and train the first model:
 
-```bash
-# Local (against Fly.io Postgres via fly proxy or local .env)
-cd backend
-export DATA_PROVIDER=datagolf
-export DATAGOLF_API_KEY=<your-key>
-uv run python -m app.cli.bootstrap
+Run it **locally**, not on the server. Bootstrap trains a model, and per §7
+the registry is shipped through git rather than written on the instance:
 
-# On Fly.io directly
-fly ssh console -C "python -m app.cli.bootstrap"
+```bash
+cd backend
+# backend/.env supplies DATAGOLF_API_KEY and DATA_PROVIDER=datagolf
+uv run python -m app.cli.bootstrap
 ```
 
 Expected output:
@@ -191,13 +179,11 @@ PGA Analytics — Bootstrap
 ✔  Bootstrap complete!
 ```
 
-### Re-train after new events complete
-
-Run any time to update the model with fresh results:
-
-```bash
-fly ssh console -C "python -m app.cli.train"
-```
+Step 4 registers a model into `backend/models/`. To ship it, commit and push
+it — see §7, which is the full procedure and the one to follow for any retrain
+after the first. Note that bare `train` defaults to `--feature-set v2`, which
+is **not** the active model and does change Path A cold-start serving; §7
+explains why that matters.
 
 ---
 
@@ -236,30 +222,120 @@ cd backend && uv run python -m app.cli.bootstrap
 
 ## 7. Retrain model
 
-The model is stored on the Fly.io machine's local filesystem at
-`MODEL_REGISTRY_PATH` (default `./models`). On a multi-machine setup,
-use a Fly volume or S3-backed storage so all machines see the same model.
+**The registry is in git, not on the server.** `backend/models/` is tracked
+(23 files, ~8 MB), `.dockerignore` does not exclude it, and the prod stage does
+`COPY . .` into `/app` where `MODEL_REGISTRY_PATH=./models` resolves. So the
+model the API serves is **whatever is committed at image-build time**, and
+retraining is a local action followed by a commit:
 
-**`--feature-set` defaults to `v2`, but the active model is `v3`.** Pass
-`--feature-set v3` to retrain what production actually serves. Activating a
-model whose feature set differs from the current active one is refused with
-exit code 2, because `deps._feature_set_for_active_model` resolves the serving
-extractor by the active model's hash — so activating a v2 artifact silently
-repoints the entire feature pipeline. Override with
-`--allow-feature-set-change` only when the swap is intended.
-
-```bash
-# Retrain the active (v3) model with all data through today
-fly ssh console -C "python -m app.cli.train --feature-set v3"
-
-# Train through a specific date (prevent look-ahead leakage)
-fly ssh console -C "python -m app.cli.train --feature-set v3 --through 2025-04-06"
-
-# Register without activating (A/B test) — the guard does not apply
-fly ssh console -C "python -m app.cli.train --name golf_v2 --no-activate"
+```
+train locally  ->  commit models/  ->  push to main  ->  Render rebuilds  ->  new model served
 ```
 
----
+There is no server-side step, and there must not be one. Training inside the
+container would fail three ways: the free-tier filesystem is ephemeral, so the
+artifact dies on the next restart; the 512 MB instance runs one worker at
+~150 MB idle and a GBDT fit over several seasons would not fit beside it; and
+an artifact that only ever existed in a container has no commit behind it,
+which breaks the traceability from `model_version_id` back to a reviewable
+change that [ledger.md](ledger.md) §2.6 depends on.
+
+### The policy
+
+Retraining is allowed **only between Monday settlement and Wednesday capture**
+(roadmap Decisions §3). Because the deploy is part of the procedure, "before
+Wednesday capture" means the Render build must be **live before Wednesday
+21:00 UTC**, not merely pushed. See [ledger.md](ledger.md) §3.7.
+
+### Two models are live at once — read before choosing `--feature-set`
+
+The registry serves two artifacts by different selection rules, and this is the
+easiest thing to get wrong:
+
+| Role | Selected by | Reported as |
+|---|---|---|
+| Active stacked model | `_active.txt` | `/status`'s `model_version_id` |
+| Path A cold-start | newest **v2** by `training_data_through`, **ignoring `_active.txt`** | boards' `path_a@<id>` |
+
+Currently `_active.txt` is `0d2efade42ba` (v3) and cold-start resolves to
+`d69cf2a7323f` (v2), both trained through 2026-06-30.
+
+**The trap: `--no-activate` does not mean "no production effect".** Cold-start
+selection is `_latest_v2_cold_start()` in `api/v1/deps.py`, which filters by
+feature-set hash and takes the newest `training_data_through`. Registering *any*
+v2 with a more recent through-date changes what Path A serves on the next
+deploy, whether or not you activated it. `--no-activate` only skips writing
+`_active.txt`, which the v2 path never reads. This is deliberate (the docstring
+says a future v2 retrain should flow through automatically), but it means a v2
+trained "just to compare" is a production change.
+
+`--feature-set` defaults to **v2** while the active model is **v3**, so a bare
+`train` is both the wrong feature set for `/status` *and* a live change to
+cold-start serving. Activating a model whose feature set differs from the
+active one is refused with exit 2, because `deps._feature_set_for_active_model`
+resolves the serving extractor by the active model's hash. Override with
+`--allow-feature-set-change` only when the swap is intended.
+
+### Procedure
+
+```bash
+cd backend
+# Uses backend/.env for DATAGOLF_API_KEY; no server access involved.
+
+# 1. Retrain the active stacked model.
+uv run python -m app.cli.train --feature-set v3 --through 2026-08-24
+
+# 2. Retrain the Path A cold-start model, if you want it moved too.
+#    Registering this at all changes cold-start serving — see the trap above.
+uv run python -m app.cli.train --feature-set v2 --through 2026-08-24 --no-activate
+
+# 3. Confirm what you are about to ship.
+cat models/golf_v1/_active.txt
+git status --short models/
+```
+
+Pick `--through` as the **last completed Sunday**, not today. It sets
+`training_data_through`, which is what certifies a board out-of-sample
+(`is_out_of_sample`). A through-date past an upcoming event's start makes
+future boards for that event un-gradeable.
+
+Existing archived boards are unaffected: each snapshot stores its own
+`model_version_id` and `model_trained_through`, so retraining never
+retroactively re-grades the record. Only boards captured *after* the deploy
+change.
+
+```bash
+# 4. Commit and deploy. Never delete old versions — ledger §2.6, and the v2
+#    cold-start model is a live dependency, not just history.
+git add backend/models/
+git commit -m "retrain: golf_v1 v3 through 2026-08-24"
+git push origin main        # autoDeploy rebuilds
+
+# 5. Verify the deploy actually carries it.
+curl -s https://pga-analytics-api.onrender.com/api/v1/status | jq '.model_version_id'
+```
+
+Step 5 must return the id now in `_active.txt`. If it returns the old one the
+build has not finished or has failed — check the Render dashboard before
+Wednesday's deadline.
+
+**Expect `/status` and the boards to disagree, and do not treat that as a
+failure.** `/status` reports the registry-active v3 model; boards are stamped
+`path_a@<v2 cold-start id>`. Different identifiers, both authoritative for
+different things. `archive/inspect` shows what a board actually carried.
+
+Each retrain adds roughly 600 KB to the repo (one `artifact.pkl` plus
+`metadata.json`). At the Monday-to-Wednesday cadence that is a few MB a year,
+which is acceptable; revisit if it ever stops being.
+
+### If retrains become frequent
+
+A `workflow_dispatch` job could train in Actions and commit the artifact back.
+It is not built, and deliberately: it needs `DATAGOLF_API_KEY` in Actions and a
+bot with write access to `main`, to automate an action that happens at most
+weekly and is a deliberate human decision under the policy above. The local
+path costs one command and keeps writes human-triggered.
+
 
 ## 8. Health checks
 
@@ -322,22 +398,41 @@ both optional:
 
 ### "No active model registered" on /predictions
 
-The fallback `ConstantModel` is serving. Run `python -m app.cli.train` and
-check `MODEL_REGISTRY_PATH` is writable and persistent.
+The fallback `ConstantModel` is serving, which means the image has no active
+model. Check `backend/models/golf_v1/_active.txt` is committed and names a
+directory that is also committed — a version registered locally but never
+`git add`ed will not exist in the deployed image. `MODEL_REGISTRY_PATH` needs
+to be readable, not writable: nothing writes to it at runtime.
 
 ### Benchmark page shows "DataGolf API not connected"
 
-`DATA_PROVIDER` is still `mock`. Set `DATA_PROVIDER=datagolf` and restart
-the app: `fly deploy` or `fly machine restart`.
+`DATA_PROVIDER` is still `mock`. `render.yaml` sets it to `datagolf`, so this
+means the running instance predates that or the value was overridden in the
+dashboard. Fix it in the Render dashboard (Environment tab) and use Manual
+Deploy → Restart service.
 
 ### Players/tournaments return empty data
 
 If using mock, the data is generated in-memory on startup — always populated.
-If using datagolf, the Redis cache may be cold. Check:
+If using datagolf, the Redis cache may be cold. Two different things to check,
+and they need different commands.
+
+Warm the **production** cache through the public API, since the free tier has
+no shell:
 
 ```bash
-fly ssh console -C "python -m app.cli.bootstrap --skip-train"
+scripts/warm_demo.sh
 ```
+
+Diagnose the **provider** itself locally — this validates the DataGolf key and
+data readiness without training anything:
+
+```bash
+cd backend && uv run python -m app.cli.bootstrap --skip-train
+```
+
+The local run tells you whether DataGolf is answering; it cannot fix a cold
+production cache, because it warms your machine's Redis rather than Render's.
 
 ### Sentry not receiving events
 
@@ -394,10 +489,10 @@ the last commit in `pinpoint-ledger` comes back.
 
 | Service | Tier | Monthly |
 |---------|------|---------|
-| Fly.io (backend) | shared-cpu-1x 512MB, auto-stop | ~$0–5 |
-| Fly.io (Postgres) | 1-replica, 1GB | ~$7 |
+| Render (backend web) | free, spins down after ~15 min idle | $0 |
+| Render (Key Value) | **Starter** — free has no persistence, see § 3 | ~$10 |
 | Vercel (frontend) | Hobby | $0 |
-| Redis (Fly) | Upstash free tier or Fly Redis | $0–3 |
+| Postgres | none provisioned; the serving path never uses one | $0 |
 | DataGolf API | Basic subscription | $18–30 |
 | Sentry | Developer plan | $0 |
-| **Total** | | **~$25–45/mo** |
+| **Total** | | **~$28–40/mo** |
