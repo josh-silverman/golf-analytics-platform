@@ -31,21 +31,37 @@ Phase D = narrow agents (goal 4).
 
 ## Dependency order at a glance
 
+Built ✅ / not started ☐. Updated 2026-08-25.
+
 ```
-A0 (export/backup)  ──────────┐
-A1 (git SHA provenance)       ├──> A3 (settlement records) ──> A4 (baseline columns) ──> B2 (weekly settle+grade job)
-A2 (grader dedup + source split) ┘                             A5 (closing-line capture) ─┘
-                                    B1 (scheduled board capture)
-C1 (ops docs + invariants) ── anytime after A2
-D1 (integrity checker) ── after A0
-D2 (grading commentary) ── after A4/B2
+✅ A0 (export/backup) ─────────┐
+☐  A1 (git SHA provenance)     ├──> ✅ A3 (settlements) ──┬──> ✅ A4a (pin dg_baseline at capture)
+✅ A2 (dedup + source split) ──┘                          └──> ✅ A5 (closing-line capture)
+                                                                     │
+✅ B1 (scheduled board capture) ─────────────────────────────────────┤
+✅ B2 (weekly settle + grade) ───────────────────────────────────────┤
+                                                                     v
+                                                        ☐ A4b (grade + report the baselines)
+                                                                     │
+                          ┌──────────────────────────────────────────┤
+                          v                                          v
+                  ☐ D2 (grading commentary)              ☐ D3 (DataGolf calibration audit)
+
+✅ C1 (ops docs + invariants) ── anytime after A2
+☐  C2 (make targets + CI for the ledger surface)
+☐  B3 (retrain automation — policy decided, may stay manual)
+☐  D1 (integrity checker) ── after A0; not gated on data
 ```
+
+**A4b is the hinge.** Everything in phase D that reads a named baseline waits
+on it, and it waits on captured data rather than on code. See its own section
+for what that actually means as of 2026-08-25.
 
 ---
 
 ## Phase A — make the existing ledger complete and trustworthy
 
-### A0 (revised). Archive durability: export + restore  ← the next session, in full
+### A0 (revised). Archive durability: export + restore ✅ (built 2026-08-20; nightly `archive-export.yml`, see docs/ledger.md §4.1 and §4.2)
 - **What**: Make the archive survive a Redis wipe, keeping Redis as the
   live serving store.
   1. Admin-gated `GET /analytics/archive/export`: every board snapshot +
@@ -87,7 +103,7 @@ D2 (grading commentary) ── after A4/B2
   field); retrain locally and inspect `metadata.json`; after next deploy,
   confirm a fresh capture carries the SHA.
 
-### A2. Forward-grader ledger hygiene: dedup + source split
+### A2. Forward-grader ledger hygiene: dedup + source split ✅ (built 2026-08-19 in `46f4f34`; `/track-record/forward` reports events_captured / events_backfilled)
 - **What**: (a) Grade at most one snapshot per tournament — prefer the
   earliest `captured_at` with `source="captured"`, else earliest
   backfill — so retraining mid-week can't double-count an event (R1).
@@ -156,6 +172,27 @@ is a week of events permanently missing the baseline.
 - **Depends on**: A2, A3, A4a, A5. Only grades events captured after
   A4a/A5 went live, so it is worth building once several such events
   exist rather than immediately.
+- **Data reality, measured 2026-08-25 — read this before scheduling the
+  work.** There is currently **nothing to grade**. `dg_baseline` is a
+  capture-time-only write, A4a shipped 2026-08-21 (`430ccb0`), and
+  production's most recent board build is `2026-08-20T02:25 UTC`, one day
+  earlier — so **zero archived boards carry a baseline**, and **zero
+  closing-line snapshots exist**. The first paired event is the TOUR
+  Championship captured 2026-08-26, and it is a **no-cut event**, which
+  `forward_track_record.py` excludes from the make-cut market. A4b's first
+  real output is therefore n=1 on four of five markets.
+
+  This does **not** mean defer it. The verify criterion below is fixture
+  tests and the code needs no real data, so waiting buys nothing. It means:
+  build it when convenient, and do not expect the "beats DataGolf" or
+  "beats the closing line" claim to carry weight until several more events
+  land. Whether they land weekly depends on the FedExCup Fall series being
+  covered, which is checkable after the first Wednesday capture and is not
+  assumed here.
+
+  Corollary for sequencing: **D1 and the published-claim staleness auditor
+  are not data-gated and pay off immediately**, so they are the better use
+  of a session while the baseline column still reads n=1.
 - **Required exclusion**: a board whose `dg_fetch_status` is
   `fetch_failed` must be excluded from the DataGolf column, not counted
   as a zero-coverage event — otherwise a stale-feed capture drags the
@@ -229,7 +266,7 @@ is a week of events permanently missing the baseline.
 
 ## Phase C — repo structure for lower-touch sessions
 
-### C1. Invariants + operations doc, wired into CLAUDE.md
+### C1. Invariants + operations doc, wired into CLAUDE.md ✅ (built 2026-08-19 in `e0e50e5`; created docs/ledger.md)
 - **What**: One `docs/ledger.md` stating the contracts an agent must not
   break (first-write-wins; OOS admission rule; never grade without
   settlement; capture before Thursday; sources of truth per environment)
@@ -325,3 +362,43 @@ stack (archive protocol, admin gating, cron pattern), so it doubles as a
 low-risk proof that the extension seams are where the audit says they
 are. A1 and A2 are independent and small; either fits in the same
 session if A0 goes quickly.
+
+---
+
+## Execution order from 2026-08-25
+
+The "what I'd do first" note above is the *original* framing and A0 is long
+since built. This is the current queue, in dependency order, with what
+actually gates each one. Chores that are not roadmap units are included
+because they compete for the same sessions.
+
+**Done.**
+
+- Repo hygiene: triage REMOVE bucket cleared, the two REVIEW items decided
+  (`fly.toml` deleted, `warm_demo.sh` kept and registered), and the triage
+  tool's own self-referential false positive fixed. 2026-08-25.
+- DataGolf redistribution exposure closed and ledger §2.8 promoted from
+  `[convention]` to `[enforced]` with a CI guard. 2026-08-25.
+- B2's first real run verified: BMW Championship settled 2026-08-24, ten
+  graded events, captured block at three.
+
+**Open, in order.**
+
+| Order | Unit | Gated on | Notes |
+|---|---|---|---|
+| 1 | Retake `docs/img/*.png` | a person with a browser | All three are from 2026-08-05 and predate the provenance copy the leaderboard now renders. Shot list in [03-screenshot-shotlist.md](03-screenshot-shotlist.md). |
+| 2 | Observe the 2026-08-26 capture | Wed 21:00 UTC | Passive. Confirms A4a/A5 fire for real for the first time. Nothing to build. |
+| 3 | **A4b** | nothing, for the code | Highest value, but see its Data reality note: it reports n=1 until events accumulate. Build it fixture-tested. |
+| 4 | **D1** integrity checker | A0 only, which is built | **Not data-gated.** Better use of a session than waiting on A4b's n. Thresholds are now settable from two observed real weeks rather than guessed. |
+| 5 | Staleness auditor (candidate 3) | nothing | **Not data-gated**, and already overdue: the README's "9 events: 2 captured live" is contradicted by the live API's 10 events / 3 captured. |
+| 6 | **D2** grading commentary | A4b, B2 | First unit that exercises judgement rather than checking invariants. |
+| 7 | Market-vs-DataGolf adjudicator (candidate 2) | A4b + several paired captures | The slowest to unblock, because it needs both capture-time archives to accumulate together. |
+| 8 | **D3** calibration audit | A4b + meaningful n | Last, and correctly so. Pre-registration and the negative-results log are part of the unit, not process to add afterwards. |
+
+Parked and not forgotten: **A1** (git SHA provenance), **B3** (retrain
+automation, may legitimately stay manual), **C2** (make targets + CI for the
+ledger surface).
+
+Standing constraint that outranks this order: three archives close every
+Wednesday at 21:00 UTC and two of them cannot be backfilled (§3.7). A change
+that must be live "before the event" is due Wednesday, not Thursday.
