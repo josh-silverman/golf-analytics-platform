@@ -42,20 +42,26 @@ Ranking the eventual winner 7th in a 144-player field is a genuinely good pre-ev
 
 ## Actual top 10 vs. what each board said
 
-DataGolf's rank in the win market alongside the finish, plus our own served probability:
+Our own served win probability against the finish. DataGolf's column is held
+privately; its two published ranks (Scheffler first in the field, Koivun
+seventh) are in the sections above and below.
 
-| Finish | Player | DG rank (win market) | Served win (ours) |
-|--------|--------|-------------|-------------------|
-| 1 | Jackson Koivun | 7th | 0.0078 |
-| 2 | Scottie Scheffler | **1st** | 0.0223 |
-| T3 | Chandler Phillips | outside top 40 | 0.0066 |
-| T3 | Denny McCarthy | mid-field | 0.0066 |
-| T3 | Hideki Matsuyama | 5th | 0.0067 |
-| T3 | Brian Harman | upper-mid | 0.0063 |
-| T7 | Emiliano Grillo | mid-field | 0.0066 |
-| T7 | Davis Thompson | mid-field | 0.0068 |
-| 9 | Ben Kohles | upper-mid | 0.0099 |
-| 10 | Gary Woodland | upper-mid | 0.0065 |
+| Finish | Player | Served win (ours) |
+|--------|--------|-------------------|
+| 1 | Jackson Koivun | 0.0078 |
+| 2 | Scottie Scheffler | 0.0223 |
+| T3 | Chandler Phillips | 0.0066 |
+| T3 | Denny McCarthy | 0.0066 |
+| T3 | Hideki Matsuyama | 0.0067 |
+| T3 | Brian Harman | 0.0063 |
+| T7 | Emiliano Grillo | 0.0066 |
+| T7 | Davis Thompson | 0.0068 |
+| 9 | Ben Kohles | 0.0099 |
+| 10 | Gary Woodland | 0.0065 |
+
+The served spread across the actual top ten is 0.0063 to 0.0223, which is the
+collapse the pre-tournament report describes: the board barely separated the
+eventual winner from a player who finished tenth.
 
 ## Published picks — scorecard
 
