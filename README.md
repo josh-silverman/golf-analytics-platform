@@ -117,8 +117,8 @@ Three principles governed the work from the start:
   carries a `source` field (`captured` live pre-event vs `backfilled`), the grader
   reports the two classes separately (`events_captured` / `events_backfilled`, plus
   per-provenance market aggregates), and the leaderboard shows them as separate rows
-  rather than pooling them into one number. As of 2026-08-20 the record is 9 events:
-  2 captured live, 7 reconstructed after a storage loss (the free-tier Key Value store
+  rather than pooling them into one number. As of 2026-08-24 the record is 10 events:
+  3 captured live, 7 reconstructed after a storage loss (the free-tier Key Value store
   had no persistence; the archive now has both disk persistence and a nightly export). Each board also records **how many players were
   actually served DataGolf-direct**, because `model_version_id` is stamped `path_a@…`
   when Path A is *configured* — before any DataGolf call — and so cannot distinguish a
@@ -607,7 +607,7 @@ architecture plus product differentiation. An independent strategic review
 
 The forward out-of-sample track record above is machine-graded and aggregated. Two
 caveats govern how much any aggregate from it can claim. First, provenance: most of
-the current record (7 of 9 events) consists of backfilled reconstructions rather than
+the current record (7 of 10 events) consists of backfilled reconstructions rather than
 live captures, and the grader and leaderboard report the two separately for that
 reason. Second, attribution: under Path A the served board is DataGolf's own
 probabilities for roughly 95% of a covered field, so the record measures what the
