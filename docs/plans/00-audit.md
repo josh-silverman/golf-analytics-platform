@@ -25,7 +25,7 @@ backend/app/
   features/      versioned, content-hashed feature sets (v2 SG-only,
                  v3 + DataGolf meta-features)
   ml/            trainer, calibration, rolling-origin backtest w/ block
-                 bootstrap, registry, diagnostics, rank_v1 research harness
+                 bootstrap, registry, diagnostics
   cli/           train, backtest, diagnose, bootstrap (all manual)
   db/            SQLAlchemy models + alembic initial migration — see §1.4
 backend/models/           git-tracked filesystem model registry (23 files)

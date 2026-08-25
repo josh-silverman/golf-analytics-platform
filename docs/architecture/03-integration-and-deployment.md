@@ -1,5 +1,12 @@
  03-integration-and-deployment.md
 
+
+> **The player names and numbers in the mockups below are invented placeholders.**
+> This document is the June 2026 pre-build design pass, written before any DataGolf
+> integration existed, so nothing here is real model output or real DataGolf data.
+> Labelled because the mockups are formatted convincingly enough to be mistaken for
+> a live board. The document is superseded; kept as a record of the original design.
+
 PGA Tour Analytics Platform — Final Architecture Pass
 This document closes out planning. After this we're ready to start building.
 

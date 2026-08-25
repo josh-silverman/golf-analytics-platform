@@ -353,6 +353,17 @@ Current state:
 - **1** — closed. The redundant three-quarters were already built; the
   surviving quarter shipped 2026-08-24 as ledger §2.11a.
 - **2** — blocked on A4b and on accumulating paired captures. Untouched.
-- **3** — no urgency, and it should not be forgotten: the README's frozen
-  numbers drift further every week the record grows. Untouched.
-- **4** — built 2026-08-24. Report-only, as scoped.
+  Note that the block is longer than it looked: as of 2026-08-25 *zero*
+  paired captures exist, and the first arrives 2026-08-26. See A4b's data
+  reality note in [01-roadmap.md](01-roadmap.md).
+- **3** — untouched, and its premise is now confirmed rather than
+  predicted. The README claimed "9 events: 2 captured live" while the live
+  API reported 10 and 3; corrected by hand on 2026-08-25, which is exactly
+  the manual work this candidate exists to remove. Second-cheapest unit on
+  the board and not data-gated, so it is worth doing before the numbers
+  drift again.
+- **4** — built 2026-08-24. Report-only, as scoped. Its own report had one
+  false positive, fixed 2026-08-25: `_SELF_DESCRIBING` kept the keep
+  register out of the reference index, so nothing could be seen referencing
+  it and the tool opened by recommending you delete its own config. Now
+  excluded from the report as well as the index, and pinned by a test.

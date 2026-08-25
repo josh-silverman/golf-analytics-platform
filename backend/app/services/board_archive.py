@@ -87,7 +87,7 @@ class BoardSnapshot:
     # what our pipeline made of it. Restricted to players on this board, so
     # ``len(dg_baseline) == dg_direct_count``.
     #
-    # ``None`` means not recorded (every snapshot written before 2026-08-20,
+    # ``None`` means not recorded (every snapshot written before 2026-08-21,
     # and non-Path-A boards); an empty tuple means Path A ran and DataGolf
     # covered nobody, which is a different and much worse thing.
     dg_baseline: tuple[BoardSnapshotOutcome, ...] | None = None

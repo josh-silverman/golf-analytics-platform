@@ -6,6 +6,16 @@ for quick reference thereafter.
 
 ---
 
+> **Stale: the `fly ssh console` invocations below.** Fly was dropped as a
+> deploy target and `backend/fly.toml` was deleted on 2026-08-25, but §5
+> (bootstrap), §7 (retrain) and §9 still invoke CLI commands through
+> `fly ssh console`, which no longer resolves to anything. Render's free tier
+> has no shell, so these need a decided replacement — run locally against the
+> venv, or reach them through an admin endpoint — rather than a guessed one.
+> Marked rather than rewritten, because inventing a procedure that was never
+> run is worse than naming the gap. Affects lines invoking `app.cli.bootstrap`
+> and `app.cli.train`.
+
 ## 1. Quick-start checklist
 
 | Step | Command / action |
@@ -21,21 +31,21 @@ for quick reference thereafter.
 
 ## 2. Environment variables / secrets
 
-### Backend (Fly.io secrets)
+### Backend (Render environment)
 
-```bash
-fly secrets set \
-  DATABASE_URL="postgresql+asyncpg://..." \
-  DATAGOLF_API_KEY="<your-key>" \
-  DATA_PROVIDER="datagolf" \
-  SENTRY_DSN="https://..." \     # optional
-  SECRET_KEY="<random-64-chars>"  # if you add auth later
-```
+Non-secret values are declared in [`render.yaml`](../render.yaml) and applied
+by the blueprint. The two secrets are marked `sync: false` there and are pasted
+into the Render dashboard, never committed:
+
+- `DATAGOLF_API_KEY`
+- `ADMIN_API_TOKEN`
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
-| `DATABASE_URL` | ✅ | — | Async Postgres URL (`postgresql+asyncpg://...`) |
 | `DATAGOLF_API_KEY` | ✅ when `DATA_PROVIDER=datagolf` | — | DataGolf subscription key |
+| `ADMIN_API_TOKEN` | ✅ in production | — | Gates the archive, capture and track-record admin endpoints. Absent ⇒ those routes answer 404. |
+| `BOARD_ARCHIVE_BACKEND` | ✅ in production | `file` | `redis` on Render: the free-tier disk is ephemeral, so a file-backed archive would not survive a redeploy. |
+| `DATABASE_URL` | — | — | Unused. `render.yaml` provisions no Postgres and the serving path never touches one; `app/db/` is vestigial (ledger §3.4). Listed as required until 2026-08-25, which is the assumption that broke `/readyz` in `f265744`. |
 | `DATA_PROVIDER` | — | `mock` | `mock` or `datagolf` |
 | `DATA_PROVIDER_CACHE` | — | `true` | Enable Redis response caching |
 | `REDIS_URL` | — | `redis://localhost:6379/0` | Redis connection string |
@@ -53,66 +63,61 @@ fly secrets set \
 | `VITE_SENTRY_DSN` | — | Sentry DSN for frontend error tracking |
 
 > The frontend talks to the backend through Vercel's API proxy rewrite
-> (`/api/*` → `https://pga-analytics-api.fly.dev/api/*`), so no backend URL
+> (`/api/*` → `https://pga-analytics-api.onrender.com/api/*`), so no backend URL
 > env var is needed at build time.
 
 ---
 
-## 3. Backend deployment (Fly.io)
+## 3. Backend deployment (Render)
 
-### First deploy
+Render is the live path. Deployment is blueprint-driven from
+[`render.yaml`](../render.yaml) at the repo root, and `autoDeploy: true` means
+**a push to `main` redeploys the API**. There is no deploy CLI step.
 
-```bash
-cd backend
+### First deploy (one time)
 
-# Create the app (one-time)
-fly launch --no-deploy --name pga-analytics-api
+Render dashboard → New → Blueprint → connect this repo. Render reads
+`render.yaml` and prompts for the two `sync: false` secrets, which are never
+committed:
 
-# Provision a Postgres database (one-time)
-fly postgres create --name pga-analytics-db
-fly postgres attach pga-analytics-db  # sets DATABASE_URL secret automatically
+- `DATAGOLF_API_KEY`
+- `ADMIN_API_TOKEN` — gates the archive and track-record admin endpoints
 
-# Set remaining secrets
-fly secrets set DATAGOLF_API_KEY=<your-key> DATA_PROVIDER=datagolf
+The blueprint provisions two services: the `pga-analytics-api` web service
+(built from `backend/Dockerfile`, health check `/api/v1/healthz`) and the
+`pga-redis` Key Value instance.
 
-# Deploy
-fly deploy --dockerfile Dockerfile --build-target prod
-```
+**The Key Value instance is deliberately on the paid Starter plan.** Free Key
+Value has no persistence, so any restart erased the forward archives — the one
+loss the platform cannot recover by recomputing. After the first apply, also
+set persistence to "Journal + Snapshot" in the dashboard; that is not
+expressible in `render.yaml`.
 
 ### Subsequent deploys
 
 ```bash
-fly deploy --dockerfile Dockerfile --build-target prod
+git push origin main   # autoDeploy picks it up
 ```
 
-### Run database migrations
+Watch the deploy in the Render dashboard, then confirm with the health checks
+in §8. A deploy that lands after Wednesday 21:00 UTC misses that week's capture
+window entirely — see [ledger.md](ledger.md) §3.7.
 
-Migrations run as a release command (Fly executes it before traffic shifts):
+### Database migrations
 
-```toml
-# fly.toml — already configured:
-[deploy]
-  release_command = "alembic upgrade head"
-```
-
-To run manually:
-
-```bash
-fly ssh console -C "alembic upgrade head"
-```
+**There are none to run.** `render.yaml` provisions no Postgres, and the
+serving path (Path A + model registry + DataGolf provider) never touches a
+database. `backend/app/db/` and the alembic migration are vestigial and are
+kept deliberately as a warning, not as a live schema — read
+[ledger.md](ledger.md) §3.4 before wiring anything into them. `/readyz` was
+broken once by assuming this schema was live.
 
 ### Scale
 
-```bash
-# Default: 1 shared-CPU-1x 512MB machine, auto-stop when idle
-fly scale vm shared-cpu-1x --memory 512
+Free tier: one instance, spun down after ~15 min idle. Cold-start mitigations
+are in §9. Scaling is a plan change in the Render dashboard, not a config
+value here.
 
-# For high-traffic / no cold starts:
-fly scale count 2
-fly scale vm shared-cpu-2x --memory 1024
-```
-
----
 
 ## 4. Frontend deployment (Vercel)
 
@@ -124,7 +129,7 @@ npx vercel --prod
 ```
 
 Vercel auto-detects Vite. The `vercel.json` at the repo root configures:
-- API proxy: `/api/*` → `https://pga-analytics-api.fly.dev/api/*`
+- API proxy: `/api/*` → `https://pga-analytics-api.onrender.com/api/*`
 - SPA rewrite: all unknown paths → `/index.html`
 - Asset caching: `max-age=31536000, immutable` for hashed assets
 
@@ -336,13 +341,9 @@ fly ssh console -C "python -m app.cli.bootstrap --skip-train"
 
 ### Sentry not receiving events
 
-Confirm `SENTRY_DSN` is set: `fly secrets list`. The DSN must be the full
-`https://...@sentry.io/...` URL, not just the project slug.
-
-### Fly cold start latency
-
-The default `fly.toml` uses `auto_stop_machines = "stop"` to save cost.
-For always-on: set `min_machines_running = 1` in `fly.toml` and redeploy.
+Confirm `SENTRY_DSN` is set in the Render dashboard (Environment tab). The
+DSN must be the full `https://...@sentry.io/...` URL, not just the project
+slug.
 
 ### DataGolf API rate limits
 

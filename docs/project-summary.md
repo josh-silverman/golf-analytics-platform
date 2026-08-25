@@ -29,7 +29,7 @@ log see the `project_model_baseline` memory.
 | Training examples | 26,853 (+ 8,951 held out for calibration) = 35,804 total |
 | Training span | 2024+ (get-schedule) plus the 2018–2023 historical archive; 365-day recency weighting |
 | Feature window | 730 days per example, computed as-of each example's date (leakage-safe) |
-| Deployment | not necessarily deployed; `fly.toml` targets `pga-analytics-api` (iad) with `DATA_PROVIDER=datagolf` |
+| Deployment | live on Render (`render.yaml`, free tier) + Vercel; `DATA_PROVIDER=datagolf` |
 
 The model is **not** the latest thing tried — it is the latest thing that
 *passed the promotion gate*. Several later experiments were tested and rejected

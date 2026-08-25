@@ -112,3 +112,27 @@ means = """
 A4b is built, so the behaviour has been generalized into the app surface and
 this script is now genuinely superseded. Safe to remove once you have confirmed
 the endpoint reproduces its numbers."""
+
+# ---------------------------------------------------------------------------
+
+[[keep]]
+id = "warm-demo-script"
+paths = ["scripts/warm_demo.sh"]
+bucket = "documented"
+citation = "docs/runbook.md §9 (cold-start mitigations)"
+reason = """
+Loaded by nothing, and that is correct: it is a manual pre-demo tool whose
+invocation is its documentation. Run by hand before showing the live site, it
+wakes the Render free instance and pre-builds the current event's board so the
+first visitor does not eat a ~1 min cold start. Every endpoint it curls is
+current, and it is the human counterpart to the automated keep-warm.yml ping.
+Reviewed and kept 2026-08-25."""
+
+[keep.lapse]
+kind = "file_not_contains"
+path = "docs/runbook.md"
+pattern = "warm_demo\\.sh"
+means = """
+The runbook no longer documents it, so the one thing that made it discoverable
+is gone and it is now genuinely unreachable. Either restore the runbook entry
+or delete the script."""

@@ -7,6 +7,14 @@ market, with every claim traceable to the actual numbers rather than golf
 narrative. These are the working notes behind the portfolio articles, not the
 polished articles themselves.
 
+> **DataGolf's per-player values are not published here.** Their terms are
+> personal use only, no redistribution, and this repository is public (see
+> [ledger.md](../docs/ledger.md) §2.8). Reports keep the ordering, the direction
+> of each model-versus-market disagreement, the reasoning, this project's own
+> served-board output, and aggregate grading statistics. DataGolf's absolute
+> probabilities, skill ratings and decomposition adjustments are held privately.
+> Redacted 2026-08-25; reports written after that date are produced this way.
+
 ## How each report is produced
 
 The `predictions` pipeline is run for the event (Path A serving intent:
@@ -16,9 +24,10 @@ DataGolf-direct for covered players, the v2 SG-only model for cold-start), then:
    probabilities and the de-vigged sportsbook consensus.
 2. Rank each market; find where the model is most confident and where it most
    diverges from the market.
-3. Explain the top names with the underlying statistics — strokes-gained by
+3. Explain the top names with the underlying statistics: strokes-gained by
    category, driving distance, and DataGolf's course-fit / course-history
-   decomposition adjustments.
+   decomposition adjustments. These inform the write-up; the values themselves
+   are not published, per the note above.
 
 Any serving or data-quality caveat discovered that week is recorded at the top
 of the report, so a reader knows exactly how much to trust each market.
@@ -27,8 +36,8 @@ of the report, so a reader knows exactly how much to trust each market.
 
 | Date | Event | Report | Headline |
 |------|-------|--------|----------|
-| 2026-07-30 | Rocket Classic | [2026-07-29-rocket-classic.md](2026-07-29-rocket-classic.md) | Flat field, no outlier — Cameron Young 8.0% to win; J.J. Spaun's +0.231 course-history adjustment is the week's biggest single edge |
-| 2026-07-23 | 3M Open | [pre](2026-07-22-3m-open.md) · [**results**](2026-07-27-3m-open-results.md) | Scheffler a historic field-mismatch (DG win 23.7%) → finished 2nd. Grading confirmed DataGolf beats the served board on every market with skill |
+| 2026-07-30 | Rocket Classic | [2026-07-29-rocket-classic.md](2026-07-29-rocket-classic.md) | Flat field, no outlier: Cameron Young leads a tightly-packed win market, and J.J. Spaun's course-history adjustment is the week's biggest single edge |
+| 2026-07-23 | 3M Open | [pre](2026-07-22-3m-open.md) · [**results**](2026-07-27-3m-open-results.md) | Scheffler a historic field-mismatch, rated the clear favorite → finished 2nd. Grading confirmed DataGolf beats the served board on every market with skill |
 
 ## Results grading
 

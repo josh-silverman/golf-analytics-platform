@@ -410,6 +410,11 @@ def evaluate_lapse(root: Path, entry: KeepEntry) -> tuple[bool, str]:
     if kind == "manual":
         return False, "manual — " + " ".join(entry.lapse.get("question", "").split())
 
+    if kind not in ("file_contains", "file_not_contains"):
+        raise ValueError(
+            f"keep-register entry {entry.id!r}: unknown lapse kind {kind!r}. "
+            "Expected file_contains, file_not_contains or manual."
+        )
     target = root / entry.lapse["path"]
     pattern = entry.lapse["pattern"]
     text = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
@@ -493,6 +498,12 @@ def classify(root: Path) -> list[Finding]:
             continue
         if name.startswith(".") or name in _CONVENTION_LOADED:
             continue  # found by name by its own tooling
+        if rel in _SELF_DESCRIBING:
+            # Excluded from the index above, so nothing can be seen referencing
+            # it — including the code that loads it. Reporting it would have the
+            # tool open by recommending you delete its own register, which is
+            # the fastest way to make a cleanup report unreadable.
+            continue
         refs = references_to(rel, index)
         if not refs:
             findings.append(

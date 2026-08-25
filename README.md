@@ -117,8 +117,8 @@ Three principles governed the work from the start:
   carries a `source` field (`captured` live pre-event vs `backfilled`), the grader
   reports the two classes separately (`events_captured` / `events_backfilled`, plus
   per-provenance market aggregates), and the leaderboard shows them as separate rows
-  rather than pooling them into one number. As of 2026-08-20 the record is 9 events:
-  2 captured live, 7 reconstructed after a storage loss (the free-tier Key Value store
+  rather than pooling them into one number. As of 2026-08-24 the record is 10 events:
+  3 captured live, 7 reconstructed after a storage loss (the free-tier Key Value store
   had no persistence; the archive now has both disk persistence and a nightly export). Each board also records **how many players were
   actually served DataGolf-direct**, because `model_version_id` is stamped `path_a@…`
   when Path A is *configured* — before any DataGolf call — and so cannot distinguish a
@@ -520,7 +520,7 @@ Redis · PostgreSQL · React 19 + TypeScript (Vite). A deliberate constraint —
 OpenMP-based libraries (XGBoost/LightGBM) — keeps the dependency surface small and
 shaped several modeling choices. Docker Compose for local dev; **live in production**
 on Render (backend, free tier, `render.yaml`) + Vercel (frontend) — see the demo link
-above. A `fly.toml` also exists from an earlier deploy target but isn't the live path.
+above.
 
 ---
 
@@ -607,7 +607,7 @@ architecture plus product differentiation. An independent strategic review
 
 The forward out-of-sample track record above is machine-graded and aggregated. Two
 caveats govern how much any aggregate from it can claim. First, provenance: most of
-the current record (7 of 9 events) consists of backfilled reconstructions rather than
+the current record (7 of 10 events) consists of backfilled reconstructions rather than
 live captures, and the grader and leaderboard report the two separately for that
 reason. Second, attribution: under Path A the served board is DataGolf's own
 probabilities for roughly 95% of a covered field, so the record measures what the
@@ -647,7 +647,7 @@ scorecard and how the bug was fixed.
 backend/
   app/
     features/        versioned, content-hashed feature sets + primitives
-    ml/              trainer, calibration, rolling-origin backtest, rank_v1 research harness
+    ml/              trainer, calibration, rolling-origin backtest, registry
     providers/       DataProvider interface · DataGolfProvider · MockDataProvider (contract-tested)
     services/        FeatureExtractor (train/serve parity), PredictionService, catalog
     api/ · db/ · cache/   FastAPI layer, SQLAlchemy models, Redis caching
@@ -660,9 +660,9 @@ docs/
   project-summary.md         the consolidated research record (primary source for this README)
   project-brief.md           how to judge proposed work against settled results
   technical-due-diligence.md independent review of the system's risks and gaps
-  rank-native-model-design.md the shelved rank-native architecture design
+  rank-native-model-design.md the closed rank-native research track (code removed; doc is the record)
   runbook.md                 deploy, health checks, troubleshooting
-  architecture/              the original 12-section system-design pass
+  architecture/              the original June system-design pass, superseded
 ```
 
 ---

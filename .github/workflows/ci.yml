@@ -11,6 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  redistribution:
+    name: DataGolf redistribution guard (ledger §2.8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No deps, no venv: stdlib + git only, so it cannot be skipped by a
+      # dependency problem. §2.8 is [enforced] because of this step.
+      - name: No per-player DataGolf values in tracked markdown
+        run: python3 scripts/check_no_datagolf_redistribution.py
+
   backend:
     name: backend — ruff · mypy · pytest
     runs-on: ubuntu-latest

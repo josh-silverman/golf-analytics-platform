@@ -187,3 +187,41 @@ def test_report_renders_and_marks_only_removals_as_recommendations(findings) -> 
     assert "Classification only" in text
     assert "KEEP — DOCUMENTED REASON" in text
     assert "docs/ledger.md §3.4" in text
+
+
+def test_the_tool_never_recommends_deleting_its_own_register(findings) -> None:
+    """`_SELF_DESCRIBING` files must be excluded from the report, not just the index.
+
+    They are kept out of the reference index because naming a file in this
+    tool's own prose would otherwise make it look code-referenced. But that
+    same exclusion means nothing can be seen referencing *them* — including
+    `load_register`, which literally reads `keep-register.toml` on every run.
+    Before this was fixed the report opened by recommending you delete its own
+    config, which is the fastest possible way to make a cleanup report unread.
+    """
+    for rel in triage._SELF_DESCRIBING:
+        finding = _for(findings, rel)
+        assert finding is None, (
+            f"{rel} is self-describing and must not be reported at all; "
+            f"got {finding.bucket if finding else None}"
+        )
+
+
+def test_an_unknown_lapse_kind_is_refused_rather_than_guessed(tmp_path) -> None:
+    """A typo'd `kind` must raise, not silently invert the keep reason.
+
+    The check used to be `present if kind == "file_contains" else not present`,
+    so any unrecognised kind quietly took `file_not_contains` semantics — a
+    keep entry could flip to "lapsed" from a spelling mistake, which is the
+    same class of silent-wrong-answer the register exists to prevent.
+    """
+    entry = triage.KeepEntry(
+        id="typo-entry",
+        paths=("some/path",),
+        bucket="documented",
+        citation="nowhere",
+        reason="reason",
+        lapse={"kind": "file_contian", "path": "README.md", "pattern": "x"},
+    )
+    with pytest.raises(ValueError, match="unknown lapse kind"):
+        triage.evaluate_lapse(tmp_path, entry)

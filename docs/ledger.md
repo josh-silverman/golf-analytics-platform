@@ -239,7 +239,7 @@ Adding a generation timestamp, a random ordering, or an unsorted dict
 would produce a commit per run and destroy the signal in that history.
 Pinned by `test_export_is_deterministic_regardless_of_write_order`.
 
-### 2.8 DataGolf-derived data never enters the public repo **[convention]**
+### 2.8 DataGolf-derived data never enters the public repo **[enforced]**
 
 DataGolf's terms are personal use only, no redistribution. This
 repository is public. The export dump goes to the private
@@ -247,9 +247,48 @@ repository is public. The export dump goes to the private
 (`LEDGER_DEPLOY_KEY`); the export workflow logs snapshot counts only,
 never content, because Actions logs on a public repo are public.
 
-Known pre-existing exposure, unresolved and Josh's call: the README and
-`tournament-analyses/` publish DataGolf per-player probabilities and
-skill ratings. Do not add more without asking.
+**Resolved 2026-08-25.** The pre-existing exposure this section used to
+record as open (`tournament-analyses/` publishing per-player DataGolf
+probabilities, skill ratings and decomposition adjustments across ~70
+player-event pairs, added in `f650e3f`) has been redacted in place. Prior
+git history is unchanged, deliberately: rewriting it would break every
+existing clone and invalidate the commit SHAs this document cites, for a
+blob nothing links to.
+
+**Where the line falls.** These stay:
+
+- this project's own output, including served-board probabilities
+- aggregate statistics *about* DataGolf's predictions (Brier, skill, ECE,
+  calibration buckets) — these are measurements this project computed, and
+  they are the entire point of the archive as an evaluation instrument
+- orderings, ranks, and the direction of a model-versus-market disagreement
+- public facts: who played, who won, finishing position
+- ratios between a DataGolf value and one of ours, which is how the ~10x
+  serving-bug finding survives redaction intact
+
+These do not:
+
+- DataGolf's absolute per-player probabilities, in any market
+- its skill ratings (SG totals, per-category values) and decomposition
+  adjustments (course fit, course history, driving distance)
+- prices pulled through DataGolf's betting-tools endpoints, per-player
+
+**Screenshots are treated as product demonstration, not redistribution**, and
+`docs/img/*.png` may show a normal board with named players. The reasoning is
+that a PNG of eight rows is not a reconstructable dataset, where a markdown
+table of thirty players with a `DG win` column is. This is a judgement call
+recorded so it reads as a decision rather than an oversight; revisit it if the
+screenshots ever grow into a full-field export.
+
+**What enforces it.** `.github/workflows/ci.yml` greps tracked markdown for
+per-player DataGolf column headers and value patterns and fails the build.
+Before this the repo-content path had no hook, no CI check and no ignore rule,
+while the *export* path was defended in four separate places
+(`archive-export.yml`, `admin-trigger.yml`, `schemas.py`,
+`closing-line-capture.yml`) — the asymmetry is why the exposure sat open for
+twenty days. Note that CI is a backstop against reintroduction, not a
+classifier: it cannot recognise a value pasted without its header, so the rule
+above still governs.
 
 ### 2.9 Admin endpoints stay admin-gated and 404 when unconfigured **[enforced]**
 
