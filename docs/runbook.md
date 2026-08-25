@@ -31,21 +31,21 @@ for quick reference thereafter.
 
 ## 2. Environment variables / secrets
 
-### Backend (Fly.io secrets)
+### Backend (Render environment)
 
-```bash
-fly secrets set \
-  DATABASE_URL="postgresql+asyncpg://..." \
-  DATAGOLF_API_KEY="<your-key>" \
-  DATA_PROVIDER="datagolf" \
-  SENTRY_DSN="https://..." \     # optional
-  SECRET_KEY="<random-64-chars>"  # if you add auth later
-```
+Non-secret values are declared in [`render.yaml`](../render.yaml) and applied
+by the blueprint. The two secrets are marked `sync: false` there and are pasted
+into the Render dashboard, never committed:
+
+- `DATAGOLF_API_KEY`
+- `ADMIN_API_TOKEN`
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
-| `DATABASE_URL` | ✅ | — | Async Postgres URL (`postgresql+asyncpg://...`) |
 | `DATAGOLF_API_KEY` | ✅ when `DATA_PROVIDER=datagolf` | — | DataGolf subscription key |
+| `ADMIN_API_TOKEN` | ✅ in production | — | Gates the archive, capture and track-record admin endpoints. Absent ⇒ those routes answer 404. |
+| `BOARD_ARCHIVE_BACKEND` | ✅ in production | `file` | `redis` on Render: the free-tier disk is ephemeral, so a file-backed archive would not survive a redeploy. |
+| `DATABASE_URL` | — | — | Unused. `render.yaml` provisions no Postgres and the serving path never touches one; `app/db/` is vestigial (ledger §3.4). Listed as required until 2026-08-25, which is the assumption that broke `/readyz` in `f265744`. |
 | `DATA_PROVIDER` | — | `mock` | `mock` or `datagolf` |
 | `DATA_PROVIDER_CACHE` | — | `true` | Enable Redis response caching |
 | `REDIS_URL` | — | `redis://localhost:6379/0` | Redis connection string |
@@ -63,7 +63,7 @@ fly secrets set \
 | `VITE_SENTRY_DSN` | — | Sentry DSN for frontend error tracking |
 
 > The frontend talks to the backend through Vercel's API proxy rewrite
-> (`/api/*` → `https://pga-analytics-api.fly.dev/api/*`), so no backend URL
+> (`/api/*` → `https://pga-analytics-api.onrender.com/api/*`), so no backend URL
 > env var is needed at build time.
 
 ---
@@ -129,7 +129,7 @@ npx vercel --prod
 ```
 
 Vercel auto-detects Vite. The `vercel.json` at the repo root configures:
-- API proxy: `/api/*` → `https://pga-analytics-api.fly.dev/api/*`
+- API proxy: `/api/*` → `https://pga-analytics-api.onrender.com/api/*`
 - SPA rewrite: all unknown paths → `/index.html`
 - Asset caching: `max-age=31536000, immutable` for hashed assets
 
