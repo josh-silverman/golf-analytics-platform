@@ -6,6 +6,13 @@
 
 Grades **both** boards against actual results: DataGolf's pre-event archive (what Path A *intends* to serve) and the served v2 SG-only board (what production actually showed, per the serving bug documented in the pre-tournament report).
 
+> **DataGolf's per-player values removed 2026-08-25** (personal use only, no
+> redistribution; [ledger.md](../docs/ledger.md) §2.8). The **aggregate grading
+> table below is kept in full** — Brier and skill are statistics this project
+> computed, not DataGolf's data, and they are the substance of this report.
+> Our own served-board per-player numbers are kept for the same reason.
+> Finishing positions are public results.
+
 ---
 
 ## Headline: the bug has a measurable cost
@@ -20,47 +27,49 @@ Brier score (lower is better) and skill vs. a base-rate baseline (higher is bett
 | Top 20 | 0.1151 | 0.1237 | 0.1350 | **+0.147** | +0.084 |
 | Make cut | 0.2170 | 0.2467 | 0.2485 | **+0.127** | +0.007 |
 
-**DataGolf beat the served model on all four markets that carry skill.** The gap is widest exactly where the product claims its strongest market: on make-cut, DataGolf posted +0.127 skill while the served v2 board posted **+0.007 — statistically indistinguishable from just predicting the field base rate.** The bug is not cosmetic; it costs most of the make-cut and top-20 edge.
+**DataGolf beat the served model on all four markets that carry skill.** The gap is widest exactly where the product claims its strongest market: on make-cut, DataGolf posted +0.127 skill while the served v2 board posted **+0.007, statistically indistinguishable from just predicting the field base rate.** The bug is not cosmetic; it costs most of the make-cut and top-20 edge.
 
-Win is noise for both (one winner in 143 players); DG's −0.032 reflects Scheffler being priced at 23.4% and finishing 2nd. A single event cannot separate win skill.
+Win is noise for both (one winner in 143 players); DG's −0.032 reflects the pre-event favorite finishing 2nd. A single event cannot separate win skill.
 
 ## Winner: Jackson Koivun
 
 | | DataGolf | Served v2 |
 |---|---|---|
-| Win probability | 2.0% | 0.78% |
+| Win probability | held privately | 0.78% |
 | Rank in field by win prob | **7th of 144** | 21st of 144 |
 
-Ranking the eventual winner 7th in a 144-player field is a genuinely good pre-event call. The served board buried him at 21st — another concrete instance of the bug degrading output. Koivun is also the player carrying `sg_total=None` in the skill feed (thin PGA sample), so DataGolf's rating leaned on its own model rather than a rolling SG history.
+Ranking the eventual winner 7th in a 144-player field is a genuinely good pre-event call. The served board buried him at 21st, another concrete instance of the bug degrading output. Koivun is also the player carrying `sg_total=None` in the skill feed (thin PGA sample), so DataGolf's rating leaned on its own model rather than a rolling SG history.
 
 ## Actual top 10 vs. what each board said
 
-| Finish | Player | DG win | DG top-20 | Served win |
-|--------|--------|--------|-----------|------------|
-| 1 | Jackson Koivun | 0.020 | 0.318 | 0.0078 |
-| 2 | Scottie Scheffler | **0.234** | **0.782** | 0.0223 |
-| T3 | Chandler Phillips | 0.002 | 0.097 | 0.0066 |
-| T3 | Denny McCarthy | 0.006 | 0.187 | 0.0066 |
-| T3 | Hideki Matsuyama | 0.027 | 0.374 | 0.0067 |
-| T3 | Brian Harman | 0.010 | 0.242 | 0.0063 |
-| T7 | Emiliano Grillo | 0.006 | 0.177 | 0.0066 |
-| T7 | Davis Thompson | 0.008 | 0.205 | 0.0068 |
-| 9 | Ben Kohles | 0.014 | 0.286 | 0.0099 |
-| 10 | Gary Woodland | 0.010 | 0.214 | 0.0065 |
+DataGolf's rank in the win market alongside the finish, plus our own served probability:
+
+| Finish | Player | DG rank (win market) | Served win (ours) |
+|--------|--------|-------------|-------------------|
+| 1 | Jackson Koivun | 7th | 0.0078 |
+| 2 | Scottie Scheffler | **1st** | 0.0223 |
+| T3 | Chandler Phillips | outside top 40 | 0.0066 |
+| T3 | Denny McCarthy | mid-field | 0.0066 |
+| T3 | Hideki Matsuyama | 5th | 0.0067 |
+| T3 | Brian Harman | upper-mid | 0.0063 |
+| T7 | Emiliano Grillo | mid-field | 0.0066 |
+| T7 | Davis Thompson | mid-field | 0.0068 |
+| 9 | Ben Kohles | upper-mid | 0.0099 |
+| 10 | Gary Woodland | upper-mid | 0.0065 |
 
 ## Published picks — scorecard
 
 **Top 5 win picks — 2 of 5 finished top 3**
 
-| Pick | DG win | Finish |
-|------|--------|--------|
-| Scottie Scheffler | 23.4% | **2nd** ✅ |
-| Maverick McNealy | 3.6% | 34th |
-| Kurt Kitayama | 3.5% | 24th |
-| Tom Kim | 2.9% | 20th |
-| Hideki Matsuyama | 2.7% | **3rd** ✅ |
+| Pick | Finish |
+|------|--------|
+| Scottie Scheffler | **2nd** ✅ |
+| Maverick McNealy | 34th |
+| Kurt Kitayama | 24th |
+| Tom Kim | 20th |
+| Hideki Matsuyama | **3rd** ✅ |
 
-The headline call — Scheffler as a field-mismatch outlier — was nearly right: 2nd place, and he was the only player the model separated from the pack. Matsuyama at #5 finished T3.
+The headline call, Scheffler as a field-mismatch outlier, was nearly right: 2nd place, and he was the only player the model separated from the pack. Matsuyama at number five finished T3.
 
 **Value plays (top-20 market) — 3 of 5 hit**
 
@@ -72,7 +81,7 @@ The headline call — Scheffler as a field-mismatch outlier — was nearly right
 | Doug Ghim | missed cut | ❌ |
 | Ben Kohles | 9th | ✅ |
 
-Ben Kohles is the best evidence for the course-fit thesis: flagged on a **+0.25 course-fit adjustment** despite modest raw SG (+0.46), he finished 9th. Doug Ghim, flagged on the field's strongest course *history* (+0.123), missed the cut — history did not travel.
+Ben Kohles is the best evidence for the course-fit thesis: flagged on **the field's top course-fit adjustment** despite modest raw SG, he finished 9th. Doug Ghim, flagged on the field's strongest course *history*, missed the cut. History did not travel.
 
 **Fades — 3 of 5 correct**
 
@@ -88,7 +97,7 @@ The three fades justified by weak SG all missed the cut. The two misses were the
 
 ## What this week actually established
 
-1. **DataGolf-direct beats the served board on every market with skill** — top-5 +0.159 vs +0.131, top-10 +0.131 vs +0.087, top-20 +0.147 vs +0.084, make-cut +0.127 vs +0.007. Path A's premise is validated by out-of-sample results; the bug preventing it from running is now quantified, not theoretical.
-2. **The served v2 model has ~zero make-cut skill on this event** (+0.007), against the product's own claim that make-cut is its best-calibrated market. That claim currently describes a model the site is not serving.
-3. **Course fit outperformed course history.** Kohles (+0.25 fit) → 9th; Ghim (+0.123 history) → missed cut. One event is not proof, but it is the first live datapoint on which decomposition signal to weight.
-4. **Both boards ranked the winner outside the top 5**, which is the normal condition for golf win markets — the honest framing is that the model ranks the *distribution* well, not that it names winners.
+1. **DataGolf-direct beats the served board on every market with skill:** top-5 +0.159 vs +0.131, top-10 +0.131 vs +0.087, top-20 +0.147 vs +0.084, make-cut +0.127 vs +0.007. Path A's premise is validated by out-of-sample results, and the bug preventing it from running is now quantified rather than theoretical.
+2. **The served v2 model has approximately zero make-cut skill on this event** (+0.007), against the product's own claim that make-cut is its best-calibrated market. That claim currently describes a model the site is not serving.
+3. **Course fit outperformed course history.** Kohles, flagged on fit, finished 9th; Ghim, flagged on history, missed the cut. One event is not proof, but it is the first live datapoint on which decomposition signal to weight.
+4. **Both boards ranked the winner outside the top 5**, which is the normal condition for golf win markets. The honest framing is that the model ranks the *distribution* well, not that it names winners.

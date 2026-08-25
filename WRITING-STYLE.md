@@ -17,7 +17,16 @@ rules to internal engineering docs would make them worse.
 
 | Applies fully | Applies partly | Does not apply |
 |---|---|---|
-| Anything published for readers: the root README intro, public write-ups, and any text that becomes a portfolio article | `tournament-analyses/`, the working notes behind articles. Keep the precise terminology and the traceable numbers. Rules 1 and 5 still apply. | `docs/` architecture, technical due diligence, runbooks, code comments, commit messages |
+| Anything published for readers: the root README intro, public write-ups, and any text that becomes a portfolio article | `tournament-analyses/`, the working notes behind articles. Keep the precise terminology and the traceable **aggregates**. Rules 1 and 5 still apply. | `docs/` architecture, technical due diligence, runbooks, code comments, commit messages |
+
+**One hard limit on `tournament-analyses/`, which is not a style rule but
+overrides this one:** do not publish DataGolf's per-player values. Their terms
+are personal use only, no redistribution, and this repo is public. "Traceable"
+there means traceable to an aggregate, an ordering, or this project's own
+output, never to DataGolf's absolute probabilities, skill ratings, or
+decomposition adjustments. See [docs/ledger.md](docs/ledger.md) §2.8. This
+paragraph exists because the table above previously said "traceable numbers",
+which read as instruction to do exactly the thing §2.8 forbids.
 
 In `docs/` and in code, precise technical vocabulary is correct and
 required. Write calibration, isotonic regression, and confidence

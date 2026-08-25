@@ -520,7 +520,7 @@ Redis · PostgreSQL · React 19 + TypeScript (Vite). A deliberate constraint —
 OpenMP-based libraries (XGBoost/LightGBM) — keeps the dependency surface small and
 shaped several modeling choices. Docker Compose for local dev; **live in production**
 on Render (backend, free tier, `render.yaml`) + Vercel (frontend) — see the demo link
-above. A `fly.toml` also exists from an earlier deploy target but isn't the live path.
+above.
 
 ---
 
@@ -647,7 +647,7 @@ scorecard and how the bug was fixed.
 backend/
   app/
     features/        versioned, content-hashed feature sets + primitives
-    ml/              trainer, calibration, rolling-origin backtest, rank_v1 research harness
+    ml/              trainer, calibration, rolling-origin backtest, registry
     providers/       DataProvider interface · DataGolfProvider · MockDataProvider (contract-tested)
     services/        FeatureExtractor (train/serve parity), PredictionService, catalog
     api/ · db/ · cache/   FastAPI layer, SQLAlchemy models, Redis caching
@@ -660,9 +660,9 @@ docs/
   project-summary.md         the consolidated research record (primary source for this README)
   project-brief.md           how to judge proposed work against settled results
   technical-due-diligence.md independent review of the system's risks and gaps
-  rank-native-model-design.md the shelved rank-native architecture design
+  rank-native-model-design.md the closed rank-native research track (code removed; doc is the record)
   runbook.md                 deploy, health checks, troubleshooting
-  architecture/              the original 12-section system-design pass
+  architecture/              the original June system-design pass, superseded
 ```
 
 ---

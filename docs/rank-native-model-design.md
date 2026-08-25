@@ -1,6 +1,69 @@
-# Design Document: Rank-Native Model (research track `rank_v1`)
+# Rank-Native Model (research track `rank_v1`) — closed
 
-*Design only — no implementation. Companion to [technical-due-diligence.md](technical-due-diligence.md). Motivated by five benchmark experiments (joint-GBDT stacking, full residual, shrunk residual, win/top_5 comparison) that showed the current architecture — `golf_v1`, five independent `HistGradientBoostingClassifier` heads plus the `coherent_outcomes` and `normalize_field` post-hoc patches — does not beat DataGolf's raw predictions on any of the five markets for DG-covered players.*
+**Status: closed 2026-08-25. The code is deleted; this document is the record.**
+
+*Companion to [technical-due-diligence.md](technical-due-diligence.md). Originally motivated by five benchmark experiments (joint-GBDT stacking, full residual, shrunk residual, win/top_5 comparison) that showed the production architecture — `golf_v1`, five independent `HistGradientBoostingClassifier` heads plus the `coherent_outcomes` and `normalize_field` post-hoc patches — does not beat DataGolf's raw predictions on any of the five markets for DG-covered players.*
+
+---
+
+## What was built, and what closed it
+
+Two of the four planned modules were written, then removed on 2026-08-25 when the
+track was closed. The design below is kept unchanged as the record of the
+reasoning; this section is the outcome.
+
+**Built (`bb56084`, `79fa195`):**
+
+- `rank_v1/evaluation.py` (396 lines) — the §3 harness, deliberately built and
+  validated *before* any model, so a future model would be debugged against
+  tooling already known correct. `score_markets` (Brier, Brier skill, Spearman,
+  reusing `backtest`'s own primitives so numbers sit directly beside the
+  `golf_v1` / DG-standalone benchmarks), `ranking_metrics` (NDCG@k,
+  precision@k, per-event Spearman, winner's predicted rank), `derive_markets`
+  (Monte-Carlo market derivation; Gumbel noise gives Plackett-Luce, Gaussian
+  gives strength+variance), and `paired_delta_skill` (block bootstrap CI).
+- `rank_v1/model.py` (105 lines) — the §1 recommendation as a single-feature
+  MVP. `mu` = the existing `sg_total_rating`, `sigma` = the existing
+  `score_volatility` (the feature the design flagged as extracted-but-unused),
+  floored at 0.5 and falling back to the field median for thin histories.
+  Simulates each player's tournament as `N_ROUNDS=4` i.i.d. `Normal(mu, sigma)`
+  per-round SG draws, ranks the field by 4-round total, and reads the five
+  nested markets off the simulated finish distribution.
+
+**Never built:** `dataset.py`, `trainer.py`, `markets.py` — Phase 0 and Phase 3.
+No benchmark number was ever produced. The track stopped at the MVP checkpoint.
+
+**Why it closed.** Not by the §6 kill criteria, which were never evaluated —
+Phase 3 never ran. It was closed by the §5 "riskiest unknown" being settled from
+outside the track. The parallel feature-space program independently established
+that the ceiling is informational rather than architectural: blow-up rate,
+course fit, and R1 tee-time wave were each tested and each returned a negative
+against v2, and the residual experiment had already quantified only ~0.0004
+Brier of orthogonal SG signal over DataGolf. §5 named this exact outcome in
+advance:
+
+> It is entirely plausible that a rank-native model on the **same 14 SG
+> features** lands at the same Spearman as DG — because a better *loss function*
+> cannot add *information* the inputs lack.
+
+That being true makes the benchmark unnecessary rather than pending. The
+PRIMARY KILL's rationale ("if the ceiling is informational, architecture is not
+the lever") became decisive without needing the measurement it was defined on,
+and the project adopted **Path A** instead: serve DataGolf's probabilities
+directly for covered players, with the v2 SG-only model cold-starting the ~5%
+DataGolf does not price.
+
+**What is worth keeping from it.** The architectural point stands independently
+of whether the model won. Production derives five nested markets from five
+*independent* binary heads and then repairs the contradictions afterwards —
+`coherent_outcomes` forces the nesting the heads violated, `normalize_field`
+rescales each market to its true field total. A rank-native simulation gets both
+properties *by construction*: every simulated tournament has exactly one winner,
+five top-5s, and a real cut line, so there is nothing to repair. That is a
+cleaner design regardless, and it is the reason the track was worth opening. It
+was not pursued further because elegance was explicitly ruled out as sufficient
+grounds — see the PARTIAL-SUCCESS clause in §6, which pre-committed that a tie
+on accuracy means Path A even if the architecture is better.
 
 ---
 
@@ -131,4 +194,6 @@ Evaluated on the **same 26-event / 3,037-covered-row holdout**, with the **same 
 
 ---
 
-*Design complete. No model, training, or evaluation code written. Next action, if approved: Phase 0 dataset reshape under `backend/app/ml/rank_v1/dataset.py`, against the pre-registered kill criteria above.*
+*Design record ends here. The harness and the MVP described at the top were built
+against these criteria and then removed when the track closed; see "What was built,
+and what closed it" above. Path A is what the project serves instead.*
