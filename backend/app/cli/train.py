@@ -22,6 +22,11 @@ Note that --feature-set defaults to v2 while the registered active model is v3.
 Activating a model whose feature set differs from the current active one changes
 what the serving layer computes, so that is refused unless you pass
 --allow-feature-set-change.
+
+Also note --no-activate does not mean "no production effect" for a v2 run:
+Path A's cold-start model is chosen by newest training_data_through among
+registered v2 versions, independent of activation. A --no-activate v2 that
+would win that selection prints an explicit warning before training starts.
 """
 
 from __future__ import annotations
@@ -150,6 +155,55 @@ async def _train(
                 file=sys.stderr,
             )
             raise SystemExit(2)
+
+    # A --no-activate run does not mean "no production effect" when it trains
+    # v2. Path A cold-start is chosen by deps._latest_v2_cold_start as the
+    # newest training_data_through among *registered* v2 versions, entirely
+    # independent of _active.txt. --no-activate only skips writing that file,
+    # which cold-start selection never reads — so a v2 trained "just to
+    # compare" can silently become what Path A serves on the next deploy.
+    # Checked before training, using the requested --through date directly:
+    # train_calibrated_and_register stores training_data_through as exactly
+    # that date (TrainingData.through_date), so the outcome is knowable now.
+    if not activate and feature_set == "v2":
+        existing_v2 = [v for v in registry.list_versions(name) if v.feature_set_hash == fs.hash]
+        # Mirror _latest_v2_cold_start's tie-break exactly: it is max() over
+        # versions in trained_at order, and max() keeps the FIRST value seen
+        # at the maximum. Appending this run last (it will have the newest
+        # trained_at) only displaces the incumbent on a strict improvement.
+        ordered: list[tuple[date, str | None]] = [
+            (v.training_data_through, v.version_id) for v in existing_v2
+        ]
+        ordered.append((through, None))  # None marks "this run"
+        best_through, best_id = ordered[0]
+        for cand_through, cand_id in ordered[1:]:
+            if cand_through > best_through:
+                best_through, best_id = cand_through, cand_id
+        if best_id is None:
+            active = registry.get_active(name)
+            current_cold = (
+                max(existing_v2, key=lambda v: v.training_data_through) if existing_v2 else None
+            )
+            print(
+                "\n"
+                "*** --no-activate will NOT activate the stacked model"
+                + (
+                    f" ({name} stays on {active.version_id})."
+                    if active
+                    else f" ({name} has no active model)."
+                )
+                + " ***\n"
+                "*** It WILL become the new Path A cold-start model on the next deploy. ***\n"
+                "Cold-start is selected by newest training_data_through among registered\n"
+                "v2 versions, independent of --activate / _active.txt.\n"
+                + (
+                    f"Replaces the current cold-start model: {current_cold.version_id} "
+                    f"(through {current_cold.training_data_through}).\n"
+                    if current_cold is not None
+                    else "No v2 model is currently registered, so this becomes the first "
+                    "cold-start model.\n"
+                )
+            )
 
     # When the archive is opted in we need an archive-enabled DataGolfProvider
     # (it lifts the rounds-season cap and reaches pre-2024 events) for BOTH the

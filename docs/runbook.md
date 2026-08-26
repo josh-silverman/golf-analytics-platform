@@ -269,6 +269,13 @@ deploy, whether or not you activated it. `--no-activate` only skips writing
 says a future v2 retrain should flow through automatically), but it means a v2
 trained "just to compare" is a production change.
 
+**The CLI now warns about this itself, before writing anything.** Registering
+a `--no-activate` v2 whose `--through` date is newer than the current
+cold-start candidate prints an explicit banner naming what it replaces; an
+older or tied through-date prints nothing, because it genuinely would not win
+the selection. Trust the banner over this paragraph if they ever disagree —
+the banner mirrors the real selection logic exactly, including the tie-break.
+
 `--feature-set` defaults to **v2** while the active model is **v3**, so a bare
 `train` is both the wrong feature set for `/status` *and* a live change to
 cold-start serving. Activating a model whose feature set differs from the
