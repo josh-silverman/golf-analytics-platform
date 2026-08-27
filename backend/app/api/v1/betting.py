@@ -1,24 +1,26 @@
-"""Betting edge endpoint — Kelly-sized +EV opportunities for one tournament.
+"""Betting edge endpoint — board vs. market divergence for one tournament.
 
-The approach (doc 01 §4 Phase 4):
+Serves the Market Comparison page (narrowed from a betting tool: no EV, no
+Kelly stake sizing, no +EV recommendation — see ``services/betting.py``).
 
-1. Run the calibrated classifier to get model probability estimates. The
-   classifier is used (not the Monte-Carlo sim) because a real-data backtest
-   showed it is better-calibrated on every market — and EV sizing is only as
-   trustworthy as the probabilities' calibration. Its field-normalized outputs
-   also sum to each market's true total, so longshots aren't over-priced.
+The approach:
+
+1. Run the calibrated classifier to get model probability estimates. Its
+   field-normalized outputs sum to each market's true total, so longshots
+   aren't over-priced.
 2. Use real sportsbook odds when the provider has a live feed (DataGolf),
    de-vigged to a fair implied probability; fall back to a synthetic line
-   per player otherwise.
-3. Compute edge (model_prob − implied_prob) and half-Kelly stake size.
-4. Return lines sorted by EV descending so the frontend can show the
-   best bets first.
+   per player otherwise (still stamped ``odds_source="model"``, so the
+   frontend's real-vs-synthetic coverage count stays accurate even though it
+   discards the synthetic numbers themselves).
+3. Compute edge (model_prob − implied_prob).
+4. Return lines sorted by edge descending.
 
 ``outcome_key`` selects the market: "win_prob", "top_5_prob", "top_10_prob",
 "top_20_prob", or "make_cut_prob".  The frontend defaults to "win_prob" but
 a user can switch markets via the query parameter. (Note: the model has real
 out-of-sample skill on make-cut / top-20, but ~none on outright winner — the
-book is razor-sharp there — so win-market "edges" are mostly noise.)
+book is razor-sharp there — so win-market divergences are mostly noise.)
 """
 
 from __future__ import annotations
@@ -58,11 +60,10 @@ async def betting_edge(
     outcome_key: OutcomeKey = Query(default="win_prob"),  # noqa: B008
     as_of: date | None = Query(default=None),  # noqa: B008
 ) -> BettingBoardPayload:
-    """Return +EV betting lines for every player in the tournament field.
+    """Return board-vs-market divergence lines for every player in the field.
 
-    Lines are sorted by expected value per dollar wagered (descending).
-    ``n_positive_ev`` is a convenience count of lines where edge ≥ 0.5%.
-    ``odds_source`` is ``"datagolf"`` when real sportsbook odds backed the board.
+    Lines are sorted by edge (descending). ``odds_source`` is ``"datagolf"``
+    when real sportsbook odds backed the board.
     """
     target = as_of or reference_today()
     result = await service.predict_tournament(tournament_id, as_of=target)
@@ -86,7 +87,6 @@ async def betting_edge(
         tournament_id=board.tournament_id,
         tournament_name=board.tournament_name,
         outcome_key=board.outcome_key,
-        n_positive_ev=len(board.positive_ev_lines),
         odds_source=board.odds_source,
         lines=[
             BettingLinePayload(
@@ -96,8 +96,6 @@ async def betting_edge(
                 implied_prob=line.implied_prob,
                 american_odds=line.american_odds,
                 edge=line.edge,
-                ev_per_dollar=line.ev_per_dollar,
-                kelly_fraction=line.kelly_fraction,
                 odds_source=line.odds_source,
             )
             for line in board.lines

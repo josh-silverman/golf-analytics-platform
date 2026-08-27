@@ -94,7 +94,6 @@ def test_edge_endpoint_returns_board(edge_client: TestClient) -> None:
     assert body["tournament_name"] == "Eagle Invitational"
     assert body["outcome_key"] == "win_prob"
     assert "lines" in body
-    assert "n_positive_ev" in body
 
 
 def test_edge_lines_have_required_fields(edge_client: TestClient) -> None:
@@ -108,17 +107,15 @@ def test_edge_lines_have_required_fields(edge_client: TestClient) -> None:
             "implied_prob",
             "american_odds",
             "edge",
-            "ev_per_dollar",
-            "kelly_fraction",
         ):
             assert field in line, f"Missing field: {field}"
 
 
-def test_edge_lines_sorted_by_ev_descending(edge_client: TestClient) -> None:
+def test_edge_lines_sorted_by_edge_descending(edge_client: TestClient) -> None:
     r = edge_client.get("/api/v1/betting/edge/1")
     body = r.json()
-    evs = [line["ev_per_dollar"] for line in body["lines"]]
-    assert evs == sorted(evs, reverse=True)
+    edges = [line["edge"] for line in body["lines"]]
+    assert edges == sorted(edges, reverse=True)
 
 
 def test_edge_404_for_missing_tournament(missing_client: TestClient) -> None:
@@ -138,18 +135,9 @@ def test_edge_invalid_outcome_key_returns_422(edge_client: TestClient) -> None:
     assert r.status_code == 422
 
 
-def test_n_positive_ev_matches_positive_edge_count(edge_client: TestClient) -> None:
-    r = edge_client.get("/api/v1/betting/edge/1")
-    body = r.json()
-    # MIN_EDGE = 0.005
-    positive = sum(1 for line in body["lines"] if line["edge"] >= 0.005)
-    assert body["n_positive_ev"] == positive
-
-
 def test_probabilities_bounded(edge_client: TestClient) -> None:
     r = edge_client.get("/api/v1/betting/edge/1")
     body = r.json()
     for line in body["lines"]:
         assert 0.0 <= line["model_prob"] <= 1.0
         assert 0.0 <= line["implied_prob"] <= 1.0
-        assert line["kelly_fraction"] >= 0.0

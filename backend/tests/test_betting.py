@@ -1,7 +1,7 @@
 """Unit tests for app.services.betting.
 
-Covers the pure functions (odds conversion, Kelly, EV) and the full
-build_betting_board() assembler.  No IO, no FastAPI — these run instantly.
+Covers the pure functions (odds conversion) and the full build_betting_board()
+assembler.  No IO, no FastAPI — these run instantly.
 """
 
 from __future__ import annotations
@@ -9,12 +9,9 @@ from __future__ import annotations
 import pytest
 
 from app.services.betting import (
-    MIN_EDGE,
     BettingBoard,
     american_to_implied_prob,
     build_betting_board,
-    ev_per_dollar,
-    kelly,
     prob_to_american,
 )
 from app.services.predictions import PlayerOutcome
@@ -110,66 +107,6 @@ class TestProbToAmerican:
 
 
 # ---------------------------------------------------------------------------
-# kelly
-# ---------------------------------------------------------------------------
-
-
-class TestKelly:
-    def test_no_edge_returns_zero(self) -> None:
-        # model_prob == implied_prob → no edge → stake 0
-        assert kelly(0.30, 0.30) == 0.0
-
-    def test_negative_edge_returns_zero(self) -> None:
-        assert kelly(0.20, 0.35) == 0.0
-
-    def test_positive_edge(self) -> None:
-        # model_prob clearly exceeds implied_prob → positive stake
-        stake = kelly(0.40, 0.25)
-        assert stake > 0.0
-
-    def test_half_kelly_applied(self) -> None:
-        # Full Kelly formula: f = (b*p - q) / b
-        # b = 1/implied_prob - 1
-        model_p = 0.40
-        implied_p = 0.25
-        decimal = 1.0 / implied_p
-        b = decimal - 1.0
-        full_kelly = (b * model_p - (1.0 - model_p)) / b
-        half_kelly = full_kelly * 0.5
-        assert abs(kelly(model_p, implied_p) - half_kelly) < 1e-9
-
-    def test_invalid_implied_prob_returns_zero(self) -> None:
-        assert kelly(0.5, 0.0) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# ev_per_dollar
-# ---------------------------------------------------------------------------
-
-
-class TestEvPerDollar:
-    def test_zero_implied_prob_returns_zero(self) -> None:
-        assert ev_per_dollar(0.5, 0.0) == 0.0
-
-    def test_positive_ev(self) -> None:
-        # model_prob = 0.5, implied_prob = 0.3 → clear positive EV
-        ev = ev_per_dollar(0.5, 0.3)
-        assert ev > 0.0
-
-    def test_negative_ev(self) -> None:
-        # model_prob = 0.1, implied_prob = 0.5 → negative EV
-        ev = ev_per_dollar(0.1, 0.5)
-        assert ev < 0.0
-
-    def test_breakeven_approximately(self) -> None:
-        # When model_prob == implied_prob, EV ≈ 0.
-        p = 0.35
-        decimal = 1.0 / p
-        ev = p * (decimal - 1.0) - (1.0 - p)
-        assert abs(ev) < 1e-6
-
-
-# ---------------------------------------------------------------------------
 # build_betting_board
 # ---------------------------------------------------------------------------
 
@@ -203,10 +140,10 @@ class TestBuildBettingBoard:
         board = self._board()
         assert isinstance(board, BettingBoard)
 
-    def test_lines_sorted_by_ev_descending(self) -> None:
+    def test_lines_sorted_by_edge_descending(self) -> None:
         board = self._board()
-        evs = [line.ev_per_dollar for line in board.lines]
-        assert evs == sorted(evs, reverse=True)
+        edges = [line.edge for line in board.lines]
+        assert edges == sorted(edges, reverse=True)
 
     def test_all_players_present(self) -> None:
         board = self._board(n_players=5)
@@ -217,17 +154,6 @@ class TestBuildBettingBoard:
         for line in board.lines:
             expected_edge = line.model_prob - line.implied_prob
             assert abs(line.edge - expected_edge) < 1e-9
-
-    def test_kelly_zero_when_no_edge(self) -> None:
-        board = self._board()
-        for line in board.lines:
-            if line.edge < 0:
-                assert line.kelly_fraction == 0.0
-
-    def test_positive_ev_lines_property(self) -> None:
-        board = self._board()
-        for line in board.positive_ev_lines:
-            assert line.edge >= MIN_EDGE
 
     def test_skips_near_zero_probability(self) -> None:
         # A player with effectively zero probability should be dropped.

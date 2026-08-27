@@ -623,7 +623,7 @@ class CalibrationReportPayload(BaseModel):
 
 
 class BettingLinePayload(BaseModel):
-    """One player's edge analysis for a single outcome market."""
+    """One player's board-vs-market divergence for a single outcome market."""
 
     player_id: int
     player_name: str
@@ -631,8 +631,6 @@ class BettingLinePayload(BaseModel):
     implied_prob: float = Field(ge=0.0, le=1.0)
     american_odds: int
     edge: float
-    ev_per_dollar: float
-    kelly_fraction: float = Field(ge=0.0)
     # "datagolf" if this line is a real sportsbook consensus, else "model".
     odds_source: str = "model"
 
@@ -641,14 +639,11 @@ class BettingBoardPayload(BaseModel):
     """Body of ``GET /betting/edge/{tournament_id}``.
 
     ``outcome_key`` identifies which market (win, top-5 …) the lines cover.
-    ``n_positive_ev`` is a quick summary of how many players show +EV so the
-    frontend can badge the nav link without parsing the full list.
     """
 
     tournament_id: int
     tournament_name: str
     outcome_key: str
-    n_positive_ev: int
     # "datagolf" when real sportsbook odds backed any line, else "model".
     odds_source: str
     lines: list[BettingLinePayload]

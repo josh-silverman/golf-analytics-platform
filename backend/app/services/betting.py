@@ -1,11 +1,13 @@
-"""Betting edge and Kelly sizing — doc 01 §4 Phase 4.
+"""Betting edge — board vs. market divergence for the Market Comparison page.
 
-The core loop a sports bettor runs:
-
-1. Estimate the true probability of an outcome (the served model's board).
-2. Obtain the book's implied probability (convert American odds, removing vig).
-3. If true > implied, there is positive expected value (+EV).
-4. Size the bet using the (fractional) Kelly criterion.
+Estimates the true probability of an outcome (the served model's board),
+obtains the book's implied probability (American odds, vig removed), and
+reports the divergence (``edge = model_prob - implied_prob``). This module no
+longer sizes a stake or computes expected value: the frontend it serves was
+narrowed from a betting tool to a market-comparison view (no EV, no Kelly,
+no +EV recommendation), and the fields that math produced were removed here
+to match — see git history for ``ev_per_dollar``/``kelly``/
+``positive_ev_lines`` if that math is ever needed again.
 
 "Betting edge is meaningless without well-calibrated probabilities" (doc 01 §1)
 — that is exactly why calibration lands before this module.
@@ -17,7 +19,9 @@ field sum to more than the true total (1 winner, 5 top-5s, …); scaling them
 back to that theoretical total strips the margin without assuming a flat vig.
 Players the book doesn't price — and every market when no feed is configured —
 fall back to a synthetic line generated from the model's own probability with
-a realistic vig, so the board is always populated.
+a realistic vig, so every player still has an ``odds_source`` and the frontend's
+real-vs-synthetic coverage count (how many of the field have a real price) stays
+accurate even though it no longer displays the synthetic line's own numbers.
 """
 
 from __future__ import annotations
@@ -32,15 +36,6 @@ if TYPE_CHECKING:
 # Standard sportsbook vigourish margin: the book takes ~8-12% of every dollar
 # wagered as margin; 10% is a reasonable mid-market assumption.
 DEFAULT_VIG_MARGIN = 0.10
-
-# We use half-Kelly for safety.  Full Kelly maximises long-run growth but is
-# extremely volatile; half-Kelly cuts variance roughly in half at a small
-# cost to expected growth rate.
-KELLY_FRACTION = 0.5
-
-# Minimum edge (model_prob - implied_prob) before we flag a bet as +EV.
-# Below this threshold the edge could plausibly be noise.
-MIN_EDGE = 0.005
 
 
 # Theoretical sum of true probabilities across a full field, per market. A
@@ -67,12 +62,8 @@ class BettingLine:
     implied_prob: float
     # Raw American odds as displayed in the book
     american_odds: int
-    # Edge: positive means we think the player is underpriced
+    # Edge: positive means the board's probability exceeds the book's
     edge: float
-    # Expected value per $1 wagered (negative if no edge)
-    ev_per_dollar: float
-    # Half-Kelly stake as a fraction of bankroll (0 if no edge)
-    kelly_fraction: float
     # "datagolf" if this line came from a real sportsbook consensus, else "model"
     odds_source: str = "model"
 
@@ -87,10 +78,6 @@ class BettingBoard:
     lines: tuple[BettingLine, ...]
     # "datagolf" if any line used a real sportsbook consensus, else "model".
     odds_source: str = "model"
-
-    @property
-    def positive_ev_lines(self) -> tuple[BettingLine, ...]:
-        return tuple(line for line in self.lines if line.edge >= MIN_EDGE)
 
 
 # ---------------------------------------------------------------------------
@@ -115,33 +102,6 @@ def prob_to_american(p: float) -> int:
     if p >= 0.5:
         return round(-p / (1.0 - p) * 100)
     return round((1.0 - p) / p * 100)
-
-
-def kelly(model_prob: float, implied_prob: float) -> float:
-    """Half-Kelly stake as a fraction of bankroll.
-
-    Returns 0 when the model probability doesn't exceed the implied probability
-    (i.e. no edge, or the model says the bet is overpriced).
-
-    Kelly formula: f = (b·p - q) / b  where b = decimal_odds - 1.
-    """
-    if implied_prob <= 0.0 or model_prob <= implied_prob:
-        return 0.0
-    decimal_odds = 1.0 / implied_prob  # approximate fair decimal odds
-    b = decimal_odds - 1.0
-    f = (b * model_prob - (1.0 - model_prob)) / b
-    return max(0.0, f * KELLY_FRACTION)
-
-
-def ev_per_dollar(model_prob: float, implied_prob: float) -> float:
-    """Expected value of a $1 bet at the implied odds.
-
-    Positive EV means profit in expectation.
-    """
-    if implied_prob <= 0.0:
-        return 0.0
-    decimal_odds = 1.0 / implied_prob
-    return model_prob * (decimal_odds - 1.0) - (1.0 - model_prob)
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +187,9 @@ def build_betting_board(
 
     When ``real_odds`` (player_id → consensus American odds) is supplied, each
     matching player is priced against the de-vigged real line; everyone else
-    falls back to a synthetic line. Lines are returned sorted by EV descending
-    (best bets first). ``board.odds_source`` is ``"datagolf"`` if any real line
-    was used.
+    falls back to a synthetic line. Lines are returned sorted by edge
+    descending (largest board-vs-market divergence first). ``board.odds_source``
+    is ``"datagolf"`` if any real line was used.
     """
 
     def _get_prob(o: PlayerOutcome) -> float:
@@ -271,14 +231,12 @@ def build_betting_board(
                 implied_prob=implied,
                 american_odds=amer,
                 edge=edge,
-                ev_per_dollar=ev_per_dollar(model_prob, implied),
-                kelly_fraction=kelly(model_prob, implied),
                 odds_source=source,
             )
         )
 
-    # Sort: positive EV first, then by EV magnitude.
-    lines.sort(key=lambda bl: bl.ev_per_dollar, reverse=True)
+    # Sort by edge descending: the largest board-vs-market divergences first.
+    lines.sort(key=lambda bl: bl.edge, reverse=True)
     return BettingBoard(
         tournament_id=tournament_id,
         tournament_name=tournament_name,
