@@ -73,8 +73,6 @@ export interface BettingLine {
   implied_prob: number
   american_odds: number
   edge: number
-  ev_per_dollar: number
-  kelly_fraction: number
   odds_source: string
 }
 
@@ -82,7 +80,6 @@ export interface BettingBoard {
   tournament_id: number
   tournament_name: string
   outcome_key: string
-  n_positive_ev: number
   odds_source: string
   lines: BettingLine[]
 }

@@ -38,7 +38,6 @@ const BOARD_FIXTURE = {
   tournament_id: 7,
   tournament_name: 'The Masters',
   outcome_key: 'win_prob',
-  n_positive_ev: 2,
   odds_source: 'datagolf',
   lines: [
     {
@@ -48,8 +47,6 @@ const BOARD_FIXTURE = {
       implied_prob: 0.14,
       american_odds: 600,
       edge: 0.04,
-      ev_per_dollar: 0.12,
-      kelly_fraction: 0.03,
       odds_source: 'datagolf',
     },
     {
@@ -59,8 +56,6 @@ const BOARD_FIXTURE = {
       implied_prob: 0.15,
       american_odds: 500,
       edge: -0.03,
-      ev_per_dollar: -0.08,
-      kelly_fraction: 0.0,
       odds_source: 'model',
     },
   ],
