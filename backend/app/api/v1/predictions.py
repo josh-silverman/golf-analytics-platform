@@ -11,16 +11,25 @@ from app.api.v1.deps import (
     get_board_archive,
     get_catalog_service,
     get_prediction_service,
+    get_settlement_archive,
 )
-from app.api.v1.schemas import PlayerOutcomePayload, TournamentPredictionsPayload
+from app.api.v1.schemas import (
+    ArchivedBoardOutcomePayload,
+    ArchivedBoardPayload,
+    PlayerOutcomePayload,
+    TournamentPredictionsPayload,
+)
 from app.config import get_settings
+from app.domain.enums import EntryStatus
 from app.services.board_archive import BoardArchive  # noqa: TC001
 from app.services.board_capture import capture_pre_event_board
 from app.services.catalog import CatalogService, reference_today  # noqa: TC001
+from app.services.forward_track_record import canonical_by_tournament, event_has_a_cut
 from app.services.predictions import (  # noqa: TC001
     PredictionService,
     TournamentPredictions,
 )
+from app.services.settlement_archive import SettlementArchive  # noqa: TC001
 
 router = APIRouter(tags=["predictions"], prefix="/predictions")
 
@@ -133,7 +142,108 @@ async def predict_tournament(
             )
             for o in predictions.outcomes
         ],
+        dg_direct_count=predictions.dg_direct_count,
+        dg_fetch_status=predictions.dg_fetch_status.value,
     )
     if cache_enabled:
         await _store_board(cache_key, payload)
     return payload
+
+
+@router.get("/{tournament_id}/archived")
+async def archived_board(
+    tournament_id: int,
+    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
+    board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    settlements: Annotated[SettlementArchive, Depends(get_settlement_archive)],
+) -> ArchivedBoardPayload:
+    """The pinned pre-event board for a tournament, straight from the ledger.
+
+    Strictly read-only. It creates no board snapshot and pins no settlement:
+    unlike the grader, which legitimately pins a result the first time it
+    scores an event, this endpoint can be hit by anyone loading a page and
+    must never write to an immutable archive as a side effect of a GET.
+
+    Returns ``available: false`` rather than falling back to
+    ``GET /predictions/{id}``. That endpoint recomputes with today's active
+    model, which for an event inside the model's training window is an
+    in-sample score — presenting it as the pre-event board is the specific
+    defect this endpoint exists to remove.
+    """
+    tournament = await catalog.get_tournament(tournament_id)
+    if tournament is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tournament {tournament_id} not found",
+        )
+
+    # The archive can hold several snapshots of one event (a retrain changes
+    # the version id, and an event can be both captured and later backfilled).
+    # Reuse the grader's own selection rule so this view cannot disagree with
+    # the record about which board actually counts.
+    snapshots = [s for s in await board_archive.list_all() if s.tournament_id == tournament_id]
+    snapshot = canonical_by_tournament(snapshots).get(tournament_id)
+    if snapshot is None:
+        return ArchivedBoardPayload(
+            available=False,
+            tournament_id=tournament_id,
+            tournament_name=tournament.name,
+            tournament_start_date=tournament.start_date.isoformat(),
+        )
+
+    # Results, read-only. The pinned settlement is authoritative where one
+    # exists; otherwise fall back to a live field read WITHOUT pinning it,
+    # which is what keeps this endpoint free of write side effects.
+    results: list[tuple[int, int | None, EntryStatus]] = []
+    stored = await settlements.get(tournament_id)
+    if stored is not None:
+        for e in stored.entries:
+            st = e.entry_status()
+            if st is not None:
+                results.append((e.player_id, e.final_position, st))
+    else:
+        field = await catalog.get_tournament_field(tournament_id)
+        results = [(e.player_id, e.final_position, e.status) for e in field]
+
+    had_a_cut = event_has_a_cut(st for _, _, st in results)
+    result_by_player = {pid: (pos, st) for pid, pos, st in results}
+
+    outcomes: list[ArchivedBoardOutcomePayload] = []
+    for o in snapshot.outcomes:
+        player = await catalog.get_player(o.player_id)
+        pos, st = result_by_player.get(o.player_id, (None, None))
+        outcomes.append(
+            ArchivedBoardOutcomePayload(
+                player_id=o.player_id,
+                player_name=player.full_name if player else f"Player {o.player_id}",
+                win_prob=o.win_prob,
+                top_5_prob=o.top_5_prob,
+                top_10_prob=o.top_10_prob,
+                top_20_prob=o.top_20_prob,
+                make_cut_prob=o.make_cut_prob,
+                final_position=pos,
+                # Withheld on a no-cut event: every player "made" a cut that
+                # was never played, and reporting that as a result is the
+                # contamination the grader excludes (2.3 / event_has_a_cut).
+                made_cut=(st == EntryStatus.MADE_CUT) if (st is not None and had_a_cut) else None,
+            )
+        )
+
+    return ArchivedBoardPayload(
+        available=True,
+        tournament_id=tournament_id,
+        tournament_name=snapshot.tournament_name,
+        tournament_start_date=snapshot.tournament_start_date,
+        source=snapshot.source,
+        as_of=snapshot.as_of,
+        captured_at=snapshot.captured_at,
+        model_name=snapshot.model_name,
+        model_version_id=snapshot.model_version_id,
+        model_trained_through=snapshot.model_trained_through,
+        dg_direct_count=snapshot.dg_direct_count,
+        dg_fetch_status=snapshot.dg_fetch_status,
+        out_of_sample=snapshot.is_out_of_sample(tournament.start_date),
+        graded=bool(results),
+        event_had_a_cut=had_a_cut,
+        outcomes=outcomes,
+    )

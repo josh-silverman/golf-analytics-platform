@@ -106,7 +106,7 @@ def _labels(final_position: int | None, status: EntryStatus) -> dict[str, int] |
     }
 
 
-def _event_has_a_cut(statuses: Iterable[EntryStatus]) -> bool:
+def event_has_a_cut(statuses: Iterable[EntryStatus]) -> bool:
     """Did this event actually cut anyone?
 
     The FedExCup playoff events and several limited-field events play all four
@@ -122,6 +122,10 @@ def _event_has_a_cut(statuses: Iterable[EntryStatus]) -> bool:
     describing real make-cut skill, and this is the market the product claims
     as its strongest. Excluded from the make-cut aggregate only; every other
     market on those events grades normally.
+
+    Public for the same reason as ``canonical_by_tournament``: the read-only
+    board view must not disagree with the grader about whether an event had a
+    cut, or it would show a make-cut figure the record deliberately excludes.
     """
     return any(s == EntryStatus.MISSED_CUT for s in statuses)
 
@@ -226,7 +230,7 @@ async def compute_forward_track_record(
         gradeable = [
             m
             for m in _MARKETS
-            if m != "make_cut_prob" or _event_has_a_cut(st for _, _, st in results)
+            if m != "make_cut_prob" or event_has_a_cut(st for _, _, st in results)
         ]
 
         ev_y: dict[str, list[float]] = {m: [] for m in _MARKETS}

@@ -2,10 +2,16 @@ import { useQuery } from '@tanstack/react-query'
 
 export type OutcomeKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
 
-// Ordered by VALIDATED MODEL SKILL, not by market name. Make-cut (+0.246) and
-// top-20 (+0.141) carry genuine backtest skill and lead; top-10 follows; top-5
-// and win are intentionally coarse (skill ≈ 0) and come last. This order drives
-// the Betting Edge market picker so the trustworthy markets are surfaced first.
+// Ordered by measured model skill, not by market name: make-cut and top-20
+// lead, top-10 follows, top-5 and win are intentionally coarse and come last.
+// This order drives the Betting Edge market picker so the better-resolved
+// markets are surfaced first.
+//
+// The skill figures that justified this order are deliberately NOT quoted
+// here. The make-cut number in particular is contaminated by no-cut FedExCup
+// events graded under a bug since fixed in `ceb82f8`, and README.md states it
+// must not be quoted until re-measured. The live forward record
+// (`useForwardTrackRecord`) is the only current source for per-market skill.
 export const OUTCOME_KEYS: OutcomeKey[] = [
   'make_cut_prob',
   'top_20_prob',

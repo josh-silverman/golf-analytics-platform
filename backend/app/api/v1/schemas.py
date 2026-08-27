@@ -501,6 +501,14 @@ class TournamentPredictionsPayload(BaseModel):
     ``model_version_id`` is null when the registry has no active version
     and the fallback ConstantModel is being served — that signal is what
     the frontend uses to surface "no trained model yet" in the UI.
+
+    ``model_version_id`` reads ``"path_a@<id>"`` as soon as Path A is
+    *configured*, before any DataGolf call happens — a board where DataGolf
+    returned nothing is otherwise indistinguishable from a healthy one under
+    that name alone. ``dg_direct_count`` and ``dg_fetch_status`` are what
+    actually distinguish them, and were already computed by
+    ``PredictionService`` for every served board; this just stops discarding
+    them at the API boundary (ledger.md §3.2).
     """
 
     tournament_id: int
@@ -510,6 +518,77 @@ class TournamentPredictionsPayload(BaseModel):
     model_version_id: str | None = None
     feature_set_hash: str
     outcomes: list[PlayerOutcomePayload]
+    # Players served DataGolf-direct on this board. ``None`` when Path A is
+    # not in use, in which case the count would be meaningless (every player
+    # goes through the in-house model either way).
+    dg_direct_count: int | None = None
+    # Why the DataGolf fetch produced what it did — tells a legitimate
+    # cold-start (``dg_direct_count == 0`` because Path A ran and DataGolf
+    # covered nobody) apart from a broken fetch (same count, different cause).
+    dg_fetch_status: str | None = None
+
+
+class ArchivedBoardOutcomePayload(BaseModel):
+    """One player's pinned pre-event probabilities, with the settled result."""
+
+    player_id: int
+    player_name: str
+    win_prob: float
+    top_5_prob: float
+    top_10_prob: float
+    top_20_prob: float
+    make_cut_prob: float
+    # Result, when the event has settled. ``made_cut`` is null on an event that
+    # played without a 36-hole cut, so the frontend cannot grade a market that
+    # was never offered (see ``forward_track_record._event_has_a_cut``).
+    final_position: int | None = None
+    made_cut: bool | None = None
+
+
+class ArchivedBoardPayload(BaseModel):
+    """Body of ``GET /predictions/{tournament_id}/archived``.
+
+    The board as it was pinned before the event, read straight from the
+    ledger. This is deliberately NOT the live prediction endpoint: that one
+    recomputes with whatever model is active today, which for an event inside
+    the active model's training window is an in-sample score wearing a
+    forward-record label.
+
+    ``available`` is false when the archive holds no snapshot for this
+    tournament. There is no fallback to a recomputation — a caller that wants
+    one can ask for it explicitly, but it must not arrive under this name.
+    """
+
+    available: bool
+    tournament_id: int
+    tournament_name: str | None = None
+    tournament_start_date: str | None = None
+    # "captured" — pinned live before play. "backfilled" — reconstructed
+    # afterwards by a later model over the same pre-event data. Null when no
+    # snapshot exists. The distinction is the whole point of the payload and
+    # must reach the reader; see ledger.md §2.5.
+    source: str | None = None
+    as_of: str | None = None
+    captured_at: str | None = None
+    model_name: str | None = None
+    model_version_id: str | None = None
+    model_trained_through: str | None = None
+    # Serving provenance. ``model_version_id`` reads "path_a@<id>" whenever
+    # Path A is configured, before any DataGolf call happens, so it cannot
+    # distinguish a healthy Path A board from one that cold-started the whole
+    # field. ``dg_direct_count`` can (ledger.md §3.2).
+    dg_direct_count: int | None = None
+    dg_fetch_status: str | None = None
+    # Whether the producing model was trained strictly before the event. False
+    # means this board is not admissible to the forward record.
+    out_of_sample: bool = False
+    # Whether results have been attached to ``outcomes`` below.
+    graded: bool = False
+    # Did this event actually cut anyone? False on the FedExCup-style no-cut
+    # events, where every make-cut figure would score a question that was
+    # never asked.
+    event_had_a_cut: bool = False
+    outcomes: list[ArchivedBoardOutcomePayload] = []
 
 
 class ReliabilityBinPayload(BaseModel):

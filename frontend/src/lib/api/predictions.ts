@@ -21,6 +21,14 @@ export interface TournamentPredictions {
   model_version_id: string | null
   feature_set_hash: string
   outcomes: PlayerOutcome[]
+  // Players served DataGolf-direct on this board. null when Path A is not in
+  // use — the count would be meaningless, since every player goes through the
+  // in-house model either way. `model_version_id` alone cannot express this:
+  // it reads "path_a@<id>" as soon as Path A is configured, before any
+  // DataGolf call happens, so a board that cold-started the whole field
+  // carries the same version id as a healthy one (ledger.md §3.2).
+  dg_direct_count: number | null
+  dg_fetch_status: string | null
 }
 
 async function fetchPredictions(tournamentId: number): Promise<TournamentPredictions> {
@@ -29,10 +37,18 @@ async function fetchPredictions(tournamentId: number): Promise<TournamentPredict
   return r.json() as Promise<TournamentPredictions>
 }
 
-export function usePredictions(tournamentId: number | null) {
+/**
+ * The live board: recomputed on request with whatever model is active today.
+ *
+ * `enabled` exists so a caller can decline it. A completed event is served
+ * from the ledger snapshot instead (`useArchivedBoard`), and asking for this
+ * one there would both recompute an expensive board nobody displays and
+ * produce numbers that are not what was predicted before the event.
+ */
+export function usePredictions(tournamentId: number | null, enabled = true) {
   return useQuery({
     queryKey: ['predictions', tournamentId],
     queryFn: () => fetchPredictions(tournamentId!),
-    enabled: tournamentId != null,
+    enabled: enabled && tournamentId != null,
   })
 }

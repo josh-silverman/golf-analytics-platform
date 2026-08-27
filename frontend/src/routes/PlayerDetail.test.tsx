@@ -60,9 +60,48 @@ const ROUNDS_FIXTURE = {
   meta: { as_of: '2026-04-10T00:00:00Z', source: 'mock' },
 }
 
+const TOURNAMENT_FIXTURE = {
+  id: 7,
+  name: 'The Masters',
+  season: 2026,
+  start_date: '2026-04-10',
+  end_date: '2026-04-13',
+  status: 'in_progress',
+  course_id: 1,
+  purse: 18_000_000,
+  field_strength: null,
+}
+
+function predictionsFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    tournament_id: 7,
+    tournament_name: 'The Masters',
+    as_of: '2026-04-09',
+    model_name: 'golf_v2',
+    model_version_id: 'path_a@v2-cold',
+    feature_set_hash: 'deadbeef',
+    dg_direct_count: null,
+    dg_fetch_status: null,
+    outcomes: [
+      {
+        player_id: 1,
+        player_name: 'Alice Ace',
+        win_prob: 0.12,
+        top_5_prob: 0.3,
+        top_10_prob: 0.45,
+        top_20_prob: 0.6,
+        make_cut_prob: 0.8,
+      },
+    ],
+    ...overrides,
+  }
+}
+
 function mockFetch({
   player = PLAYER_FIXTURE as typeof PLAYER_FIXTURE | null,
   rounds = ROUNDS_FIXTURE as typeof ROUNDS_FIXTURE | null,
+  tournament = null as typeof TOURNAMENT_FIXTURE | null,
+  predictions = null as ReturnType<typeof predictionsFixture> | null,
 } = {}) {
   vi.stubGlobal(
     'fetch',
@@ -72,6 +111,18 @@ function mockFetch({
           return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
         }
         return Promise.resolve({ ok: true, status: 200, json: async () => rounds })
+      }
+      if (url.includes('tournaments/current')) {
+        if (tournament == null) {
+          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: tournament }) })
+      }
+      if (url.includes('/predictions/')) {
+        if (predictions == null) {
+          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => predictions })
       }
       // single player fetch
       if (url.match(/\/players\/\d+$/)) {
@@ -142,5 +193,64 @@ describe('PlayerDetail', () => {
       const svgs = document.querySelectorAll('svg[aria-label*="strokes gained"]')
       expect(svgs.length).toBe(5)
     })
+  })
+
+  // --- source attribution (audit F3 / H4) ----------------------------------
+  // "From the active model" was wrong under Path A: the registry's active
+  // model need not be what actually served this board.
+
+  it('never claims "the active model" produced the outlook', async () => {
+    mockFetch({
+      tournament: TOURNAMENT_FIXTURE,
+      predictions: predictionsFixture({ dg_direct_count: 1, dg_fetch_status: 'ok' }),
+    })
+    renderDetail(1, makeClient())
+    await waitFor(() => expect(screen.getByText(/Current Event Outlook/i)).toBeInTheDocument())
+    expect(screen.queryByText(/active model/i)).not.toBeInTheDocument()
+  })
+
+  it('attributes a fully DataGolf-direct board correctly', async () => {
+    // dg_direct_count equals the outcomes length (1 of 1) → every player direct.
+    mockFetch({
+      tournament: TOURNAMENT_FIXTURE,
+      predictions: predictionsFixture({ dg_direct_count: 1, dg_fetch_status: 'ok' }),
+    })
+    renderDetail(1, makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/From DataGolf directly, not the in-house model/i)).toBeInTheDocument()
+    })
+  })
+
+  it('attributes a cold-started board to the in-house model by name', async () => {
+    mockFetch({
+      tournament: TOURNAMENT_FIXTURE,
+      predictions: predictionsFixture({ dg_direct_count: 0, dg_fetch_status: 'no_coverage' }),
+    })
+    renderDetail(1, makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(/From golf_v2 — DataGolf had no coverage this week/i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('does not claim per-player attribution on a mixed board', async () => {
+    mockFetch({
+      tournament: TOURNAMENT_FIXTURE,
+      predictions: predictionsFixture({
+        dg_direct_count: 1,
+        dg_fetch_status: 'ok',
+        outcomes: [
+          predictionsFixture().outcomes[0],
+          { ...predictionsFixture().outcomes[0], player_id: 2, player_name: 'Second Player' },
+        ],
+      }),
+    })
+    renderDetail(1, makeClient())
+    await waitFor(() => {
+      // 1 of 2 players direct — honest about not knowing which one Alice is.
+      expect(screen.getByText(/DataGolf directly for 1 of 2 players/i)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/isn't recorded/i)).toBeInTheDocument()
   })
 })

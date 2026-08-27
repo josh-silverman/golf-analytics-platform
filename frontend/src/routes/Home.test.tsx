@@ -94,4 +94,20 @@ describe('Home', () => {
       expect(screen.getByText('Backend unreachable')).toBeInTheDocument()
     })
   })
+
+  // --- unsourced claim removed (audit F3 / H8) ------------------------------
+  // "validated skill" named no market, no baseline, no n, no date.
+
+  it('does not assert an unsourced "validated skill" claim', () => {
+    mockFetch()
+    renderHome(makeClient())
+    expect(screen.queryByText(/validated skill/i)).not.toBeInTheDocument()
+  })
+
+  it('does not attribute Betting Edge to "the model" unqualified', () => {
+    mockFetch()
+    renderHome(makeClient())
+    expect(screen.queryByText(/^Model probabilities/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Where the served board diverges from the market/i)).toBeInTheDocument()
+  })
 })

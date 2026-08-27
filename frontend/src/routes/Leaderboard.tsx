@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
+import { type ArchivedBoard, useArchivedBoard } from '../lib/api/archivedBoard'
+import { type Status, useStatus } from '../lib/api/health'
 import {
   type ForwardMarketSkill,
   type ForwardTrackRecord,
@@ -93,9 +95,40 @@ function summarizeTrackRecord(tr: ForwardTrackRecord, markets: DisplayMarketSkil
   return `${opening} The served board is ahead of the field-average baseline on ${joinNames(clears)}.`
 }
 
+// "How to read this board" used to assert Top 20 was "the market where the
+// board is most reliable" unconditionally, directly above a widget that can
+// itself be saying "too early to say" about that same market. This derives
+// the claim from the same clearsBaseline signal the widget uses, so the two
+// can never disagree — when neither market has cleared yet, this says so
+// instead of repeating a claim the widget next to it is actively hedging.
+function rankingHint(tr: ForwardTrackRecord | undefined): string {
+  if (!tr?.available || tr.markets.length === 0) {
+    return 'ranked by Top 20 and Make Cut, the widest markets on the board, while the live record above builds up'
+  }
+  const ranked = orderedSkillMarkets(tr.markets)
+  const clears = (key: string) => ranked.find((m) => m.market === key)?.clearsBaseline ?? false
+  const top20 = clears('top_20_prob')
+  const cut = clears('make_cut_prob')
+  if (top20 && cut) {
+    return 'ranked by Top 20 and Make Cut — both currently ahead of the field-average baseline in the record above'
+  }
+  if (top20) {
+    return 'ranked by Top 20, currently ahead of the baseline in the record above, together with Make Cut'
+  }
+  if (cut) {
+    return 'ranked by Top 20, together with Make Cut, which is currently ahead of the baseline in the record above'
+  }
+  return 'ranked by Top 20 and Make Cut, the widest markets on the board — the record above has not yet shown either one ahead of the baseline'
+}
+
 // "About N more events" only means something if the reader knows which pool
-// it describes: the combined record settles far sooner than the live-capture
-// record, which is rebuilding from two events.
+// it describes: the combined record reaches the target far sooner than the
+// live-capture record, which is rebuilding from two events.
+//
+// Says "reach this page's N-event target" rather than "settle": the backend's
+// `_MEANINGFUL_EVENTS = 20` is a chosen rule of thumb for a sample worth
+// reading, not a calculated significance threshold, and "settle" implied a
+// statistical claim the number doesn't back.
 function settlingFooter(tr: ForwardTrackRecord): string | null {
   const target = tr.events + tr.events_to_meaningful
   const captured = tr.events_captured ?? 0
@@ -103,11 +136,14 @@ function settlingFooter(tr: ForwardTrackRecord): string | null {
   if (tr.events_to_meaningful <= 0) return null
   if (captured > 0 && liveMore > tr.events_to_meaningful) {
     return (
-      `About ${tr.events_to_meaningful} more completed events before the combined numbers settle; ` +
-      `the live record needs about ${liveMore} more.`
+      `About ${tr.events_to_meaningful} more completed events to reach this page's ${target}-event ` +
+      `rule-of-thumb sample size (a chosen target, not a calculated threshold); the live-only record needs about ${liveMore} more.`
     )
   }
-  return `About ${tr.events_to_meaningful} more completed events before the combined numbers settle.`
+  return (
+    `About ${tr.events_to_meaningful} more completed events to reach this page's ${target}-event ` +
+    `rule-of-thumb sample size (a chosen target, not a calculated threshold).`
+  )
 }
 
 // The two provenances render as separate blocks with their own n. Falls back
@@ -240,6 +276,117 @@ function downloadBoardCsv(filename: string, rows: PlayerOutcome[]): void {
   URL.revokeObjectURL(url)
 }
 
+// Which board the report card scored, in the same vocabulary the forward-record
+// widget uses above it: "Predicted live" for a board pinned before play,
+// "Reconstructed" for one the backfill rebuilt afterwards. The distinction is
+// the difference between a forward record and a re-run, and it has to reach the
+// reader on the card itself rather than only in the aggregate widget.
+function ProvenanceNote({ board, n }: { board: ArchivedBoard; n: number }) {
+  const captured = board.source === 'captured'
+  const when = board.captured_at ? new Date(board.captured_at).toLocaleDateString() : null
+  return (
+    <div className="space-y-1 text-xs text-fg-tertiary">
+      <p>
+        <span className="font-medium text-fg-secondary">
+          {captured ? 'Predicted live' : 'Reconstructed'} · {n} players on the board
+          {when ? ` · pinned ${when}` : ''}:
+        </span>{' '}
+        {captured
+          ? 'scored against the board recorded before play began, exactly as the site served it.'
+          : 'this board was rebuilt after the event from the data available beforehand. No result information goes in, but later code produced it, so it is not a record of what the site showed that week.'}
+      </p>
+      {!board.out_of_sample && (
+        <p className="italic">
+          The model that produced this board was not trained strictly before the event, so these
+          figures are not an out-of-sample result and the forward record excludes them.
+        </p>
+      )}
+      <p>The Finish column shows where each player ended up (MC = missed cut).</p>
+    </div>
+  )
+}
+
+// Serving provenance for the board on screen (H6). `model_version_id` reads
+// "path_a@<id>" as soon as Path A is CONFIGURED, before any DataGolf call
+// happens — so a board that cold-started the entire field is stamped
+// identically to a healthy one. `dg_direct_count` is what actually tells
+// them apart, and it was already being computed and simply discarded before
+// this fix. Deliberately does not read `status.model_version_id` as "the
+// model that made this board" — that field is the registry's active model,
+// which can differ from what a specific board is stamped with (ledger.md
+// §3.1); the two are shown side by side, not merged.
+function BoardProvenance({
+  status,
+  boardModelVersionId,
+  dgDirectCount,
+  dgFetchStatus,
+  fieldSize,
+}: {
+  status: Status | undefined
+  boardModelVersionId: string | null
+  dgDirectCount: number | null
+  dgFetchStatus: string | null
+  fieldSize: number
+}) {
+  if (!status) return null
+
+  const isPathA = status.serving_strategy === 'path_a'
+
+  let badge: { label: string; cls: string }
+  let note: string
+  if (!isPathA) {
+    badge = { label: status.serving_strategy, cls: 'bg-fg-tertiary/15 text-fg-tertiary' }
+    note = `Serving strategy is "${status.serving_strategy}", not Path A: every player on this board is scored by the in-house model, so DataGolf direct-coverage does not apply.`
+  } else if (dgDirectCount == null) {
+    badge = { label: 'Path A · coverage unknown', cls: 'bg-warning/15 text-warning' }
+    note = 'Path A is configured, but this board does not report how many players were priced by DataGolf directly — a fully cold-started board would look identical to a healthy one here.'
+  } else if (dgDirectCount === 0) {
+    // NO_COVERAGE means the fetch worked and DataGolf genuinely had nothing —
+    // a real cold start. Anything else (FETCH_FAILED, an unexpected OK paired
+    // with a zero count, or a null/NOT_ATTEMPTED status) is a broken or
+    // unusual fetch producing the same zero, which needs the opposite reaction.
+    const legitimateColdStart = dgFetchStatus === 'no_coverage'
+    badge = {
+      label: legitimateColdStart ? 'Path A · cold-started (no coverage)' : 'Path A · fetch problem',
+      cls: 'bg-negative/15 text-negative',
+    }
+    note = legitimateColdStart
+      ? 'DataGolf answered but had nothing for this field, so the in-house model cold-started every player. A legitimate result, not a fetch failure.'
+      : `DataGolf's fetch did not produce usable data for this event (status: ${dgFetchStatus ?? 'unknown'}), so this board cold-started every player — a degraded result, not a clean cold start.`
+  } else {
+    badge = {
+      label: `Path A · ${dgDirectCount}/${fieldSize} direct`,
+      cls: 'bg-accent/15 text-accent',
+    }
+    note = `${dgDirectCount} of ${fieldSize} players on this board were priced directly by DataGolf; the remaining ${fieldSize - dgDirectCount} cold-started the in-house model.`
+  }
+
+  const registryLabel = status.model_version_id
+    ? `${status.model_name} (${status.model_version_id})`
+    : `${status.model_name} (no active version)`
+  const differs =
+    boardModelVersionId != null &&
+    status.model_version_id != null &&
+    boardModelVersionId !== status.model_version_id
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-fg-tertiary">
+      <span
+        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.cls}`}
+        title={note}
+      >
+        {badge.label}
+      </span>
+      <span>
+        Registry-active model: <span className="font-mono">{registryLabel}</span>
+        {differs
+          ? ` — this board is stamped ${boardModelVersionId}, a different id; the two need not match.`
+          : '.'}
+      </span>
+    </div>
+  )
+}
+
 // Combined label + value in a single text node on purpose, so the player name
 // never appears as its own element (keeps it out of exact-text test queries).
 function SummaryTile({ label, value }: { label: string; value: string }) {
@@ -255,6 +402,9 @@ export function Leaderboard() {
   const { data: currentTournament, isLoading: currentLoading } = useCurrentTournament()
   const { data: tournamentsEnv } = useTournaments()
   const { data: trackRecord } = useForwardTrackRecord()
+  // Best-effort: the provenance strip degrades to nothing, never to an error,
+  // if the registry snapshot is unreachable.
+  const { data: status } = useStatus()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Selected event: an explicit pick overrides; otherwise follow the current
@@ -264,13 +414,6 @@ export function Leaderboard() {
     return e ? Number(e) : null
   })
   const effectiveId = selectedId ?? currentTournament?.id ?? null
-
-  const {
-    data: predictions,
-    isLoading: predictionsLoading,
-    isError,
-    error,
-  } = usePredictions(effectiveId)
 
   // Event options for the switcher; falls back to just the current event when
   // the full list isn't available. DataGolf only carries the current week's
@@ -315,6 +458,59 @@ export function Leaderboard() {
     currentTournament ??
     null
 
+  const isCompleted = selectedTournament?.status === 'completed'
+
+  // Which board this page shows, and where it comes from.
+  //
+  // A completed event is served from the ledger: the snapshot pinned before
+  // play, the same one the report card scores. Anything else is served live.
+  // The two are never mixed, so the table and the card above it cannot show
+  // different numbers for the same event.
+  //
+  // The live board is switched off entirely for a completed event. Asking for
+  // it would recompute an expensive board with today's model — numbers that
+  // are not what was predicted beforehand and that nothing on the page renders.
+  const {
+    data: predictions,
+    isLoading: predictionsLoading,
+    isError,
+    error,
+  } = usePredictions(effectiveId, !isCompleted)
+
+  const {
+    data: archived,
+    isLoading: archivedLoading,
+    isError: archivedError,
+    error: archivedErr,
+  } = useArchivedBoard(effectiveId, isCompleted)
+
+  // The pinned board for a completed event, the live board otherwise. Null
+  // means there is nothing to render — for a completed event that is the
+  // honest answer when no snapshot exists, never a fallback recomputation.
+  const boardOutcomes: PlayerOutcome[] | null = isCompleted
+    ? archived?.available
+      ? archived.outcomes
+      : null
+    : (predictions?.outcomes ?? null)
+
+  const boardLoading = isCompleted ? archivedLoading : predictionsLoading
+
+  // Serving provenance for whichever board is on screen: the pinned board's
+  // own fields for a completed event, the live board's for anything else.
+  // `model_version_id` here is the board's own stamp, which is deliberately
+  // NOT the same field as `status.model_version_id` — see BoardProvenance.
+  const boardProvenance = isCompleted
+    ? {
+        modelVersionId: archived?.model_version_id ?? null,
+        dgDirectCount: archived?.dg_direct_count ?? null,
+        dgFetchStatus: archived?.dg_fetch_status ?? null,
+      }
+    : {
+        modelVersionId: predictions?.model_version_id ?? null,
+        dgDirectCount: predictions?.dg_direct_count ?? null,
+        dgFetchStatus: predictions?.dg_fetch_status ?? null,
+      }
+
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const s = searchParams.get('sort') as SortKey | null
     return s && SORT_KEYS.includes(s) ? s : 'top_20_prob'
@@ -357,30 +553,28 @@ export function Leaderboard() {
       top_20_prob: 0,
       make_cut_prob: 0,
     }
-    if (predictions) {
-      for (const o of predictions.outcomes) {
-        for (const c of COLUMNS) m[c.key] = Math.max(m[c.key], o[c.key])
-      }
+    for (const o of boardOutcomes ?? []) {
+      for (const c of COLUMNS) m[c.key] = Math.max(m[c.key], o[c.key])
     }
     return m
-  }, [predictions])
+  }, [boardOutcomes])
 
   const rows = useMemo(() => {
-    if (!predictions) return []
+    if (!boardOutcomes) return []
     const q = query.trim().toLowerCase()
     const filtered = q
-      ? predictions.outcomes.filter((o) => o.player_name.toLowerCase().includes(q))
-      : predictions.outcomes
+      ? boardOutcomes.filter((o) => o.player_name.toLowerCase().includes(q))
+      : boardOutcomes
     return [...filtered].sort((a, b) => {
       const diff = a[sortKey] - b[sortKey]
       return sortDir === 'desc' ? -diff : diff
     })
-  }, [predictions, sortKey, sortDir, query])
+  }, [boardOutcomes, sortKey, sortDir, query])
 
-  const drawerOutcome =
-    predictions?.outcomes.find((o) => o.player_id === selectedPlayerId) ?? null
+  const drawerOutcome = boardOutcomes?.find((o) => o.player_id === selectedPlayerId) ?? null
 
-  // At-a-glance leaders, computed from the already-loaded field.
+  // At-a-glance leaders for a live event. Completed events show the report card
+  // in this slot instead, so this deliberately reads the live board only.
   const fieldSummary = useMemo(() => {
     const o = predictions?.outcomes ?? []
     if (o.length === 0) return null
@@ -393,27 +587,56 @@ export function Leaderboard() {
     }
   }, [predictions])
 
-  const isCompleted = selectedTournament?.status === 'completed'
-
-  // Model report card: how the pre-event board compared to the actual result.
+  // Report card: how the PINNED pre-event board compared to the result.
+  //
+  // Built from the ledger snapshot, never from `predictions`. The live endpoint
+  // recomputes with today's active model — for an event inside that model's
+  // training window it is an in-sample score, and labelling it "the pre-event
+  // board" is the defect this replaced. No snapshot means no report card; there
+  // is deliberately no fallback.
   const reportCard = useMemo(() => {
-    if (!predictions || !isCompleted) return null
-    const o = predictions.outcomes
-    if (!o.some((x) => x.final_position != null || x.made_cut != null)) return null
+    if (!archived?.available || !archived.graded) return null
+    const o = archived.outcomes
+    if (o.length === 0) return null
     const winner = o.find((x) => x.final_position === 1) ?? null
     const byWin = [...o].sort((a, b) => b.win_prob - a.win_prob)
-    const winnerRank = winner
-      ? byWin.findIndex((x) => x.player_id === winner.player_id) + 1
-      : null
-    const modelTop20 = [...o].sort((a, b) => b.top_20_prob - a.top_20_prob).slice(0, 20)
-    const top20Hits = modelTop20.filter(
+    const winnerRank = winner ? byWin.findIndex((x) => x.player_id === winner.player_id) + 1 : null
+    // The board's own top-20 picks, and how many of them finished top 20. On a
+    // field smaller than 20 every pick is trivially a top-20 finisher, so the
+    // denominator follows the field rather than assuming 20.
+    const top20Picks = Math.min(20, o.length)
+    const boardTop20 = [...o].sort((a, b) => b.top_20_prob - a.top_20_prob).slice(0, top20Picks)
+    const top20Hits = boardTop20.filter(
       (x) => x.final_position != null && x.final_position <= 20,
     ).length
-    const cutGraded = o.filter((x) => x.made_cut != null)
+    // What picking `top20Picks` players at random would have returned: each has
+    // a top20Picks/field chance of finishing top 20. Without it, "14 / 20" is a
+    // number with nothing to beat.
+    const top20ByChance = o.length > 0 ? top20Picks * (top20Picks / o.length) : null
+
+    // Make-cut is graded only where the event actually held a cut. On a no-cut
+    // event the backend withholds `made_cut` entirely, so this collapses to
+    // null rather than scoring a question nobody asked.
+    const cutGraded = archived.event_had_a_cut ? o.filter((x) => x.made_cut != null) : []
     const cutCorrect = cutGraded.filter((x) => (x.make_cut_prob >= 0.5) === x.made_cut).length
     const cutAcc = cutGraded.length ? cutCorrect / cutGraded.length : null
-    return { winner, winnerRank, top20Hits, cutAcc }
-  }, [predictions, isCompleted])
+    // The rate you get by calling every player the majority outcome.
+    const cutMadeShare = cutGraded.length
+      ? cutGraded.filter((x) => x.made_cut).length / cutGraded.length
+      : null
+    const cutBaseRate = cutMadeShare == null ? null : Math.max(cutMadeShare, 1 - cutMadeShare)
+
+    return {
+      winner,
+      winnerRank,
+      top20Hits,
+      top20Picks,
+      top20ByChance,
+      cutAcc,
+      cutBaseRate,
+      n: o.length,
+    }
+  }, [archived])
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
@@ -457,10 +680,22 @@ export function Leaderboard() {
           </div>
         )}
 
-        {predictions && (
+        {boardOutcomes && (
           <p className="text-xs italic text-fg-tertiary">
-            Pre-event predictions, not updated during play.
+            {isCompleted
+              ? 'The board as it was pinned before play, read from the prediction ledger. Not recomputed.'
+              : 'Pre-event predictions, not updated during play.'}
           </p>
+        )}
+
+        {boardOutcomes && (
+          <BoardProvenance
+            status={status}
+            boardModelVersionId={boardProvenance.modelVersionId}
+            dgDirectCount={boardProvenance.dgDirectCount}
+            dgFetchStatus={boardProvenance.dgFetchStatus}
+            fieldSize={boardOutcomes.length}
+          />
         )}
 
         {trackRecord?.available && trackRecord.markets.length > 0 && (
@@ -505,13 +740,17 @@ export function Leaderboard() {
         )}
       </header>
 
-      {(currentLoading || predictionsLoading) && (
+      {(currentLoading || boardLoading) && (
         <div className="space-y-1">
-          <p className="text-fg-secondary">Loading predictions…</p>
-          <p className="text-xs text-fg-tertiary">
-            The first load after a while warms live tour data from DataGolf and can take a
-            minute. It&rsquo;s fast afterwards.
+          <p className="text-fg-secondary">
+            {isCompleted ? 'Loading the pinned board…' : 'Loading predictions…'}
           </p>
+          {!isCompleted && (
+            <p className="text-xs text-fg-tertiary">
+              The first load after a while warms live tour data from DataGolf and can take a
+              minute. It&rsquo;s fast afterwards.
+            </p>
+          )}
         </div>
       )}
 
@@ -519,29 +758,53 @@ export function Leaderboard() {
         <p className="text-fg-secondary">No active tournament to predict.</p>
       )}
 
-      {isError && (
+      {(isCompleted ? archivedError : isError) && (
         <p className="text-negative">
-          Error: {error instanceof Error ? error.message : 'Unknown failure'}
+          Error:{' '}
+          {(() => {
+            const e = isCompleted ? archivedErr : error
+            return e instanceof Error ? e.message : 'Unknown failure'
+          })()}
         </p>
       )}
 
-      {predictions && predictions.outcomes.length === 0 && (
+      {!isCompleted && predictions && predictions.outcomes.length === 0 && (
         <p className="text-fg-secondary">
           No field published for this event yet. DataGolf only carries the current
           week&rsquo;s field, so this board is empty until the event is closer.
         </p>
       )}
 
-      {predictions && predictions.outcomes.length > 0 && (
+      {/* Completed event with nothing in the ledger. The board is withheld
+          entirely rather than replaced by a recomputation: a board built today
+          is not what was predicted before this event, and showing one under an
+          event that has already finished invites exactly that reading. */}
+      {isCompleted && !archivedLoading && archived && !archived.available && (
+        <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm leading-relaxed text-fg-secondary">
+          <p className="font-medium text-fg">No pre-event board was pinned for this event.</p>
+          <p className="mt-1">
+            The ledger holds no snapshot for {selectedTournament?.name ?? 'this event'}, so there
+            is neither a board to show nor anything to score against the result. Nothing is
+            displayed in its place: the current model can still produce a board for this field,
+            but that is not what was predicted beforehand and it is not a record of anything.
+          </p>
+          <p className="mt-1 text-xs text-fg-tertiary">
+            Boards are pinned by the scheduled Wednesday capture. An event that finished before
+            that job existed, or whose capture window was missed, has no snapshot and cannot be
+            given one after the fact.
+          </p>
+        </div>
+      )}
+
+      {boardOutcomes && boardOutcomes.length > 0 && (
         <>
-          {/* How to read this board — reflects the model's real strengths. */}
+          {/* How to read this board — the ranking claim is derived from the same
+              clearsBaseline signal the record widget above uses, so the two
+              cannot disagree about which markets are currently ahead. */}
           <div className="rounded-lg border border-border/70 bg-surface px-4 py-3 text-xs leading-relaxed text-fg-secondary">
             <p className="font-medium text-fg">How to read this board</p>
             <ul className="mt-1.5 list-disc space-y-1 pl-4 marker:text-fg-tertiary">
-              <li>
-                Players are ranked by <span className="text-accent">Top 20</span>, the market where
-                the board is most reliable, together with Make Cut.
-              </li>
+              <li>Players are {rankingHint(trackRecord)}.</li>
               <li>
                 <span className="text-fg">Win</span> is intentionally de-emphasised: the board reads
                 overall contention well but does not reliably single out one winner. Weigh a
@@ -551,28 +814,39 @@ export function Leaderboard() {
             </ul>
           </div>
 
-          {/* Completed event → model report card; otherwise field at-a-glance */}
-          {isCompleted && reportCard ? (
+          {/* Completed event → report card from the same pinned board the table
+              below renders; otherwise field at-a-glance. */}
+          {isCompleted && reportCard && archived ? (
             <div className="space-y-2">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <SummaryTile
                   label="Winner"
                   value={
                     reportCard.winner
-                      ? `${reportCard.winner.player_name} · model #${reportCard.winnerRank} by win%`
+                      ? `${reportCard.winner.player_name} · board #${reportCard.winnerRank} by win%`
                       : '—'
                   }
                 />
-                <SummaryTile label="Top-20 hits" value={`${reportCard.top20Hits} / 20`} />
+                <SummaryTile
+                  label="Top-20 hits"
+                  value={
+                    reportCard.top20ByChance != null
+                      ? `${reportCard.top20Hits} / ${reportCard.top20Picks} · ${reportCard.top20ByChance.toFixed(1)} by chance`
+                      : `${reportCard.top20Hits} / ${reportCard.top20Picks}`
+                  }
+                />
                 <SummaryTile
                   label="Make-cut accuracy"
-                  value={reportCard.cutAcc != null ? formatPct(reportCard.cutAcc) : '—'}
+                  value={
+                    reportCard.cutAcc != null
+                      ? `${formatPct(reportCard.cutAcc)} · ${
+                          reportCard.cutBaseRate != null ? formatPct(reportCard.cutBaseRate) : '—'
+                        } always-guess`
+                      : 'no cut at this event'
+                  }
                 />
               </div>
-              <p className="text-xs text-fg-tertiary">
-                Report card — the model&rsquo;s pre-event board vs. what actually happened. The
-                Finish column shows where each player ended up (MC = missed cut).
-              </p>
+              <ProvenanceNote board={archived} n={reportCard.n} />
             </div>
           ) : (
             fieldSummary && (
@@ -607,7 +881,7 @@ export function Leaderboard() {
             <div className="flex items-center gap-3">
               {query.trim() && (
                 <p className="text-xs text-fg-tertiary">
-                  {rows.length} of {predictions.outcomes.length} players
+                  {rows.length} of {boardOutcomes.length} players
                 </p>
               )}
               <button
@@ -646,7 +920,7 @@ export function Leaderboard() {
                           aria-label={`Sort by ${col.label}`}
                           title={
                             col.key === 'win_prob'
-                              ? 'Win probabilities are intentionally coarse — use Top 20 and Make Cut for the most reliable signal.'
+                              ? 'Win probabilities are intentionally coarse — see the live record above for which markets are currently ahead of the baseline.'
                               : undefined
                           }
                         >

@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1.deps import get_prediction_service
+from app.domain.enums import DgFetchStatus
 from app.services.predictions import (
     PlayerOutcome,
     TournamentPredictions,
@@ -93,6 +94,46 @@ def test_predictions_endpoint_returns_full_payload(found_client: TestClient) -> 
     assert body["model_version_id"] == "abc123def456"
     assert len(body["outcomes"]) == 2
     assert body["outcomes"][0]["player_name"] == "Cara Chip"
+
+
+def test_predictions_endpoint_surfaces_serving_provenance(app: FastAPI) -> None:
+    """dg_direct_count/dg_fetch_status must reach the API, not stop at the
+    internal ``TournamentPredictions`` dataclass — this is what tells a
+    healthy Path A board apart from one that cold-started the whole field
+    under the same ``path_a@...`` version id (ledger.md §3.2)."""
+
+    class _PathAService:
+        async def predict_tournament(
+            self, tournament_id: int, *, as_of: date
+        ) -> TournamentPredictions:
+            base = _predictions(tournament_id)
+            return TournamentPredictions(
+                **{
+                    **base.__dict__,
+                    "dg_direct_count": 118,
+                    "dg_fetch_status": DgFetchStatus.OK,
+                }
+            )
+
+    app.dependency_overrides[get_prediction_service] = lambda: _PathAService()
+    try:
+        with TestClient(app) as c:
+            body = c.get("/api/v1/predictions/1").json()
+    finally:
+        app.dependency_overrides.pop(get_prediction_service, None)
+
+    assert body["dg_direct_count"] == 118
+    assert body["dg_fetch_status"] == "ok"
+
+
+def test_predictions_endpoint_reports_no_direct_count_off_path_a(
+    found_client: TestClient,
+) -> None:
+    """The default fixture is not on Path A, so the count must be null rather
+    than a fabricated 0 — a 0 would be indistinguishable from a healthy Path A
+    board that cold-started the entire field."""
+    body = found_client.get("/api/v1/predictions/1").json()
+    assert body["dg_direct_count"] is None
 
 
 def test_predictions_endpoint_404s_for_unknown_tournament(
