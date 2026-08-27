@@ -136,3 +136,35 @@ means = """
 The runbook no longer documents it, so the one thing that made it discoverable
 is gone and it is now genuinely unreachable. Either restore the runbook entry
 or delete the script."""
+
+# ---------------------------------------------------------------------------
+
+[[keep]]
+id = "matchup-line-record"
+paths = [
+  "backend/app/services/matchup_line_record.py",
+  "backend/app/api/v1/analytics.py::capture_matchup_lines",
+  "backend/app/api/v1/analytics.py::get_matchup_line_record",
+  ".github/workflows/matchup-capture.yml",
+]
+bucket = "documented"
+citation = ".github/workflows/matchup-capture.yml (PAUSED 2026-08-27 note)"
+reason = """
+Paused as of 2026-08-27: the matchup-scanner thesis this record was gathering
+evidence for is already closed as dead (matchup_line_record.py's own
+docstring), and no page in the product's current four-surface definition
+(Leaderboard, Market Comparison, Player detail, Track Record) consumes this
+data. The workflow's schedule trigger is commented out, not deleted, so
+activity will go quiet here without anything looking abandoned by accident.
+This is a pause, not a removal: the module, both endpoints, and every
+snapshot already captured are deliberately retained, and the archive keeps
+being backed up by archive-export.yml regardless of whether capture runs.
+Re-enable the schedule if a matchup surface is ever built."""
+
+[keep.lapse]
+kind = "file_contains"
+path = ".github/workflows/matchup-capture.yml"
+pattern = "(?m)^\\s*schedule:"
+means = """
+The schedule trigger is active again (uncommented), so capture is running and
+this entry no longer describes the current state — update or remove it."""

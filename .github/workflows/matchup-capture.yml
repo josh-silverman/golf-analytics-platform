@@ -17,11 +17,23 @@ name: Capture weekly matchup lines
 # service's ADMIN_API_TOKEN env var — without it the endpoint answers 404.
 # Scheduled workflows are best-effort and GitHub disables them after 60 days
 # without repo activity; a missed week costs one data point, not the record.
+#
+# PAUSED 2026-08-27: the matchup-scanner thesis this record was built to
+# settle is already closed as dead (see the module docstring in
+# matchup_line_record.py), and no page in the product's current four-surface
+# definition (Leaderboard, Market Comparison, Player detail, Track Record)
+# consumes this data. The schedule below is commented out rather than
+# removed, and workflow_dispatch is left enabled, so this can be re-run by
+# hand or re-enabled outright with no code change if a matchup surface is
+# ever built. Nothing here is deleted: matchup_line_record.py, its endpoints,
+# and the archive already captured all stay exactly as they are, and the
+# nightly archive-export job (archive-export.yml) keeps backing up whatever
+# matchup data already exists regardless of whether this job runs.
 
 on:
-  schedule:
-    - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET)
-    - cron: "0 11 * * 4" # Thu 11:00 UTC retry, before US tee-offs
+  # schedule:
+  #   - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET)
+  #   - cron: "0 11 * * 4" # Thu 11:00 UTC retry, before US tee-offs
   workflow_dispatch: {}
 
 jobs:
