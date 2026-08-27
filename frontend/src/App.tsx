@@ -23,7 +23,7 @@ export default function App() {
             Leaderboard
           </NavLink>
           <NavLink to="/edge" className={navClass}>
-            Betting Edge
+            Market Comparison
           </NavLink>
         </div>
       </nav>

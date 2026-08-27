@@ -105,8 +105,8 @@ export function Home() {
           <FeatureCard
             to="/edge"
             category="Research"
-            title="Betting Edge"
-            description="Model probabilities vs. book-implied odds for the current event — a model-vs-market divergence view. Filter by minimum probability and focus on Make Cut and Top 20, where the model carries validated skill."
+            title="Market Comparison"
+            description="Where the served board diverges from the market — board probabilities vs. book-implied odds for the current event. The disagreement is reported and nothing more is claimed of it. Filter by minimum probability; per-market odds coverage is shown on the page."
           />
         </div>
       </section>
