@@ -52,9 +52,10 @@ export function Home() {
         <h1 className="text-3xl font-semibold tracking-tight">Pinpoint</h1>
         <p className="text-xs uppercase tracking-[0.25em] text-fg-tertiary">Golf Analytics</p>
         <p className="max-w-xl text-fg-secondary">
-          End-to-end sports analytics platform: strokes-gained feature engineering,
-          gradient-boosted outcome classification, and per-market probability
-          calibration — all on live tour data.
+          Calibrated win / top-5 / top-10 / top-20 / make-cut probabilities for the full field
+          of the current PGA Tour event. Most players are priced directly from DataGolf; an
+          in-house model fills the players DataGolf doesn&rsquo;t cover. Every week&rsquo;s
+          predictions are graded publicly against what actually happened.
         </p>
       </header>
 
