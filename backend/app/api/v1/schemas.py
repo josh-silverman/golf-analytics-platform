@@ -545,6 +545,24 @@ class ArchivedBoardOutcomePayload(BaseModel):
     made_cut: bool | None = None
 
 
+class ArchivedBoardSummaryPayload(BaseModel):
+    """One row of ``GET /predictions/archived`` — which tournaments have a
+    pinned board, without their probabilities.
+
+    Metadata only, deliberately: this is what backs a public browsable list
+    (the Track Record page), and the numbers it omits are the per-player ones.
+    Reuses the grader's own canonical-snapshot rule (one row per tournament,
+    even when a retrain produced several snapshots of the same event), so this
+    list cannot disagree with the forward record about which weeks it covers.
+    """
+
+    tournament_id: int
+    tournament_name: str
+    tournament_start_date: str
+    source: str
+    out_of_sample: bool
+
+
 class ArchivedBoardPayload(BaseModel):
     """Body of ``GET /predictions/{tournament_id}/archived``.
 

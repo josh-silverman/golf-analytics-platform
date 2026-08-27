@@ -271,3 +271,95 @@ async def test_uses_the_pinned_settlement_when_one_exists(ctx) -> None:
 
     assert body["graded"] is True
     assert catalog.field_reads == reads_before, "read the provider despite a pinned settlement"
+
+
+# --- GET /predictions/archived — the public event-picker list --------------
+# Backs the Track Record page. Metadata only: no probabilities, no player
+# names leave this endpoint (ledger §2.8).
+
+
+def _list_url() -> str:
+    return "/api/v1/predictions/archived"
+
+
+async def test_lists_no_events_when_the_archive_is_empty(ctx) -> None:
+    client, _, _, _ = ctx
+    assert client.get(_list_url()).json() == []
+
+
+async def test_lists_a_pinned_event_with_metadata_only(ctx) -> None:
+    client, boards, _, _ = ctx
+    await boards.persist(_board(1))
+
+    body = client.get(_list_url()).json()
+
+    assert len(body) == 1
+    row = body[0]
+    assert row["tournament_id"] == 1
+    assert row["tournament_name"] == "Event 1"
+    assert row["tournament_start_date"] == _START.isoformat()
+    assert row["source"] == "captured"
+    assert row["out_of_sample"] is True
+    # No per-player data of any kind.
+    assert "outcomes" not in row
+    assert "win_prob" not in str(row)
+
+
+async def test_orders_newest_tournament_first(ctx) -> None:
+    client, boards, _, _ = ctx
+    await boards.persist(
+        BoardSnapshot(
+            tournament_id=1,
+            tournament_name="Earlier Event",
+            tournament_start_date=date(2026, 5, 1).isoformat(),
+            model_name="golf_v1",
+            model_version_id="path_a@v2",
+            feature_set_hash="deadbeef",
+            model_trained_through="2026-04-01",
+            as_of="2026-04-30",
+            captured_at="2026-04-30T12:00:00+00:00",
+            outcomes=(BoardSnapshotOutcome(10, 0.4, 0.7, 0.8, 0.9, 0.98),),
+        )
+    )
+    await boards.persist(_board(2))  # _START = 2026-06-01, later
+
+    body = client.get(_list_url()).json()
+
+    assert [row["tournament_id"] for row in body] == [2, 1]
+
+
+async def test_collapses_several_snapshots_of_one_event_to_the_canonical_row(ctx) -> None:
+    """Same rule as the per-tournament endpoint: one row per event, captured
+    beats backfilled, even when a retrain left several snapshots behind."""
+    client, boards, _, _ = ctx
+    await boards.persist(
+        _board(1, source="backfilled", model_version_id="v3", captured_at="2026-05-30T00:00:00+00:00")
+    )
+    await boards.persist(
+        _board(1, source="captured", model_version_id="path_a@v2", captured_at="2026-05-31T12:00:00+00:00")
+    )
+
+    body = client.get(_list_url()).json()
+
+    assert len(body) == 1
+    assert body[0]["source"] == "captured"
+
+
+async def test_reports_not_out_of_sample_when_training_cutoff_is_unknown(ctx) -> None:
+    client, boards, _, _ = ctx
+    await boards.persist(_board(1, trained_through=None))
+
+    body = client.get(_list_url()).json()
+
+    assert body[0]["out_of_sample"] is False
+
+
+async def test_list_endpoint_is_read_only(ctx) -> None:
+    client, boards, settlements, _ = ctx
+    await boards.persist(_board(1))
+
+    before = len(await boards.list_all())
+    client.get(_list_url())
+
+    assert await settlements.get(1) is None
+    assert len(await boards.list_all()) == before

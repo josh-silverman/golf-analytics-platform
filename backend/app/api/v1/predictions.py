@@ -16,6 +16,7 @@ from app.api.v1.deps import (
 from app.api.v1.schemas import (
     ArchivedBoardOutcomePayload,
     ArchivedBoardPayload,
+    ArchivedBoardSummaryPayload,
     PlayerOutcomePayload,
     TournamentPredictionsPayload,
 )
@@ -87,6 +88,43 @@ async def _capture_board(
         )
     except Exception:  # noqa: BLE001 — best-effort; serving must never fail on this
         return
+
+
+@router.get("/archived")
+async def list_archived_boards(
+    board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
+) -> list[ArchivedBoardSummaryPayload]:
+    """Every tournament with a pinned board, newest first — metadata only.
+
+    Backs the Track Record page's event picker. Registered ahead of
+    ``/{tournament_id}`` (a literal path segment must precede a param route —
+    otherwise ``/archived`` is parsed as a tournament id and 422s, which is
+    what happens if this function is moved below ``predict_tournament``;
+    matches the convention in ``tournaments.py``).
+
+    Strictly read-only, like the sibling ``/{tournament_id}/archived``: it
+    creates no snapshot and pins nothing. Reuses the grader's own
+    ``canonical_by_tournament`` selection so a week can never appear here
+    under a snapshot the forward record itself would not have graded.
+
+    No per-player data — no probabilities, no player names — leaves this
+    endpoint. That is what makes it safe to expose publicly (ledger.md §2.8):
+    it is metadata about this project's own capture activity, not DataGolf's
+    per-player numbers.
+    """
+    snapshots = await board_archive.list_all()
+    canonical = canonical_by_tournament(snapshots)
+    ordered = sorted(canonical.values(), key=lambda s: s.tournament_start_date, reverse=True)
+    return [
+        ArchivedBoardSummaryPayload(
+            tournament_id=s.tournament_id,
+            tournament_name=s.tournament_name,
+            tournament_start_date=s.tournament_start_date,
+            source=s.source,
+            out_of_sample=s.is_out_of_sample(date.fromisoformat(s.tournament_start_date)),
+        )
+        for s in ordered
+    ]
 
 
 @router.get("/{tournament_id}")
