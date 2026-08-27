@@ -12,6 +12,7 @@ import {
 import { usePredictions, type PlayerOutcome } from '../lib/api/predictions'
 import { useCurrentTournament, useTournaments } from '../lib/api/tournaments'
 import type { Tournament } from '../lib/api/types'
+import { computeReportCard } from '../lib/reportCard'
 
 function formatPct(p: number): string {
   return `${(p * 100).toFixed(1)}%`
@@ -281,7 +282,9 @@ function downloadBoardCsv(filename: string, rows: PlayerOutcome[]): void {
 // "Reconstructed" for one the backfill rebuilt afterwards. The distinction is
 // the difference between a forward record and a re-run, and it has to reach the
 // reader on the card itself rather than only in the aggregate widget.
-function ProvenanceNote({ board, n }: { board: ArchivedBoard; n: number }) {
+// Exported for reuse by the Track Record page, which shows the same
+// captured-vs-reconstructed + out-of-sample caveat for one standalone week.
+export function ProvenanceNote({ board, n }: { board: ArchivedBoard; n: number }) {
   const captured = board.source === 'captured'
   const when = board.captured_at ? new Date(board.captured_at).toLocaleDateString() : null
   return (
@@ -389,7 +392,8 @@ function BoardProvenance({
 
 // Combined label + value in a single text node on purpose, so the player name
 // never appears as its own element (keeps it out of exact-text test queries).
-function SummaryTile({ label, value }: { label: string; value: string }) {
+// Exported for reuse by the Track Record page's report-card tiles.
+export function SummaryTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border bg-surface px-3 py-2">
       <p className="text-[10px] uppercase tracking-wider text-fg-tertiary">{label}</p>
@@ -588,55 +592,8 @@ export function Leaderboard() {
   }, [predictions])
 
   // Report card: how the PINNED pre-event board compared to the result.
-  //
-  // Built from the ledger snapshot, never from `predictions`. The live endpoint
-  // recomputes with today's active model — for an event inside that model's
-  // training window it is an in-sample score, and labelling it "the pre-event
-  // board" is the defect this replaced. No snapshot means no report card; there
-  // is deliberately no fallback.
-  const reportCard = useMemo(() => {
-    if (!archived?.available || !archived.graded) return null
-    const o = archived.outcomes
-    if (o.length === 0) return null
-    const winner = o.find((x) => x.final_position === 1) ?? null
-    const byWin = [...o].sort((a, b) => b.win_prob - a.win_prob)
-    const winnerRank = winner ? byWin.findIndex((x) => x.player_id === winner.player_id) + 1 : null
-    // The board's own top-20 picks, and how many of them finished top 20. On a
-    // field smaller than 20 every pick is trivially a top-20 finisher, so the
-    // denominator follows the field rather than assuming 20.
-    const top20Picks = Math.min(20, o.length)
-    const boardTop20 = [...o].sort((a, b) => b.top_20_prob - a.top_20_prob).slice(0, top20Picks)
-    const top20Hits = boardTop20.filter(
-      (x) => x.final_position != null && x.final_position <= 20,
-    ).length
-    // What picking `top20Picks` players at random would have returned: each has
-    // a top20Picks/field chance of finishing top 20. Without it, "14 / 20" is a
-    // number with nothing to beat.
-    const top20ByChance = o.length > 0 ? top20Picks * (top20Picks / o.length) : null
-
-    // Make-cut is graded only where the event actually held a cut. On a no-cut
-    // event the backend withholds `made_cut` entirely, so this collapses to
-    // null rather than scoring a question nobody asked.
-    const cutGraded = archived.event_had_a_cut ? o.filter((x) => x.made_cut != null) : []
-    const cutCorrect = cutGraded.filter((x) => (x.make_cut_prob >= 0.5) === x.made_cut).length
-    const cutAcc = cutGraded.length ? cutCorrect / cutGraded.length : null
-    // The rate you get by calling every player the majority outcome.
-    const cutMadeShare = cutGraded.length
-      ? cutGraded.filter((x) => x.made_cut).length / cutGraded.length
-      : null
-    const cutBaseRate = cutMadeShare == null ? null : Math.max(cutMadeShare, 1 - cutMadeShare)
-
-    return {
-      winner,
-      winnerRank,
-      top20Hits,
-      top20Picks,
-      top20ByChance,
-      cutAcc,
-      cutBaseRate,
-      n: o.length,
-    }
-  }, [archived])
+  // Shared with the Track Record page — see `lib/reportCard.ts`.
+  const reportCard = useMemo(() => computeReportCard(archived), [archived])
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">

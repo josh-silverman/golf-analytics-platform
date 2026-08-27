@@ -6,6 +6,7 @@ import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
 import { Players } from './routes/Players'
+import { TrackRecord } from './routes/TrackRecord'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `text-sm transition-colors ${isActive ? 'text-accent font-medium' : 'text-fg-secondary hover:text-fg'}`
@@ -25,6 +26,9 @@ export default function App() {
           <NavLink to="/edge" className={navClass}>
             Market Comparison
           </NavLink>
+          <NavLink to="/track-record" className={navClass}>
+            Track Record
+          </NavLink>
         </div>
       </nav>
 
@@ -35,6 +39,7 @@ export default function App() {
           <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
           <Route path="/edge" element={<ErrorBoundary><BettingEdge /></ErrorBoundary>} />
+          <Route path="/track-record" element={<ErrorBoundary><TrackRecord /></ErrorBoundary>} />
           {/* Removed (e.g. /tournaments) or unknown paths land on the hub. */}
           <Route path="*" element={<Navigate to="/leaderboard" replace />} />
         </Routes>
