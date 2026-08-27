@@ -996,6 +996,7 @@ export function Leaderboard() {
           playerId={selectedPlayerId}
           outcome={drawerOutcome}
           tournamentName={selectedTournament?.name ?? null}
+          board={isCompleted ? (archived?.available ? archived : null) : (predictions ?? null)}
           onClose={() => setSelectedPlayerId(null)}
         />
       )}

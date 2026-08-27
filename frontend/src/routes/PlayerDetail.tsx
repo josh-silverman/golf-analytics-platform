@@ -6,8 +6,9 @@
 import { Link, useParams } from 'react-router'
 
 import { PlayerSGTrends } from '../components/PlayerSGTrends'
+import { sourceLabel } from '../lib/boardSource'
 import { usePlayer, useRecentRounds } from '../lib/api/players'
-import { type TournamentPredictions, usePredictions } from '../lib/api/predictions'
+import { usePredictions } from '../lib/api/predictions'
 import { useCurrentTournament } from '../lib/api/tournaments'
 
 // Same honest emphasis as the leaderboard: Win de-emphasised, Top 20 highlighted.
@@ -23,28 +24,6 @@ const OUTLOOK_MARKETS: { key: ProbKey; label: string; valueClass: string }[] = [
 
 function formatPct(p: number): string {
   return `${(p * 100).toFixed(1)}%`
-}
-
-// "From the active model" was wrong under Path A: most of the field is served
-// DataGolf's own probabilities, not the in-house model, and the registry's
-// active model can differ from what a specific board is actually stamped
-// with (ledger.md §3.1). There is no per-player source recorded, only a
-// board-level count, so this states the board's composition rather than
-// claiming to know this one player's source.
-function sourceLabel(predictions: TournamentPredictions | undefined): string {
-  if (!predictions) return 'Source unknown'
-  const total = predictions.outcomes.length
-  const direct = predictions.dg_direct_count
-  if (direct == null) {
-    return `From ${predictions.model_name}`
-  }
-  if (direct === 0) {
-    return `From ${predictions.model_name} — DataGolf had no coverage this week, so the whole field was cold-started`
-  }
-  if (direct === total) {
-    return 'From DataGolf directly, not the in-house model'
-  }
-  return `Board mixes sources: DataGolf directly for ${direct} of ${total} players, ${predictions.model_name} for the rest — which one covers this player isn't recorded`
 }
 
 export function PlayerDetail() {

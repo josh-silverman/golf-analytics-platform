@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 
+import { sourceLabel, type BoardSource } from '../lib/boardSource'
 import { usePlayer, useRecentRounds } from '../lib/api/players'
 import type { PlayerOutcome } from '../lib/api/predictions'
 import { PlayerSGTrends } from './PlayerSGTrends'
@@ -32,10 +33,21 @@ interface PlayerDrawerProps {
   playerId: number
   outcome: PlayerOutcome | null
   tournamentName: string | null
+  // Whichever board is on screen — the live board for an in-progress event,
+  // the pinned ledger snapshot for a completed one. Passed through from the
+  // leaderboard rather than fetched here; see `sourceLabel` in
+  // `lib/boardSource.ts` for what it's used for.
+  board: BoardSource | null
   onClose: () => void
 }
 
-export function PlayerDrawer({ playerId, outcome, tournamentName, onClose }: PlayerDrawerProps) {
+export function PlayerDrawer({
+  playerId,
+  outcome,
+  tournamentName,
+  board,
+  onClose,
+}: PlayerDrawerProps) {
   const { data: playerEnv, isLoading } = usePlayer(playerId)
   const { data: roundsEnv } = useRecentRounds(playerId)
 
@@ -115,6 +127,7 @@ export function PlayerDrawer({ playerId, outcome, tournamentName, onClose }: Pla
                   </div>
                 ))}
               </div>
+              <p className="text-xs text-fg-tertiary">{sourceLabel(board)}.</p>
             </section>
           )}
 
