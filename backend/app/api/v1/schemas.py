@@ -68,23 +68,6 @@ class PlayerOutcomePayload(BaseModel):
     made_cut: bool | None = None
 
 
-class TrackRecordPayload(BaseModel):
-    """Aggregate predicted-vs-actual accuracy over recent completed events.
-
-    ``available`` is false until the (cached) aggregate has been computed.
-    """
-
-    available: bool
-    events: int = 0
-    players_graded: int = 0
-    winner_in_top10_rate: float = 0.0
-    mean_winner_rank: float = 0.0
-    avg_top20_hit_rate: float = 0.0
-    make_cut_accuracy: float = 0.0
-    model_name: str | None = None
-    model_version_id: str | None = None
-
-
 class ForwardMarketSkillPayload(BaseModel):
     """One market's out-of-sample Brier skill with its block-bootstrap CI.
 
@@ -106,10 +89,10 @@ class ForwardMarketSkillPayload(BaseModel):
 class ForwardTrackRecordPayload(BaseModel):
     """Genuinely out-of-sample accuracy accumulated from captured pre-event boards.
 
-    Distinct from ``TrackRecordPayload``: this grades *only* boards whose model
-    was trained strictly before the event, so it is free of the in-sample risk
-    the active-model report card carries. ``available`` is false until at least
-    one completed, OOS-qualifying board has been captured.
+    Grades *only* boards whose model was trained strictly before the event, so
+    it is free of the in-sample risk an active-model report card would carry.
+    ``available`` is false until at least one completed, OOS-qualifying board
+    has been captured.
     """
 
     available: bool

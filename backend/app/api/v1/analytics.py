@@ -41,7 +41,6 @@ from app.api.v1.schemas import (
     ReliabilityBinPayload,
     SettleEventPayload,
     SettlePayload,
-    TrackRecordPayload,
 )
 from app.config import get_settings
 from app.domain.enums import TournamentStatus
@@ -74,7 +73,6 @@ from app.services.matchup_line_record import (
 )
 from app.services.predictions import PredictionService  # noqa: TC001
 from app.services.settlement_archive import SettlementArchive  # noqa: TC001 — FastAPI DI
-from app.services.track_record import compute_track_record
 
 # A completed OOS event more than this many days before today is old enough that
 # re-checking it every backfill adds cost without value; the forward record is
@@ -90,68 +88,6 @@ _BACKFILL_LOOKBACK_DAYS = 120
 _CAPTURE_LOOKAHEAD_DAYS = 5
 
 router = APIRouter(tags=["analytics"], prefix="/analytics")
-
-# Track record is expensive (a field extraction per event) but only changes when
-# events complete, so cache the aggregate for a week. Computed on first miss.
-_TRACK_RECORD_TTL_S = 604_800  # 7 days
-
-
-@router.get("/track-record")
-async def get_track_record(
-    service: Annotated[PredictionService, Depends(get_prediction_service)],
-    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
-    registry: Annotated[ModelRegistry, Depends(get_model_registry)],
-    events: int = 8,
-) -> TrackRecordPayload:
-    """Aggregate predicted-vs-actual accuracy over the last ``events`` completed
-    tournaments (leakage-free pre-event boards). Cached for a week; the first
-    request computes it.
-    """
-    import contextlib
-    import json
-
-    from app.cache.redis import redis_client
-
-    events = max(1, min(events, 20))
-    name = get_settings().active_model_name
-    active = registry.get_active(name)
-    version = active.version_id if active else None
-    key = f"pga:track_record:{version}:{events}"
-
-    try:
-        raw = await redis_client.get(key)
-    except Exception:  # noqa: BLE001 — cache is best-effort
-        raw = None
-    if raw:
-        return TrackRecordPayload(
-            available=True, model_name=name, model_version_id=version, **json.loads(raw)
-        )
-
-    tr = await compute_track_record(catalog=catalog, service=service, n_events=events)
-    if tr is None:
-        return TrackRecordPayload(available=False, model_name=name, model_version_id=version)
-
-    data = {
-        "events": tr.events,
-        "players_graded": tr.players_graded,
-        "winner_in_top10_rate": tr.winner_in_top10_rate,
-        "mean_winner_rank": tr.mean_winner_rank,
-        "avg_top20_hit_rate": tr.avg_top20_hit_rate,
-        "make_cut_accuracy": tr.make_cut_accuracy,
-    }
-    with contextlib.suppress(Exception):
-        await redis_client.setex(key, _TRACK_RECORD_TTL_S, json.dumps(data))
-    return TrackRecordPayload(
-        available=True,
-        model_name=name,
-        model_version_id=version,
-        events=tr.events,
-        players_graded=tr.players_graded,
-        winner_in_top10_rate=tr.winner_in_top10_rate,
-        mean_winner_rank=tr.mean_winner_rank,
-        avg_top20_hit_rate=tr.avg_top20_hit_rate,
-        make_cut_accuracy=tr.make_cut_accuracy,
-    )
 
 
 def _bin_payload(b: ReliabilityBin) -> ReliabilityBinPayload:
