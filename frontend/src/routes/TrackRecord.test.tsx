@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { ForwardTrackRecord } from '../lib/api/forwardTrackRecord'
 import { TrackRecord } from './TrackRecord'
 
 afterEach(cleanup)
@@ -94,9 +95,94 @@ function boardFixture(overrides: Record<string, unknown> = {}) {
   }
 }
 
+// Mirrors the live record as of 2026-08-20: live captures + backfilled
+// reconstructions, with per-provenance market aggregates and a settling
+// footer still counting down. Reused from the old Leaderboard fixture (see
+// git history) now that the aggregate lives on this page instead.
+const TRACK_RECORD_FIXTURE: ForwardTrackRecord = {
+  available: true,
+  events: 9,
+  players_graded: 1239,
+  events_to_meaningful: 11,
+  events_path_a: 9,
+  events_cold_start_only: 0,
+  events_regime_unknown: 0,
+  events_captured: 2,
+  events_backfilled: 7,
+  players_captured: 303,
+  players_backfilled: 936,
+  markets: [
+    {
+      market: 'make_cut_prob',
+      n: 1171,
+      base_rate: 0.51,
+      brier: 0.2235,
+      brier_skill: 0.106,
+      ci_lower: 0.083,
+      ci_upper: 0.126,
+    },
+  ],
+  markets_captured: [
+    {
+      market: 'make_cut_prob',
+      n: 300,
+      base_rate: 0.503,
+      brier: 0.2237,
+      brier_skill: 0.109,
+      ci_lower: null,
+      ci_upper: null,
+    },
+    // Neither headline market clears in the captured pool yet (both
+    // ci_lower: null) — exercises the "neither" phrasing of conclusiveLine.
+    {
+      market: 'top_20_prob',
+      n: 300,
+      base_rate: 0.14,
+      brier: 0.1,
+      brier_skill: 0.02,
+      ci_lower: null,
+      ci_upper: null,
+    },
+    // win_prob is not a headline market and must not render in the block at
+    // all, even though it's present in the API response.
+    {
+      market: 'win_prob',
+      n: 300,
+      base_rate: 0.008,
+      brier: 0.007,
+      brier_skill: 0.001,
+      ci_lower: null,
+      ci_upper: null,
+    },
+  ],
+  markets_backfilled: [
+    {
+      market: 'make_cut_prob',
+      n: 871,
+      base_rate: 0.512,
+      brier: 0.2234,
+      brier_skill: 0.105,
+      ci_lower: 0.08,
+      ci_upper: 0.13,
+    },
+    // Only make_cut clears here (ci_lower > 0); top_20 does not — exercises
+    // the "only one" phrasing of conclusiveLine.
+    {
+      market: 'top_20_prob',
+      n: 871,
+      base_rate: 0.135,
+      brier: 0.097,
+      brier_skill: 0.03,
+      ci_lower: -0.01,
+      ci_upper: 0.08,
+    },
+  ],
+}
+
 function mockFetch({
   events = EVENTS_FIXTURE as typeof EVENTS_FIXTURE | null,
   board = boardFixture() as Record<string, unknown> | null,
+  trackRecord = null as ForwardTrackRecord | null,
 } = {}) {
   vi.stubGlobal(
     'fetch',
@@ -114,6 +200,12 @@ function mockFetch({
           return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
         }
         return Promise.resolve({ ok: true, status: 200, json: async () => board })
+      }
+      if (url.includes('track-record/forward')) {
+        if (trackRecord == null) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ available: false }) })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => trackRecord })
       }
       return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
     }),
@@ -253,5 +345,152 @@ describe('TrackRecord', () => {
       expect(row.querySelector('[class*="negative"]')).toBeNull()
       expect(row.textContent).not.toMatch(/[✓✔✗✘×]/)
     }
+  })
+
+  // --- overall record (aggregate forward track record) ----------------------
+  // Moved here from the Leaderboard, which now only links to it.
+
+  it('renders both provenance blocks with their own event and player counts', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText('Overall record')).toBeInTheDocument()
+    })
+    // Separate blocks, each with its own event and player count. The
+    // captured n of 2 must be visible, not pooled away.
+    expect(screen.getByText(/Predicted live · 2 events, 303 players graded/i)).toBeInTheDocument()
+    expect(screen.getByText(/Reconstructed · 7 events, 936 players graded/i)).toBeInTheDocument()
+  })
+
+  it('shows only Make cut and Top 20, never the other three markets', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    const section = document.querySelector('section')
+    // Both headline markets appear, once per provenance block.
+    expect(section?.textContent).toMatch(/Make cut/)
+    expect(section?.textContent).toMatch(/Top 20/)
+    // win_prob is present in the fixture's markets_captured but must not
+    // render, nor Top 10 / Top 5.
+    expect(section?.textContent).not.toMatch(/\bWin\b/)
+    expect(section?.textContent).not.toMatch(/Top 10/)
+    expect(section?.textContent).not.toMatch(/Top 5/)
+  })
+
+  it('states which markets are conclusive in one line instead of per-figure flags', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    // Captured pool: neither headline market clears (both ci_lower: null).
+    expect(
+      screen.getByText(/Neither market is conclusive yet at this sample size/i),
+    ).toBeInTheDocument()
+    // Backfilled pool: only Make cut clears.
+    expect(
+      screen.getByText(/Only Make cut is conclusive at this sample size/i),
+    ).toBeInTheDocument()
+    // The old per-figure hedge is gone entirely.
+    expect(screen.queryByText(/\(too early to say\)/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the per-figure baseline tooltip available on hover', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    // The reconstructed block's Make cut figure clears; its tooltip should
+    // explain the threshold even though the visible hedge text is gone.
+    expect(
+      screen.getByTitle(/Ahead of the field-average baseline by more than the week-to-week swing/i),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the live and reconstructed pools visually separate, never pooled', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    // The reconstruction disclaimer states what backfills are, on the
+    // reconstructed block only.
+    expect(
+      screen.getByText(/not a record of what the site showed those weeks/i),
+    ).toBeInTheDocument()
+    // The baseline is named once, above both blocks.
+    expect(
+      screen.getByText(/predicting the field average for every player/i),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the settling footer as a visible line when the target is not yet met', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(/About 11 more completed events to reach this page's 20-event rule-of-thumb/i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('omits the settling footer once the target sample size is met', async () => {
+    mockFetch({ trackRecord: { ...TRACK_RECORD_FIXTURE, events_to_meaningful: 0 } })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    expect(screen.queryByText(/more completed events/i)).not.toBeInTheDocument()
+  })
+
+  it('surfaces the regime caveat as a tooltip, not a visible line', async () => {
+    // 1 real Path A board + 1 cold-start-only + 1 unrecorded: the aggregate
+    // is not measuring a single system, so a marker must appear, but the
+    // full explanation should be on hover only.
+    mockFetch({
+      trackRecord: {
+        ...TRACK_RECORD_FIXTURE,
+        events_path_a: 1,
+        events_cold_start_only: 1,
+        events_regime_unknown: 1,
+      },
+    })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/mixed serving configurations/i)).toBeInTheDocument()
+    })
+    // The full explanation is not printed as its own visible line.
+    expect(screen.queryByText(/pools more than one serving configuration/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByTitle(/1 served cold-start only and 1 of unrecorded coverage out of 3/i),
+    ).toBeInTheDocument()
+  })
+
+  it('omits the regime marker entirely when every graded board ran one regime', async () => {
+    mockFetch({
+      trackRecord: { ...TRACK_RECORD_FIXTURE, events_path_a: 9, events_cold_start_only: 0, events_regime_unknown: 0 },
+    })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    expect(screen.queryByText(/mixed serving configurations/i)).not.toBeInTheDocument()
+  })
+
+  it('omits the overall record section entirely when the record is unavailable', async () => {
+    mockFetch()
+    renderTrackRecord(makeClient())
+    // The per-week view still loads normally.
+    await waitFor(() => {
+      expect(screen.getByText(/Tiger Chip · board #1 by win%/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Overall record')).not.toBeInTheDocument()
+  })
+
+  it('renders the per-week report card above the overall record, unchanged', async () => {
+    mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Tiger Chip · board #1 by win%/i)).toBeInTheDocument()
+    })
+    await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
+    // The per-week winner tile still appears earlier in the document than
+    // the aggregate section, so the headline view is not displaced.
+    const winnerText = screen.getByText(/Tiger Chip · board #1 by win%/i)
+    const overallHeading = screen.getByText('Overall record')
+    expect(
+      winnerText.compareDocumentPosition(overallHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 })

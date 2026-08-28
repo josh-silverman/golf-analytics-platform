@@ -13,6 +13,18 @@ import { useSearchParams } from 'react-router'
 import { TopPicksTable } from '../components/TopPicksTable'
 import { useArchivedBoard } from '../lib/api/archivedBoard'
 import { useArchivedBoardList } from '../lib/api/archivedBoardList'
+import { useForwardTrackRecord } from '../lib/api/forwardTrackRecord'
+import {
+  CLEARS_TOOLTIP,
+  conclusiveLine,
+  formatSkill,
+  headlineSkillMarkets,
+  MARKET_LABELS,
+  provenanceBlocks,
+  regimeCaveat,
+  settlingFooter,
+  TOO_EARLY_TOOLTIP,
+} from '../lib/forwardRecord'
 import { computeReportCard } from '../lib/reportCard'
 import { ProvenanceNote, SummaryTile } from './Leaderboard'
 
@@ -31,6 +43,7 @@ function formatEventLabel(name: string, startDate: string): string {
 
 export function TrackRecord() {
   const { data: events, isLoading: eventsLoading, isError: eventsError } = useArchivedBoardList()
+  const { data: trackRecord } = useForwardTrackRecord()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Selected week: an explicit pick overrides; otherwise the most recent
@@ -151,6 +164,61 @@ export function TrackRecord() {
             </div>
           )}
         </>
+      )}
+
+      {trackRecord?.available && trackRecord.markets.length > 0 && (
+        <section className="space-y-3 border-t border-border/70 pt-6">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-medium text-fg">Overall record</h2>
+            {regimeCaveat(trackRecord) && (
+              <span
+                className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning"
+                title={regimeCaveat(trackRecord) ?? undefined}
+              >
+                mixed serving configurations
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-fg-tertiary">
+            Every figure compares the served board against one reference: predicting the field
+            average for every player.
+          </p>
+          <div className="space-y-3">
+            {provenanceBlocks(trackRecord).map((b) => {
+              const shown = headlineSkillMarkets(b.markets)
+              return (
+                <div key={b.title} className="text-xs text-fg-secondary">
+                  <p className="font-medium text-fg">
+                    {b.title} · {b.events} event{b.events === 1 ? '' : 's'}, {b.players} players graded
+                  </p>
+                  {shown.length > 0 && (
+                    <>
+                      <p className="mt-0.5">
+                        {shown.map((m, i) => (
+                          <span key={m.market} className="text-fg-tertiary">
+                            {i > 0 && ' · '}
+                            {MARKET_LABELS[m.market]}{' '}
+                            <span
+                              className={`font-mono ${m.clearsBaseline ? 'text-accent' : 'text-fg-tertiary'}`}
+                              title={m.clearsBaseline ? CLEARS_TOOLTIP : TOO_EARLY_TOOLTIP}
+                            >
+                              {formatSkill(m.brier_skill)}
+                            </span>
+                          </span>
+                        ))}
+                      </p>
+                      <p className="mt-0.5 text-fg-tertiary">{conclusiveLine(shown)}</p>
+                    </>
+                  )}
+                  {b.note && <p className="mt-0.5 text-fg-tertiary">{b.note}</p>}
+                </div>
+              )
+            })}
+          </div>
+          {settlingFooter(trackRecord) && (
+            <p className="text-xs text-fg-tertiary">{settlingFooter(trackRecord)}</p>
+          )}
+        </section>
       )}
     </main>
   )
