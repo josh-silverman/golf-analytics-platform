@@ -445,14 +445,11 @@ export function BettingEdge() {
             {new Date(currentTournament.start_date).toLocaleDateString()}
           </p>
         )}
-        <p className="mt-2 text-xs leading-relaxed text-fg-tertiary">
-          Where the served board diverges from the market — board probabilities vs. book-implied
-          odds for the current field. This page reports the disagreement and stops there: nothing
-          here grades whether these disagreements were ever right, so none of it is a
-          recommendation. Under Path A most players are served DataGolf&rsquo;s own probabilities,
-          so when the odds side is also a live DataGolf consensus, the divergence below is DataGolf
-          against its own feed, not the in-house model against an independent market — the coverage
-          note under the market picker states which case applies.
+        <p className="mt-2 text-sm text-fg-secondary">
+          Board probabilities against book-implied odds for the current field.
+        </p>
+        <p className="mt-1 text-xs text-fg-tertiary">
+          Reports the disagreement only. Nothing here is graded, so none of it is a recommendation.
         </p>
         {board && (
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-fg-tertiary">
@@ -486,6 +483,16 @@ export function BettingEdge() {
           <section className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">Market</p>
             <MarketPicker value={outcomeKey} onChange={setOutcomeKey} />
+            {/* Path A caveat: this changes how every row below should be read
+                (a real comparison vs. DataGolf checked against itself), so it
+                stays as visible text next to the picker rather than a tooltip.
+                The reliability note just below states, per market, which case
+                actually applies. */}
+            <p className="text-[11px] italic text-fg-tertiary">
+              Under Path A, board probabilities are usually DataGolf&rsquo;s own numbers. If the odds
+              are also a DataGolf consensus, the divergence below is DataGolf against its own feed,
+              not an independent comparison.
+            </p>
           </section>
 
           {/* Honest reliability caveat — this page reports a divergence between

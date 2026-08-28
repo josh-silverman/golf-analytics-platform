@@ -291,9 +291,22 @@ describe('BettingEdge', () => {
     await waitFor(() => expect(screen.getAllByText('Rory Birdie').length).toBeGreaterThan(0))
     // The old copy asserted "Where the model diverges from the market" as fact.
     expect(screen.queryByText(/Where the model diverges from the market/i)).not.toBeInTheDocument()
-    expect(screen.getByText(/Where the served board diverges from the market/i)).toBeInTheDocument()
+    // The opening line states what the page shows, not who made which side of it.
     expect(
-      screen.getByText(/DataGolf against its own feed, not the in-house model/i),
+      screen.getByText(/Board probabilities against book-implied odds for the current field/i),
+    ).toBeInTheDocument()
+    // The Path A attribution survives, condensed, next to the market picker.
+    expect(
+      screen.getByText(/DataGolf against its own feed, not an independent comparison/i),
+    ).toBeInTheDocument()
+  })
+
+  it('states the page is not a recommendation, near the opening line', async () => {
+    mockFetch()
+    renderEdge(makeClient())
+    await waitFor(() => expect(screen.getAllByText('Rory Birdie').length).toBeGreaterThan(0))
+    expect(
+      screen.getByText(/Nothing here is graded, so none of it is a recommendation/i),
     ).toBeInTheDocument()
   })
 
