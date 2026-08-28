@@ -1,16 +1,5 @@
 import { Link } from 'react-router'
 
-import { useHealthz } from '../lib/api/health'
-import { useCurrentTournament } from '../lib/api/tournaments'
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  })
-}
-
 interface FeatureCardProps {
   to: string
   category: string
@@ -40,9 +29,6 @@ function FeatureCard({ to, category, title, description, badge }: FeatureCardPro
 }
 
 export function Home() {
-  const { data: health, isLoading: healthLoading, isError: healthError } = useHealthz()
-  const { data: currentTournament, isLoading: tournamentLoading } = useCurrentTournament()
-
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-6 py-12">
       {/* ------------------------------------------------------------------ */}
@@ -58,38 +44,6 @@ export function Home() {
           predictions are graded publicly against what actually happened.
         </p>
       </header>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Current tournament                                                  */}
-      {/* ------------------------------------------------------------------ */}
-      <section className="rounded-lg border bg-surface p-5">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-          Current Event
-        </p>
-        {tournamentLoading && <p className="text-fg-secondary text-sm">Loading…</p>}
-        {currentTournament && (
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-base font-medium text-fg">{currentTournament.name}</p>
-              <p className="mt-0.5 text-sm text-fg-secondary">
-                {formatDate(currentTournament.start_date)} –{' '}
-                {formatDate(currentTournament.end_date)}
-              </p>
-              {currentTournament.purse && (
-                <p className="mt-0.5 text-xs text-fg-tertiary">
-                  Purse: ${(currentTournament.purse / 1_000_000).toFixed(1)}M
-                </p>
-              )}
-            </div>
-            <span className="shrink-0 rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold capitalize text-accent">
-              {currentTournament.status.replace('_', ' ')}
-            </span>
-          </div>
-        )}
-        {!tournamentLoading && currentTournament == null && (
-          <p className="text-sm text-fg-secondary">No active tournament</p>
-        )}
-      </section>
 
       {/* ------------------------------------------------------------------ */}
       {/* Feature grid                                                        */}
@@ -109,26 +63,13 @@ export function Home() {
             title="Market Comparison"
             description="Where the served board diverges from the market — board probabilities vs. book-implied odds for the current event. The disagreement is reported and nothing more is claimed of it. Filter by minimum probability; per-market odds coverage is shown on the page."
           />
+          <FeatureCard
+            to="/track-record"
+            category="History"
+            title="Track Record"
+            description="Browse past tournaments one week at a time and see how that week's predictions performed against the field. Pinned before results were known; nothing here is graded after the fact."
+          />
         </div>
-      </section>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Backend health                                                      */}
-      {/* ------------------------------------------------------------------ */}
-      <section className="flex items-center justify-between rounded-lg border bg-surface px-5 py-3">
-        <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-          Backend health
-        </p>
-        {healthLoading && <p className="text-xs text-fg-secondary">Checking…</p>}
-        {healthError && (
-          <p className="text-xs font-mono text-negative">Backend unreachable</p>
-        )}
-        {health && (
-          <p className="font-mono text-xs">
-            <span className="text-positive">●</span>{' '}
-            <span className="text-fg">{health.status}</span>
-          </p>
-        )}
       </section>
     </main>
   )
