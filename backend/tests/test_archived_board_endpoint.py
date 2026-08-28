@@ -333,10 +333,20 @@ async def test_collapses_several_snapshots_of_one_event_to_the_canonical_row(ctx
     beats backfilled, even when a retrain left several snapshots behind."""
     client, boards, _, _ = ctx
     await boards.persist(
-        _board(1, source="backfilled", model_version_id="v3", captured_at="2026-05-30T00:00:00+00:00")
+        _board(
+            1,
+            source="backfilled",
+            model_version_id="v3",
+            captured_at="2026-05-30T00:00:00+00:00",
+        )
     )
     await boards.persist(
-        _board(1, source="captured", model_version_id="path_a@v2", captured_at="2026-05-31T12:00:00+00:00")
+        _board(
+            1,
+            source="captured",
+            model_version_id="path_a@v2",
+            captured_at="2026-05-31T12:00:00+00:00",
+        )
     )
 
     body = client.get(_list_url()).json()
