@@ -52,6 +52,6 @@ describe('Home', () => {
   it('does not attribute Betting Edge to "the model" unqualified', () => {
     renderHome(makeClient())
     expect(screen.queryByText(/^Model probabilities/)).not.toBeInTheDocument()
-    expect(screen.getByText(/Where the served board diverges from the market/i)).toBeInTheDocument()
+    expect(screen.getByText(/Board probabilities against book-implied odds/i)).toBeInTheDocument()
   })
 })

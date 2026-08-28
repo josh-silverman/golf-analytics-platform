@@ -40,8 +40,8 @@ export function Home() {
         <p className="max-w-xl text-fg-secondary">
           Calibrated win / top-5 / top-10 / top-20 / make-cut probabilities for the full field
           of the current PGA Tour event. Most players are priced directly from DataGolf; an
-          in-house model fills the players DataGolf doesn&rsquo;t cover. Every week&rsquo;s
-          predictions are graded publicly against what actually happened.
+          in-house model fills the rest. Every week&rsquo;s predictions are graded publicly
+          against what actually happened.
         </p>
       </header>
 
@@ -61,13 +61,13 @@ export function Home() {
             to="/edge"
             category="Research"
             title="Market Comparison"
-            description="Where the served board diverges from the market — board probabilities vs. book-implied odds for the current event. The disagreement is reported and nothing more is claimed of it. Filter by minimum probability; per-market odds coverage is shown on the page."
+            description="Board probabilities against book-implied odds for the current field. The disagreement is reported and nothing more is claimed of it. Filter by minimum probability; per-market odds coverage is shown on the page."
           />
           <FeatureCard
             to="/track-record"
             category="History"
             title="Track Record"
-            description="Browse past tournaments one week at a time and see how that week's predictions performed against the field. Pinned before results were known; nothing here is graded after the fact."
+            description="Browse past tournaments one week at a time. Every board was pinned before results were known, so nothing shown here was picked with hindsight."
           />
         </div>
       </section>
