@@ -6,5 +6,14 @@ prediction_boards/
 # Forward matchup-line archive — weekly pre-event odds captures, runtime data.
 matchup_boards/
 
+# Immutable per-tournament settlement records — runtime data, pinned at grade time.
+settlements/
+
+# Pre-event outright-market archive — weekly book-price captures, runtime data.
+closing_lines/
+
 # One-off analyst scripts' JSON dumps — regenerated per run, not committed.
 scripts/output/
+
+# Redis snapshot from a locally run redis-server — never source.
+dump.rdb
