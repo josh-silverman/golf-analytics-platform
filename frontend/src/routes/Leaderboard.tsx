@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
 import { type ArchivedBoard, useArchivedBoard } from '../lib/api/archivedBoard'
@@ -22,6 +22,31 @@ function formatFinish(o: PlayerOutcome): string {
   if (o.final_position != null) return `${o.final_position}`
   if (o.made_cut === false) return 'MC'
   return '—'
+}
+
+// Ceiling for the Sleeper tile: a player must have Win probability below
+// this to be eligible, so the tile only ever surfaces someone the board
+// doesn't expect to win outright. (A gap-based rule — largest Top 20 minus
+// Win — was tried first and rejected: that's maximized by near-locks, since
+// nothing beats a small Win probability subtracted from a huge Top 20 one,
+// so it surfaced the field's strongest player instead of a sleeper.)
+const SLEEPER_MAX_WIN = 0.05
+
+// The highest Top 20 probability among players below SLEEPER_MAX_WIN Win —
+// someone the board thinks will contend but isn't a realistic winner.
+// Returns null when nobody clears the ceiling (every player has some real
+// win equity) rather than surfacing a longshot. Ties go to whoever comes
+// first in the board's own order (strict `>`), the same tie-break
+// `fieldSummary` has always used for its other picks.
+function sleeperPick(outcomes: PlayerOutcome[]): PlayerOutcome | null {
+  let best: PlayerOutcome | null = null
+  for (const o of outcomes) {
+    if (o.win_prob >= SLEEPER_MAX_WIN) continue
+    if (best == null || o.top_20_prob > best.top_20_prob) {
+      best = o
+    }
+  }
+  return best
 }
 
 type SortKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
@@ -67,9 +92,11 @@ function orderedSkillMarkets(markets: ForwardMarketSkill[]): DisplayMarketSkill[
     .map((m) => ({ ...m, clearsBaseline: m.ci_lower != null && m.ci_lower > 0 }))
 }
 
-const CLEARS_TOOLTIP =
+// Retained for the planned Track Record aggregate view; see the comment on
+// `rankingHint` below.
+export const CLEARS_TOOLTIP =
   'Ahead of the field-average baseline by more than the week-to-week swing in this record: the 90% range across events stays above zero.'
-const TOO_EARLY_TOOLTIP =
+export const TOO_EARLY_TOOLTIP =
   'The lead over the field-average baseline is smaller than the week-to-week swing so far, or there are too few events to measure the swing.'
 
 function joinNames(names: string[]): string {
@@ -77,32 +104,38 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
-// One-line summary. Leads with what the record is (how many events, how they
-// were obtained), then what it shows. "The served board" rather than "the
-// model": under Path A most covered players are served DataGolf's own
-// probabilities, so these are not the in-house model's numbers.
+// One-line summary for the Leaderboard header, linking out to the full
+// per-week record on the Track Record page. Leads with the graded count and
+// the live/reconstructed split (never presents a pooled figure as a live
+// record — see docs/ledger.md §"captured and backfilled stay distinguishable"),
+// then names which markets currently clear the field-average baseline.
 function summarizeTrackRecord(tr: ForwardTrackRecord, markets: DisplayMarketSkill[]): string {
   const captured = tr.events_captured ?? 0
   const backfilled = tr.events_backfilled ?? 0
-  const eventWord = `${tr.events} completed event${tr.events === 1 ? '' : 's'}`
+  const eventWord = `${tr.events} event${tr.events === 1 ? '' : 's'}`
   const opening =
     captured + backfilled === tr.events && tr.events > 0
-      ? `${eventWord} graded: ${captured} recorded live before play, ${backfilled} reconstructed afterwards.`
+      ? `${eventWord} graded, ${captured} predicted live and ${backfilled} reconstructed.`
       : `${eventWord} graded.`
   const clears = markets.filter((m) => m.clearsBaseline).map((m) => MARKET_LABELS[m.market])
   if (clears.length === 0) {
-    return `${opening} Too early to say whether the served board beats the field-average baseline on any market.`
+    return `${opening} Too early to say whether the board beats the field-average baseline.`
   }
-  return `${opening} The served board is ahead of the field-average baseline on ${joinNames(clears)}.`
+  return `${opening} Ahead of the field-average baseline on ${joinNames(clears)}.`
 }
 
+// Retained for the planned Track Record aggregate view (the forward-record
+// block this fed was removed from the Leaderboard; see plan
+// context-the-leaderboard-page-composed-pearl.md). Exported so
+// `noUnusedLocals` doesn't fail the build while it's between homes.
+//
 // "How to read this board" used to assert Top 20 was "the market where the
 // board is most reliable" unconditionally, directly above a widget that can
 // itself be saying "too early to say" about that same market. This derives
 // the claim from the same clearsBaseline signal the widget uses, so the two
 // can never disagree — when neither market has cleared yet, this says so
 // instead of repeating a claim the widget next to it is actively hedging.
-function rankingHint(tr: ForwardTrackRecord | undefined): string {
+export function rankingHint(tr: ForwardTrackRecord | undefined): string {
   if (!tr?.available || tr.markets.length === 0) {
     return 'ranked by Top 20 and Make Cut, the widest markets on the board, while the live record above builds up'
   }
@@ -130,7 +163,10 @@ function rankingHint(tr: ForwardTrackRecord | undefined): string {
 // `_MEANINGFUL_EVENTS = 20` is a chosen rule of thumb for a sample worth
 // reading, not a calculated significance threshold, and "settle" implied a
 // statistical claim the number doesn't back.
-function settlingFooter(tr: ForwardTrackRecord): string | null {
+//
+// Retained for the planned Track Record aggregate view; see the comment on
+// `rankingHint` above.
+export function settlingFooter(tr: ForwardTrackRecord): string | null {
   const target = tr.events + tr.events_to_meaningful
   const captured = tr.events_captured ?? 0
   const liveMore = Math.max(0, target - captured)
@@ -150,7 +186,10 @@ function settlingFooter(tr: ForwardTrackRecord): string | null {
 // The two provenances render as separate blocks with their own n. Falls back
 // to a single pooled block against an older backend that doesn't report the
 // split, so a deploy-order skew never blanks the widget.
-type ProvenanceBlockData = {
+//
+// Retained for the planned Track Record aggregate view; see the comment on
+// `rankingHint` above.
+export type ProvenanceBlockData = {
   title: string
   events: number
   players: number
@@ -158,7 +197,7 @@ type ProvenanceBlockData = {
   note: string
 }
 
-function provenanceBlocks(tr: ForwardTrackRecord): ProvenanceBlockData[] {
+export function provenanceBlocks(tr: ForwardTrackRecord): ProvenanceBlockData[] {
   const blocks: ProvenanceBlockData[] = []
   const captured = tr.markets_captured ?? []
   const backfilled = tr.markets_backfilled ?? []
@@ -204,7 +243,10 @@ function provenanceBlocks(tr: ForwardTrackRecord): ProvenanceBlockData[] {
 // graded set mixes regimes the aggregate is not measuring one system. Say so
 // rather than let the headline number imply otherwise. Returns null when every
 // graded board came from the same regime, which is the normal case over time.
-function regimeCaveat(tr: ForwardTrackRecord): string | null {
+//
+// Retained for the planned Track Record aggregate view; see the comment on
+// `rankingHint` above.
+export function regimeCaveat(tr: ForwardTrackRecord): string | null {
   const pathA = tr.events_path_a ?? 0
   const cold = tr.events_cold_start_only ?? 0
   const unknown = tr.events_regime_unknown ?? 0
@@ -215,7 +257,9 @@ function regimeCaveat(tr: ForwardTrackRecord): string | null {
   return `Includes ${parts.join(' and ')} out of ${pathA + cold + unknown}, so this pools more than one serving configuration.`
 }
 
-function formatSkill(skill: number): string {
+// Retained for the planned Track Record aggregate view; see the comment on
+// `rankingHint` below.
+export function formatSkill(skill: number): string {
   const sign = skill >= 0 ? '+' : ''
   return `${sign}${(skill * 100).toFixed(1)}%`
 }
@@ -309,95 +353,75 @@ export function ProvenanceNote({ board, n }: { board: ArchivedBoard; n: number }
   )
 }
 
-// Serving provenance for the board on screen (H6). `model_version_id` reads
-// "path_a@<id>" as soon as Path A is CONFIGURED, before any DataGolf call
-// happens — so a board that cold-started the entire field is stamped
-// identically to a healthy one. `dg_direct_count` is what actually tells
-// them apart, and it was already being computed and simply discarded before
-// this fix. Deliberately does not read `status.model_version_id` as "the
-// model that made this board" — that field is the registry's active model,
-// which can differ from what a specific board is stamped with (ledger.md
-// §3.1); the two are shown side by side, not merged.
-function BoardProvenance({
-  status,
-  boardModelVersionId,
-  dgDirectCount,
-  dgFetchStatus,
-  fieldSize,
-}: {
-  status: Status | undefined
-  boardModelVersionId: string | null
-  dgDirectCount: number | null
-  dgFetchStatus: string | null
-  fieldSize: number
-}) {
+// Plain-language coverage tile content for the board on screen (H6).
+// `model_version_id` reads "path_a@<id>" as soon as Path A is CONFIGURED,
+// before any DataGolf call happens — so a board that cold-started the entire
+// field is stamped identically to a healthy one. `dg_direct_count` is what
+// actually tells them apart. Returns null when there's nothing to show
+// (status unreachable), so the tile is omitted rather than guessed at.
+function coverageTile(
+  status: Status | undefined,
+  dgDirectCount: number | null,
+  dgFetchStatus: string | null,
+  fieldSize: number,
+): { value: string; title: string } | null {
   if (!status) return null
 
   const isPathA = status.serving_strategy === 'path_a'
 
-  let badge: { label: string; cls: string }
-  let note: string
   if (!isPathA) {
-    badge = { label: status.serving_strategy, cls: 'bg-fg-tertiary/15 text-fg-tertiary' }
-    note = `Serving strategy is "${status.serving_strategy}", not Path A: every player on this board is scored by the in-house model, so DataGolf direct-coverage does not apply.`
-  } else if (dgDirectCount == null) {
-    badge = { label: 'Path A · coverage unknown', cls: 'bg-warning/15 text-warning' }
-    note = 'Path A is configured, but this board does not report how many players were priced by DataGolf directly — a fully cold-started board would look identical to a healthy one here.'
-  } else if (dgDirectCount === 0) {
+    return {
+      value: 'In-house model, all players',
+      title: `Serving strategy is "${status.serving_strategy}", not Path A: every player on this board is scored by the in-house model, so DataGolf direct-coverage does not apply.`,
+    }
+  }
+  if (dgDirectCount == null) {
+    return {
+      value: 'Coverage not recorded',
+      title: 'Path A is configured, but this board does not report how many players were priced by DataGolf directly — a fully cold-started board would look identical to a healthy one here.',
+    }
+  }
+  if (dgDirectCount === 0) {
     // NO_COVERAGE means the fetch worked and DataGolf genuinely had nothing —
     // a real cold start. Anything else (FETCH_FAILED, an unexpected OK paired
     // with a zero count, or a null/NOT_ATTEMPTED status) is a broken or
     // unusual fetch producing the same zero, which needs the opposite reaction.
     const legitimateColdStart = dgFetchStatus === 'no_coverage'
-    badge = {
-      label: legitimateColdStart ? 'Path A · cold-started (no coverage)' : 'Path A · fetch problem',
-      cls: 'bg-negative/15 text-negative',
+    return {
+      value: legitimateColdStart
+        ? 'No DataGolf prices, in-house model only'
+        : 'DataGolf prices unavailable, in-house model only',
+      title: legitimateColdStart
+        ? 'DataGolf answered but had nothing for this field, so the in-house model cold-started every player. A legitimate result, not a fetch failure.'
+        : `DataGolf's fetch did not produce usable data for this event (status: ${dgFetchStatus ?? 'unknown'}), so this board cold-started every player — a degraded result, not a clean cold start.`,
     }
-    note = legitimateColdStart
-      ? 'DataGolf answered but had nothing for this field, so the in-house model cold-started every player. A legitimate result, not a fetch failure.'
-      : `DataGolf's fetch did not produce usable data for this event (status: ${dgFetchStatus ?? 'unknown'}), so this board cold-started every player — a degraded result, not a clean cold start.`
-  } else {
-    badge = {
-      label: `Path A · ${dgDirectCount}/${fieldSize} direct`,
-      cls: 'bg-accent/15 text-accent',
-    }
-    note = `${dgDirectCount} of ${fieldSize} players on this board were priced directly by DataGolf; the remaining ${fieldSize - dgDirectCount} cold-started the in-house model.`
   }
-
-  const registryLabel = status.model_version_id
-    ? `${status.model_name} (${status.model_version_id})`
-    : `${status.model_name} (no active version)`
-  const differs =
-    boardModelVersionId != null &&
-    status.model_version_id != null &&
-    boardModelVersionId !== status.model_version_id
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-xs text-fg-tertiary">
-      <span
-        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.cls}`}
-        title={note}
-      >
-        {badge.label}
-      </span>
-      <span>
-        Registry-active model: <span className="font-mono">{registryLabel}</span>
-        {differs
-          ? ` — this board is stamped ${boardModelVersionId}, a different id; the two need not match.`
-          : '.'}
-      </span>
-    </div>
-  )
+  return {
+    value: `${dgDirectCount} of ${fieldSize} priced by DataGolf`,
+    title: `${dgDirectCount} of ${fieldSize} players on this board were priced directly by DataGolf; the remaining ${fieldSize - dgDirectCount} cold-started the in-house model.`,
+  }
 }
 
 // Combined label + value in a single text node on purpose, so the player name
 // never appears as its own element (keeps it out of exact-text test queries).
-// Exported for reuse by the Track Record page's report-card tiles.
-export function SummaryTile({ label, value }: { label: string; value: string }) {
+// Exported for reuse by the Track Record page's report-card tiles. `title`
+// is an optional tooltip on the value, used by the Leaderboard's Coverage
+// tile to keep its longer explanation out of the headline text.
+export function SummaryTile({
+  label,
+  value,
+  title,
+}: {
+  label: string
+  value: string
+  title?: string
+}) {
   return (
     <div className="rounded-lg border bg-surface px-3 py-2">
       <p className="text-[10px] uppercase tracking-wider text-fg-tertiary">{label}</p>
-      <p className="mt-0.5 truncate text-sm text-fg">{value}</p>
+      <p className="mt-0.5 truncate text-sm text-fg" title={title}>
+        {value}
+      </p>
     </div>
   )
 }
@@ -499,21 +523,14 @@ export function Leaderboard() {
 
   const boardLoading = isCompleted ? archivedLoading : predictionsLoading
 
-  // Serving provenance for whichever board is on screen: the pinned board's
+  // DataGolf coverage for whichever board is on screen: the pinned board's
   // own fields for a completed event, the live board's for anything else.
-  // `model_version_id` here is the board's own stamp, which is deliberately
-  // NOT the same field as `status.model_version_id` — see BoardProvenance.
-  const boardProvenance = isCompleted
-    ? {
-        modelVersionId: archived?.model_version_id ?? null,
-        dgDirectCount: archived?.dg_direct_count ?? null,
-        dgFetchStatus: archived?.dg_fetch_status ?? null,
-      }
-    : {
-        modelVersionId: predictions?.model_version_id ?? null,
-        dgDirectCount: predictions?.dg_direct_count ?? null,
-        dgFetchStatus: predictions?.dg_fetch_status ?? null,
-      }
+  const dgDirectCount = isCompleted
+    ? (archived?.dg_direct_count ?? null)
+    : (predictions?.dg_direct_count ?? null)
+  const dgFetchStatus = isCompleted
+    ? (archived?.dg_fetch_status ?? null)
+    : (predictions?.dg_fetch_status ?? null)
 
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const s = searchParams.get('sort') as SortKey | null
@@ -577,23 +594,27 @@ export function Leaderboard() {
 
   const drawerOutcome = boardOutcomes?.find((o) => o.player_id === selectedPlayerId) ?? null
 
-  // At-a-glance leaders for a live event. Completed events show the report card
-  // in this slot instead, so this deliberately reads the live board only.
+  // At-a-glance field summary for a live event. Completed events show the
+  // report card in this slot instead, so this deliberately reads the live
+  // board only.
   const fieldSummary = useMemo(() => {
     const o = predictions?.outcomes ?? []
     if (o.length === 0) return null
-    const top = (k: SortKey) => o.reduce((best, c) => (c[k] > best[k] ? c : best), o[0])
-    return {
-      favorite: top('win_prob'),
-      contender: top('top_20_prob'),
-      safestCut: top('make_cut_prob'),
-      size: o.length,
-    }
+    return { sleeper: sleeperPick(o), size: o.length }
   }, [predictions])
 
   // Report card: how the PINNED pre-event board compared to the result.
   // Shared with the Track Record page — see `lib/reportCard.ts`.
   const reportCard = useMemo(() => computeReportCard(archived), [archived])
+
+  // Coverage tile content for whichever board is on screen.
+  const coverage = useMemo(
+    () =>
+      boardOutcomes
+        ? coverageTile(status, dgDirectCount, dgFetchStatus, boardOutcomes.length)
+        : null,
+    [status, dgDirectCount, dgFetchStatus, boardOutcomes],
+  )
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
@@ -645,55 +666,13 @@ export function Leaderboard() {
           </p>
         )}
 
-        {boardOutcomes && (
-          <BoardProvenance
-            status={status}
-            boardModelVersionId={boardProvenance.modelVersionId}
-            dgDirectCount={boardProvenance.dgDirectCount}
-            dgFetchStatus={boardProvenance.dgFetchStatus}
-            fieldSize={boardOutcomes.length}
-          />
-        )}
-
         {trackRecord?.available && trackRecord.markets.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs text-fg-secondary">
-              <span className="font-medium">Forward out-of-sample track record.</span>{' '}
-              {summarizeTrackRecord(trackRecord, orderedSkillMarkets(trackRecord.markets))}
-            </p>
-            <p className="text-xs text-fg-tertiary">
-              Every figure below compares the served board against one reference: predicting the
-              field average for every player.
-            </p>
-            {provenanceBlocks(trackRecord).map((b) => (
-              <div key={b.title} className="text-xs text-fg-tertiary">
-                <span className="font-medium text-fg-secondary">
-                  {b.title} · {b.events} event{b.events === 1 ? '' : 's'}, {b.players} players
-                  graded:
-                </span>{' '}
-                {orderedSkillMarkets(b.markets).map((m, i) => (
-                  <span key={m.market}>
-                    {i > 0 && '· '}
-                    {MARKET_LABELS[m.market]}{' '}
-                    <span
-                      className={`font-mono ${m.clearsBaseline ? 'text-accent' : 'text-fg-tertiary'}`}
-                      title={m.clearsBaseline ? CLEARS_TOOLTIP : TOO_EARLY_TOOLTIP}
-                    >
-                      {formatSkill(m.brier_skill)}
-                    </span>
-                    {!m.clearsBaseline && <span className="italic"> (too early to say)</span>}{' '}
-                  </span>
-                ))}
-                {b.note && <span className="italic">{b.note}</span>}
-              </div>
-            ))}
-            {regimeCaveat(trackRecord) && (
-              <p className="text-xs italic text-fg-tertiary">{regimeCaveat(trackRecord)}</p>
-            )}
-            {settlingFooter(trackRecord) && (
-              <p className="text-xs text-fg-tertiary">{settlingFooter(trackRecord)}</p>
-            )}
-          </div>
+          <p className="text-xs text-fg-secondary">
+            {summarizeTrackRecord(trackRecord, orderedSkillMarkets(trackRecord.markets))}{' '}
+            <Link to="/track-record" className="font-medium text-accent hover:underline">
+              See the full record →
+            </Link>
+          </p>
         )}
       </header>
 
@@ -755,22 +734,6 @@ export function Leaderboard() {
 
       {boardOutcomes && boardOutcomes.length > 0 && (
         <>
-          {/* How to read this board — the ranking claim is derived from the same
-              clearsBaseline signal the record widget above uses, so the two
-              cannot disagree about which markets are currently ahead. */}
-          <div className="rounded-lg border border-border/70 bg-surface px-4 py-3 text-xs leading-relaxed text-fg-secondary">
-            <p className="font-medium text-fg">How to read this board</p>
-            <ul className="mt-1.5 list-disc space-y-1 pl-4 marker:text-fg-tertiary">
-              <li>Players are {rankingHint(trackRecord)}.</li>
-              <li>
-                <span className="text-fg">Win</span> is intentionally de-emphasised: the board reads
-                overall contention well but does not reliably single out one winner. Weigh a
-                player&rsquo;s chances by Top 10 / Top 20 / Make Cut rather than the Win column.
-              </li>
-              <li>Click any column header to re-sort, or a player to view their strokes-gained trends.</li>
-            </ul>
-          </div>
-
           {/* Completed event → report card from the same pinned board the table
               below renders; otherwise field at-a-glance. */}
           {isCompleted && reportCard && archived ? (
@@ -807,20 +770,15 @@ export function Leaderboard() {
             </div>
           ) : (
             fieldSummary && (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <SummaryTile
-                  label="Favorite"
-                  value={`${fieldSummary.favorite.player_name} · ${formatPct(fieldSummary.favorite.win_prob)}`}
-                />
-                <SummaryTile
-                  label="Top contender"
-                  value={`${fieldSummary.contender.player_name} · ${formatPct(fieldSummary.contender.top_20_prob)}`}
-                />
-                <SummaryTile
-                  label="Safest cut"
-                  value={`${fieldSummary.safestCut.player_name} · ${formatPct(fieldSummary.safestCut.make_cut_prob)}`}
-                />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <SummaryTile label="Field" value={`${fieldSummary.size} players`} />
+                {fieldSummary.sleeper && (
+                  <SummaryTile
+                    label="Sleeper"
+                    value={`${fieldSummary.sleeper.player_name} · ${Math.round(fieldSummary.sleeper.top_20_prob * 100)}% Top 20 · ${Math.round(fieldSummary.sleeper.win_prob * 100)}% Win`}
+                  />
+                )}
+                {coverage && <SummaryTile label="Coverage" value={coverage.value} title={coverage.title} />}
               </div>
             )
           )}
@@ -877,7 +835,7 @@ export function Leaderboard() {
                           aria-label={`Sort by ${col.label}`}
                           title={
                             col.key === 'win_prob'
-                              ? 'Win probabilities are intentionally coarse — see the live record above for which markets are currently ahead of the baseline.'
+                              ? "Win is intentionally de-emphasised. The board reads overall contention well but doesn't reliably single out one winner. Weigh a player's chances by Top 10, Top 20 and Make Cut instead."
                               : undefined
                           }
                         >

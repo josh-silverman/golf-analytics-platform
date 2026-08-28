@@ -346,152 +346,51 @@ describe('Leaderboard', () => {
     })
   })
 
-  it('renders too-early markets when the CI is null instead of hiding the widget', async () => {
+  it('states the record is too early rather than claiming a lead', async () => {
     mockFetch({ trackRecord: TRACK_RECORD_PROVISIONAL_FIXTURE })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/Too early to say whether the board beats the field-average baseline/i),
+      ).toBeInTheDocument()
     })
-    // Both markets in the fixture have ci_lower: null, so both should render
-    // as "too early to say" rather than being filtered out.
-    expect(screen.getAllByText('(too early to say)')).toHaveLength(2)
-    expect(
-      screen.getByText(/About 18 more completed events to reach this page's 20-event rule-of-thumb/i),
-    ).toBeInTheDocument()
-    // Neither market clears the baseline yet, so the summary must not claim
-    // the served board is ahead on anything.
-    expect(
-      screen.getByText(/Too early to say whether the served board beats the field-average/i),
-    ).toBeInTheDocument()
+    // The one-liner still names the graded count.
+    expect(screen.getByText(/2 events graded/i)).toBeInTheDocument()
+    // And links out to the full per-week record.
+    expect(screen.getByRole('link', { name: /See the full record/i })).toHaveAttribute(
+      'href',
+      '/track-record',
+    )
   })
 
-  it('splits the record into live-capture and reconstructed blocks with their own n', async () => {
+  it('names the live and reconstructed split in the one-line summary', async () => {
     mockFetch({ trackRecord: TRACK_RECORD_SPLIT_FIXTURE })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/9 events graded, 2 predicted live and 7 reconstructed/i),
+      ).toBeInTheDocument()
     })
-    // The summary leads with what the record is, then what it shows.
-    expect(
-      screen.getByText(/9 completed events graded: 2 recorded live before play, 7 reconstructed/i),
-    ).toBeInTheDocument()
-    // Separate blocks, each with its own event and player count. The captured
-    // n of 2 must be visible, not pooled away.
-    expect(screen.getByText(/Predicted live · 2 events, 303 players/i)).toBeInTheDocument()
-    expect(screen.getByText(/Reconstructed · 7 events, 936 players/i)).toBeInTheDocument()
-    // The reconstruction disclaimer states what backfills are.
-    expect(
-      screen.getByText(/not a record of what the site showed those weeks/i),
-    ).toBeInTheDocument()
-    // The baseline is named where the numbers are.
-    expect(
-      screen.getByText(/predicting the field average for every player/i),
-    ).toBeInTheDocument()
-    // The settling footer says which pool each estimate applies to, and no
-    // longer implies "settle" is a calculated statistical threshold.
-    expect(
-      screen.getByText(
-        /About 11 more completed events to reach this page's 20-event rule-of-thumb sample size \(a chosen target, not a calculated threshold\); the live-only record needs about 18 more/i,
-      ),
-    ).toBeInTheDocument()
-  })
-
-  it('flags when the graded record mixes serving regimes', async () => {
-    // 1 real Path A board + 1 cold-start-only + 1 unrecorded: the aggregate is
-    // not measuring a single system and must say so.
-    mockFetch({
-      trackRecord: {
-        ...TRACK_RECORD_MIXED_FIXTURE,
-        events_path_a: 1,
-        events_cold_start_only: 1,
-        events_regime_unknown: 1,
-      },
-    })
-    renderLeaderboard(makeClient())
-    await waitFor(() => {
-      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
-    })
-    expect(
-      screen.getByText(/1 served cold-start only and 1 of unrecorded coverage out of 3/i),
-    ).toBeInTheDocument()
-  })
-
-  it('omits the regime caveat when every graded board ran Path A', async () => {
-    mockFetch({
-      trackRecord: {
-        ...TRACK_RECORD_MIXED_FIXTURE,
-        events_path_a: 12,
-        events_cold_start_only: 0,
-        events_regime_unknown: 0,
-      },
-    })
-    renderLeaderboard(makeClient())
-    await waitFor(() => {
-      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
-    })
-    expect(screen.queryByText(/serving configuration/i)).not.toBeInTheDocument()
   })
 
   it('summarizes which markets clear the baseline in plain language', async () => {
     mockFetch({ trackRecord: TRACK_RECORD_MIXED_FIXTURE })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Forward out-of-sample track record/i)).toBeInTheDocument()
+      // make-cut and top-20 have ci_lower > 0; win does not.
+      expect(
+        screen.getByText(/Ahead of the field-average baseline on Make cut and Top 20/i),
+      ).toBeInTheDocument()
     })
-    // make-cut and top-20 have ci_lower > 0; win does not. The claim is about
-    // the served board, named baseline, not "the model".
-    expect(
-      screen.getByText(
-        /The served board is ahead of the field-average baseline on Make cut and Top 20/i,
-      ),
-    ).toBeInTheDocument()
-    expect(screen.getByText('(too early to say)')).toBeInTheDocument()
-  })
-
-  // --- "How to read this board" derives from the same signal as the widget
-  // above it, so the two cannot disagree (audit F3 / H7) ---------------------
-
-  it('claims a market is ahead only when the record above says so', async () => {
-    mockFetch({ trackRecord: TRACK_RECORD_MIXED_FIXTURE })
-    renderLeaderboard(makeClient())
-    await waitFor(() => expect(screen.getByText('How to read this board')).toBeInTheDocument())
-    // Both make_cut_prob and top_20_prob clear (ci_lower > 0) in this fixture.
-    expect(
-      screen.getByText(
-        /ranked by Top 20 and Make Cut — both currently ahead of the field-average baseline/i,
-      ),
-    ).toBeInTheDocument()
-  })
-
-  it('does not claim either market is ahead while the record says too early', async () => {
-    mockFetch({ trackRecord: TRACK_RECORD_PROVISIONAL_FIXTURE })
-    renderLeaderboard(makeClient())
-    await waitFor(() => expect(screen.getByText('How to read this board')).toBeInTheDocument())
-    // Both markets in this fixture have ci_lower: null → neither clears.
-    expect(
-      screen.getByText(
-        /ranked by Top 20 and Make Cut, the widest markets on the board — the record above has not yet shown either one ahead/i,
-      ),
-    ).toBeInTheDocument()
-    expect(screen.queryByText(/currently ahead of the/i)).not.toBeInTheDocument()
-  })
-
-  it('hedges the ranking claim when the record is unavailable', async () => {
-    mockFetch({ trackRecord: null })
-    renderLeaderboard(makeClient())
-    await waitFor(() => expect(screen.getByText('How to read this board')).toBeInTheDocument())
-    expect(
-      screen.getByText(/ranked by Top 20 and Make Cut, the widest markets on the board, while the live record above builds up/i),
-    ).toBeInTheDocument()
   })
 
   it('does not claim an unqualified "most reliable" market in the Win tooltip', async () => {
-    mockFetch({ trackRecord: TRACK_RECORD_PROVISIONAL_FIXTURE })
+    mockFetch()
     renderLeaderboard(makeClient())
-    await waitFor(() => expect(screen.getByText('How to read this board')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
     const winHeader = screen.getByRole('button', { name: /Sort by Win/i })
     expect(winHeader.getAttribute('title')).not.toMatch(/most reliable signal/i)
-    expect(winHeader.getAttribute('title')).toMatch(/see the live record above/i)
+    expect(winHeader.getAttribute('title')).toMatch(/intentionally de-emphasised/i)
   })
 
   it('shows an empty-field message instead of a blank table when outcomes is empty', async () => {
@@ -503,7 +402,44 @@ describe('Leaderboard', () => {
       expect(screen.getByText(/No field published for this event yet/i)).toBeInTheDocument()
     })
     expect(screen.queryByText('Rory Birdie')).not.toBeInTheDocument()
-    expect(screen.queryByText('How to read this board')).not.toBeInTheDocument()
+  })
+
+  // --- summary tiles (Field / Sleeper / Coverage) ---------------------------
+
+  const SLEEPER_FIELD_FIXTURE = {
+    ...PREDICTIONS_FIXTURE,
+    outcomes: [
+      // Favorite: real win equity, must never be picked as the sleeper even
+      // though it has the largest Top-20-minus-Win gap in the field.
+      { player_id: 1, player_name: 'Favorite Fred', win_prob: 0.2, top_5_prob: 0.5, top_10_prob: 0.7, top_20_prob: 0.9, make_cut_prob: 0.95 },
+      // Eligible (win_prob < 5%), lower Top 20 — should lose to Longshot Lou.
+      { player_id: 2, player_name: 'Dark Horse', win_prob: 0.03, top_5_prob: 0.1, top_10_prob: 0.2, top_20_prob: 0.3, make_cut_prob: 0.8 },
+      // Eligible, highest Top 20 among eligible players — the expected pick.
+      { player_id: 3, player_name: 'Longshot Lou', win_prob: 0.01, top_5_prob: 0.15, top_10_prob: 0.25, top_20_prob: 0.4, make_cut_prob: 0.85 },
+    ],
+  }
+
+  it('picks the highest Top 20 probability among players under the Win ceiling', async () => {
+    mockFetch({ predictions: SLEEPER_FIELD_FIXTURE })
+    renderLeaderboard(makeClient())
+    await waitFor(() => expect(screen.getAllByText(/Favorite Fred/).length).toBeGreaterThan(0))
+    // Favorite Fred has the largest gap (90 - 20 = 70 pts) but 20% win equity,
+    // so the ceiling excludes it. Between the two eligible players, Longshot
+    // Lou has the higher Top 20 (40% vs 30%) and wins.
+    expect(screen.getByText(/Longshot Lou · 40% Top 20 · 1% Win/i)).toBeInTheDocument()
+    // Dark Horse is in the field (and its table row), just not the sleeper pick.
+    expect(screen.queryByText(/Dark Horse · \d+% Top 20/i)).not.toBeInTheDocument()
+  })
+
+  it('omits the sleeper tile when nobody clears the Win ceiling', async () => {
+    mockFetch()
+    renderLeaderboard(makeClient())
+    await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
+    // Both fixture players have win_prob >= 5% (12% and 7%), so neither is a
+    // realistic sleeper and the tile should not render.
+    expect(screen.queryByText(/Sleeper/i)).not.toBeInTheDocument()
+    // Field tile still renders.
+    expect(screen.getByText('2 players')).toBeInTheDocument()
   })
 
   // --- report card reads the pinned board, not a recomputation (audit F4) ---
@@ -594,7 +530,6 @@ describe('Leaderboard', () => {
     // And no board either — the table is withheld rather than recomputed.
     expect(document.querySelector('tbody')).toBeNull()
     expect(screen.queryByText('Rory Birdie')).not.toBeInTheDocument()
-    expect(screen.queryByText('How to read this board')).not.toBeInTheDocument()
   })
 
   // --- the table reads the same pinned board as the card ------------------
@@ -699,29 +634,30 @@ describe('Leaderboard', () => {
     expect(calls.some((u) => u.includes('/archived'))).toBe(false)
   })
 
-  // --- serving provenance (audit F3 / H6) -----------------------------------
+  // --- coverage tile (audit F3 / H6) -----------------------------------------
   // A board that cold-started the whole field must not look identical to a
-  // healthy Path A board — dg_direct_count is what tells them apart, and
-  // /status is what shows the registry can carry a different version id.
+  // healthy Path A board — dg_direct_count is what tells them apart.
 
-  it('shows nothing when /status is unreachable, not an error', async () => {
+  it('shows no coverage tile when /status is unreachable, not an error', async () => {
     mockFetch({ status: null })
     renderLeaderboard(makeClient())
     await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
-    expect(screen.queryByText(/Registry-active model/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Path A/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/priced by DataGolf/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/in-house model/i)).not.toBeInTheDocument()
   })
 
-  it('distinguishes a healthy Path A board from full cold-start with the same badge family', async () => {
+  it('distinguishes a healthy Path A board from full cold-start in the coverage tile', async () => {
     mockFetch({
       status: STATUS_FIXTURE,
       predictions: { ...PREDICTIONS_FIXTURE, dg_direct_count: 1, dg_fetch_status: 'ok' },
     })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Path A · 1\/2 direct/i)).toBeInTheDocument()
+      expect(screen.getByText(/1 of 2 priced by DataGolf/i)).toBeInTheDocument()
     })
-    expect(screen.getByTitle(/1 of 2 players on this board were priced directly by DataGolf/i)).toBeInTheDocument()
+    expect(
+      screen.getByTitle(/1 of 2 players on this board were priced directly by DataGolf/i),
+    ).toBeInTheDocument()
 
     // Same serving_strategy, same model_version_id — only dg_direct_count
     // differs. Before this fix these two boards were indistinguishable.
@@ -732,9 +668,9 @@ describe('Leaderboard', () => {
     cleanup()
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Path A · cold-started \(no coverage\)/i)).toBeInTheDocument()
+      expect(screen.getByText(/No DataGolf prices, in-house model only/i)).toBeInTheDocument()
     })
-    expect(screen.queryByText(/1\/2 direct/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/priced by DataGolf/i)).not.toBeInTheDocument()
   })
 
   it('distinguishes a legitimate cold start from a broken DataGolf fetch', async () => {
@@ -744,10 +680,12 @@ describe('Leaderboard', () => {
     })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Path A · fetch problem/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/DataGolf prices unavailable, in-house model only/i),
+      ).toBeInTheDocument()
     })
     expect(screen.getByTitle(/a degraded result, not a clean cold start/i)).toBeInTheDocument()
-    expect(screen.queryByText(/no coverage\)/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/No DataGolf prices/i)).not.toBeInTheDocument()
   })
 
   it('flags when a board omits coverage entirely under Path A', async () => {
@@ -757,34 +695,16 @@ describe('Leaderboard', () => {
     })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Path A · coverage unknown/i)).toBeInTheDocument()
+      expect(screen.getByText(/Coverage not recorded/i)).toBeInTheDocument()
     })
   })
 
-  it('does not claim Path A coverage when the serving strategy is something else', async () => {
+  it('does not claim DataGolf coverage when the serving strategy is something else', async () => {
     mockFetch({ status: { ...STATUS_FIXTURE, serving_strategy: 'stacked' } })
     renderLeaderboard(makeClient())
     await waitFor(() => {
-      expect(screen.getByText('stacked')).toBeInTheDocument()
+      expect(screen.getByText(/In-house model, all players/i)).toBeInTheDocument()
     })
-    expect(screen.queryByText(/Path A/i)).not.toBeInTheDocument()
-  })
-
-  it('flags when a board is stamped with a different model id than the registry reports', async () => {
-    mockFetch({
-      status: STATUS_FIXTURE, // v3_20260620
-      predictions: {
-        ...PREDICTIONS_FIXTURE,
-        model_version_id: 'path_a@v2-cold', // different id, same board
-        dg_direct_count: 1,
-        dg_fetch_status: 'ok',
-      },
-    })
-    renderLeaderboard(makeClient())
-    await waitFor(() => {
-      expect(
-        screen.getByText(/this board is stamped path_a@v2-cold, a different id/i),
-      ).toBeInTheDocument()
-    })
+    expect(screen.queryByText(/priced by DataGolf/i)).not.toBeInTheDocument()
   })
 })
