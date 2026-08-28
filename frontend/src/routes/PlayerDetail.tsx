@@ -53,8 +53,8 @@ export function PlayerDetail() {
     return (
       <main className="mx-auto max-w-6xl px-6 py-10">
         <p className="text-negative">Player not found.</p>
-        <Link to="/players" className="mt-4 inline-block text-sm text-accent hover:underline">
-          ← Back to players
+        <Link to="/leaderboard" className="mt-4 inline-block text-sm text-accent hover:underline">
+          ← Back to leaderboard
         </Link>
       </main>
     )
@@ -62,8 +62,8 @@ export function PlayerDetail() {
 
   return (
     <main className="mx-auto max-w-6xl space-y-8 px-6 py-10">
-      <Link to="/players" className="text-sm text-fg-secondary hover:text-fg">
-        ← Players
+      <Link to="/leaderboard" className="text-sm text-fg-secondary hover:text-fg">
+        ← Leaderboard
       </Link>
 
       <header>

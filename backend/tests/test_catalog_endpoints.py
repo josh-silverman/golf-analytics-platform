@@ -173,20 +173,6 @@ def test_data_freshness_shape(catalog_client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_players_envelope(catalog_client: TestClient) -> None:
-    r = catalog_client.get("/api/v1/players")
-    assert r.status_code == 200
-    body = r.json()
-    assert "data" in body and "page" in body and "meta" in body
-    assert body["page"]["total"] == 1
-    assert body["data"][0]["full_name"] == "Tiger Woods"
-
-
-def test_list_players_respects_limit(catalog_client: TestClient) -> None:
-    r = catalog_client.get("/api/v1/players?limit=5")
-    assert r.status_code == 200
-
-
 def test_get_player_found(catalog_client: TestClient) -> None:
     r = catalog_client.get("/api/v1/players/1")
     assert r.status_code == 200

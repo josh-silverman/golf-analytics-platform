@@ -1,4 +1,4 @@
-"""Player endpoints — /players, /players/{id}, /players/{id}/recent-rounds."""
+"""Player endpoints — /players/{id}, /players/{id}/recent-rounds, /players/{id}/features."""
 
 from __future__ import annotations
 
@@ -20,28 +20,6 @@ from app.services.catalog import CatalogService, reference_today  # noqa: TC001
 from app.services.features import FeatureExtractor  # noqa: TC001
 
 router = APIRouter(tags=["players"], prefix="/players")
-
-
-@router.get("")
-async def list_players(
-    catalog: Annotated[CatalogService, Depends(get_catalog_service)],
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=200),
-) -> ListEnvelope[Player]:
-    page = await catalog.list_players(cursor=cursor, limit=limit)
-    freshness = await catalog.data_freshness()
-    return ListEnvelope[Player](
-        data=page.items,
-        page=PageMeta(
-            next_cursor=page.next_cursor,
-            has_more=page.next_cursor is not None,
-            total=page.total,
-        ),
-        meta=ResponseMeta(
-            as_of=freshness.sources.get("players", freshness.sources["players"]),
-            source=catalog.source_name,
-        ),
-    )
 
 
 @router.get("/{player_id}")

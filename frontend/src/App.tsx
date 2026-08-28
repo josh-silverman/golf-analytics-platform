@@ -5,7 +5,6 @@ import { BettingEdge } from './routes/BettingEdge'
 import { Home } from './routes/Home'
 import { Leaderboard } from './routes/Leaderboard'
 import { PlayerDetail } from './routes/PlayerDetail'
-import { Players } from './routes/Players'
 import { TrackRecord } from './routes/TrackRecord'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -36,7 +35,6 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/leaderboard" element={<ErrorBoundary><Leaderboard /></ErrorBoundary>} />
-          <Route path="/players" element={<ErrorBoundary><Players /></ErrorBoundary>} />
           <Route path="/players/:id" element={<ErrorBoundary><PlayerDetail /></ErrorBoundary>} />
           <Route path="/edge" element={<ErrorBoundary><BettingEdge /></ErrorBoundary>} />
           <Route path="/track-record" element={<ErrorBoundary><TrackRecord /></ErrorBoundary>} />
