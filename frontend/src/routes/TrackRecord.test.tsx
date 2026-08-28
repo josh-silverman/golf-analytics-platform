@@ -366,7 +366,9 @@ describe('TrackRecord', () => {
     mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
     renderTrackRecord(makeClient())
     await waitFor(() => expect(screen.getByText('Overall record')).toBeInTheDocument())
-    const section = document.querySelector('section')
+    // Scoped to this section specifically (not a bare `document.querySelector`,
+    // which is ambiguous whenever more than one <section> exists on the page).
+    const section = screen.getByText('Overall record').closest('section')
     // Both headline markets appear, once per provenance block.
     expect(section?.textContent).toMatch(/Make cut/)
     expect(section?.textContent).toMatch(/Top 20/)
