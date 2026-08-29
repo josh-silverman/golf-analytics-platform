@@ -41,19 +41,44 @@ function formatEventLabel(name: string, startDate: string): string {
   return `${name} · ${d}`
 }
 
+// States the Top 20 result and its chance baseline, nothing more. No
+// adjective, no verdict: the same two sentences describe a good week, a bad
+// week, and a week below the baseline, so the wording itself can never spin
+// the number. "The board's N highest-rated players" rather than "picks":
+// the board scores the whole field, this describes the N it rated highest
+// for Top 20, and it never claims a selection was made.
+function top20HeadlineSentence(
+  hits: number,
+  picks: number,
+  byChance: number | null,
+): string {
+  const first = `${hits} of the board's ${picks} highest-rated players finished inside the Top 20.`
+  if (byChance == null) return first
+  const rounded = Math.round(byChance)
+  const second = rounded > 0 ? `Random guessing would land about ${rounded}.` : 'Random guessing would rarely land any.'
+  return `${first} ${second}`
+}
+
 export function TrackRecord() {
   const { data: events, isLoading: eventsLoading, isError: eventsError } = useArchivedBoardList()
   const { data: trackRecord } = useForwardTrackRecord()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Selected week: an explicit pick overrides; otherwise the most recent
-  // pinned event (the list is already newest-first). Seeded from the URL so
-  // a week is shareable/bookmarkable, matching the Leaderboard's pattern.
+  // GRADED event, not just the most recent pinned board. An in-progress or
+  // ungraded event shows every finish as "—" and demonstrates nothing on
+  // first load, so the default skips ahead to a week with a real result.
+  // The list is already newest-first, so this is the first `graded: true`
+  // row. Falls back to the newest pinned board when nothing is graded yet,
+  // rather than showing an empty page. Seeded from the URL so a week is
+  // shareable/bookmarkable, matching the Leaderboard's pattern; an explicit
+  // `?event=` always wins over this default.
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     const e = searchParams.get('event')
     return e ? Number(e) : null
   })
-  const effectiveId = selectedId ?? events?.[0]?.tournament_id ?? null
+  const defaultEventId = events?.find((e) => e.graded)?.tournament_id ?? events?.[0]?.tournament_id ?? null
+  const effectiveId = selectedId ?? defaultEventId
 
   useEffect(() => {
     const next = new URLSearchParams()
@@ -76,9 +101,8 @@ export function TrackRecord() {
       <header className="space-y-3">
         <h1 className="text-2xl font-semibold tracking-tight">Track Record</h1>
         <p className="max-w-2xl text-sm text-fg-secondary">
-          How Pinpoint's predictions performed, one tournament at a time, back to the earliest
-          pinned board. Top 20 is the headline market here, consistent with the rest of the site —
-          Win is intentionally coarse and not scored on this page.
+          Every prediction on this page was recorded before play began and has not been edited
+          since.
         </p>
 
         {eventsLoading && <p className="text-fg-secondary text-sm">Loading events…</p>}
@@ -131,7 +155,10 @@ export function TrackRecord() {
 
           {reportCard && archived && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <p className="text-sm text-fg">
+                {top20HeadlineSentence(reportCard.top20Hits, reportCard.top20Picks, reportCard.top20ByChance)}
+              </p>
+              <div className={`grid grid-cols-1 gap-3 ${archived.event_had_a_cut ? 'sm:grid-cols-2' : ''}`}>
                 <SummaryTile
                   label="Winner"
                   value={
@@ -140,24 +167,18 @@ export function TrackRecord() {
                       : '—'
                   }
                 />
-                <SummaryTile
-                  label="Top-20 hits"
-                  value={
-                    reportCard.top20ByChance != null
-                      ? `${reportCard.top20Hits} / ${reportCard.top20Picks} · ${reportCard.top20ByChance.toFixed(1)} by chance`
-                      : `${reportCard.top20Hits} / ${reportCard.top20Picks}`
-                  }
-                />
-                <SummaryTile
-                  label="Make-cut accuracy"
-                  value={
-                    reportCard.cutAcc != null
-                      ? `${formatPct(reportCard.cutAcc)} · ${
-                          reportCard.cutBaseRate != null ? formatPct(reportCard.cutBaseRate) : '—'
-                        } always-guess`
-                      : 'no cut at this event'
-                  }
-                />
+                {archived.event_had_a_cut && (
+                  <SummaryTile
+                    label="Make-cut accuracy"
+                    value={
+                      reportCard.cutAcc != null
+                        ? `${formatPct(reportCard.cutAcc)} · ${
+                            reportCard.cutBaseRate != null ? formatPct(reportCard.cutBaseRate) : '—'
+                          } always-guess`
+                        : '—'
+                    }
+                  />
+                )}
               </div>
               <ProvenanceNote board={archived} n={reportCard.n} />
               <TopPicksTable board={archived} />

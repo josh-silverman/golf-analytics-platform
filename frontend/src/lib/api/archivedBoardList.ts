@@ -6,6 +6,12 @@ export interface ArchivedBoardSummary {
   tournament_start_date: string
   source: 'captured' | 'backfilled'
   out_of_sample: boolean
+  // Whether a settlement is pinned for this tournament. Stricter than the
+  // single-board endpoint's `graded` (which also accepts a live field read
+  // when no settlement exists yet) — see the backend docstring on
+  // `ArchivedBoardSummaryPayload.graded`. Backs the Track Record page's
+  // default-event selection (most recent graded event).
+  graded: boolean
 }
 
 async function fetchArchivedBoardList(): Promise<ArchivedBoardSummary[]> {

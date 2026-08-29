@@ -93,14 +93,17 @@ async def _capture_board(
 @router.get("/archived")
 async def list_archived_boards(
     board_archive: Annotated[BoardArchive, Depends(get_board_archive)],
+    settlements: Annotated[SettlementArchive, Depends(get_settlement_archive)],
 ) -> list[ArchivedBoardSummaryPayload]:
     """Every tournament with a pinned board, newest first — metadata only.
 
-    Backs the Track Record page's event picker. Registered ahead of
-    ``/{tournament_id}`` (a literal path segment must precede a param route —
-    otherwise ``/archived`` is parsed as a tournament id and 422s, which is
-    what happens if this function is moved below ``predict_tournament``;
-    matches the convention in ``tournaments.py``).
+    Backs the Track Record page's event picker and its default-event
+    selection (most recent GRADED event, not most recent pinned board).
+    Registered ahead of ``/{tournament_id}`` (a literal path segment must
+    precede a param route — otherwise ``/archived`` is parsed as a
+    tournament id and 422s, which is what happens if this function is moved
+    below ``predict_tournament``; matches the convention in
+    ``tournaments.py``).
 
     Strictly read-only, like the sibling ``/{tournament_id}/archived``: it
     creates no snapshot and pins nothing. Reuses the grader's own
@@ -115,6 +118,11 @@ async def list_archived_boards(
     snapshots = await board_archive.list_all()
     canonical = canonical_by_tournament(snapshots)
     ordered = sorted(canonical.values(), key=lambda s: s.tournament_start_date, reverse=True)
+    # One bulk read rather than a per-tournament lookup. `graded` here means
+    # "a settlement is pinned", not the single-board endpoint's looser
+    # `bool(results)` (which falls back to a live field read) — see the
+    # docstring on `ArchivedBoardSummaryPayload.graded`.
+    graded_ids = {s.tournament_id for s in await settlements.list_all()}
     return [
         ArchivedBoardSummaryPayload(
             tournament_id=s.tournament_id,
@@ -122,6 +130,7 @@ async def list_archived_boards(
             tournament_start_date=s.tournament_start_date,
             source=s.source,
             out_of_sample=s.is_out_of_sample(date.fromisoformat(s.tournament_start_date)),
+            graded=s.tournament_id in graded_ids,
         )
         for s in ordered
     ]

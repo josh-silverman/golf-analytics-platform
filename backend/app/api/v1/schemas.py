@@ -544,6 +544,15 @@ class ArchivedBoardSummaryPayload(BaseModel):
     tournament_start_date: str
     source: str
     out_of_sample: bool
+    # Whether a settlement is pinned for this tournament. Stricter than the
+    # single-board endpoint's ``graded`` (which falls back to a live field
+    # read when no settlement exists yet): that fallback is a per-request
+    # cost this list route deliberately does not pay across every row, so an
+    # event that finished before its settlement was written reads ``False``
+    # here even though its own board would report ``graded: true``. Backs
+    # the Track Record page's default-event selection, where the safe
+    # direction for that skew is to skip the event, not land on it.
+    graded: bool
 
 
 class ArchivedBoardPayload(BaseModel):

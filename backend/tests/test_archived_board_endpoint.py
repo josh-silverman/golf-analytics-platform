@@ -300,9 +300,48 @@ async def test_lists_a_pinned_event_with_metadata_only(ctx) -> None:
     assert row["tournament_start_date"] == _START.isoformat()
     assert row["source"] == "captured"
     assert row["out_of_sample"] is True
+    # No settlement pinned yet, so not graded in the list's stricter sense
+    # (a settlement must be pinned; see ArchivedBoardSummaryPayload.graded).
+    assert row["graded"] is False
     # No per-player data of any kind.
     assert "outcomes" not in row
     assert "win_prob" not in str(row)
+
+
+async def test_list_reports_graded_only_once_a_settlement_is_pinned(ctx) -> None:
+    """The list's `graded` means "a settlement is pinned", stricter than the
+    single-board endpoint's `bool(results)` (which also accepts a live field
+    read). Two events: one settled, one only pinned as a board."""
+    client, boards, settlements, catalog = ctx
+    await boards.persist(_board(1))
+    await boards.persist(_board(2))
+    from app.services.settlement_archive import settlement_from_field
+
+    field = await catalog.get_tournament_field(1)
+    tournament = await catalog.get_tournament(1)
+    await settlements.persist(settlement_from_field(tournament, field, provider="pinned-source"))
+
+    body = {row["tournament_id"]: row["graded"] for row in client.get(_list_url()).json()}
+
+    assert body[1] is True
+    assert body[2] is False
+
+
+async def test_list_graded_is_false_for_a_finished_but_unsettled_event(ctx) -> None:
+    """An event whose provider field would report results, but whose
+    settlement has not been pinned, still reads False here (unlike the
+    single-board endpoint, which would fall back to the live field read and
+    report graded: true). This is the documented, accepted skew."""
+    client, boards, _, catalog = ctx
+    await boards.persist(_board(1))
+
+    row = client.get(_list_url()).json()[0]
+
+    assert row["graded"] is False
+    # The single-board endpoint would report graded: true for the same event
+    # via its live-field fallback, confirming the two are not meant to agree.
+    single_board = client.get(_url(1)).json()
+    assert single_board["graded"] is True
 
 
 async def test_orders_newest_tournament_first(ctx) -> None:

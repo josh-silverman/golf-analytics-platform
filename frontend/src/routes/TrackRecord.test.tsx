@@ -29,6 +29,7 @@ const EVENTS_FIXTURE = [
     tournament_start_date: '2026-07-10',
     source: 'captured' as const,
     out_of_sample: true,
+    graded: true,
   },
   {
     tournament_id: 2,
@@ -36,8 +37,24 @@ const EVENTS_FIXTURE = [
     tournament_start_date: '2026-06-20',
     source: 'captured' as const,
     out_of_sample: true,
+    graded: true,
   },
 ]
+
+// The newest event is in-progress and ungraded, with an older graded event
+// behind it — exercises the "skip to the most recent graded event" default.
+const EVENTS_WITH_IN_PROGRESS_FIXTURE = [
+  {
+    tournament_id: 4,
+    tournament_name: 'The Genesis',
+    tournament_start_date: '2026-08-01',
+    source: 'captured' as const,
+    out_of_sample: true,
+    graded: false,
+  },
+  ...EVENTS_FIXTURE,
+]
+
 
 function boardFixture(overrides: Record<string, unknown> = {}) {
   return {
@@ -182,6 +199,10 @@ const TRACK_RECORD_FIXTURE: ForwardTrackRecord = {
 function mockFetch({
   events = EVENTS_FIXTURE as typeof EVENTS_FIXTURE | null,
   board = boardFixture() as Record<string, unknown> | null,
+  // Per-tournament-id override, keyed by id, checked before the single
+  // `board` fallback above. Lets a test prove which event the page actually
+  // selected by giving different ids visibly different boards.
+  boardsById = {} as Record<number, Record<string, unknown> | null>,
   trackRecord = null as ForwardTrackRecord | null,
 } = {}) {
   vi.stubGlobal(
@@ -196,10 +217,13 @@ function mockFetch({
         return Promise.resolve({ ok: true, status: 200, json: async () => events })
       }
       if (url.includes('/archived')) {
-        if (board == null) {
+        const match = /\/predictions\/(\d+)\/archived/.exec(url)
+        const id = match ? Number(match[1]) : null
+        const resolved = id != null && id in boardsById ? boardsById[id] : board
+        if (resolved == null) {
           return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
         }
-        return Promise.resolve({ ok: true, status: 200, json: async () => board })
+        return Promise.resolve({ ok: true, status: 200, json: async () => resolved })
       }
       if (url.includes('track-record/forward')) {
         if (trackRecord == null) {
@@ -219,6 +243,18 @@ describe('TrackRecord', () => {
     expect(screen.getByRole('heading', { name: /Track Record/i })).toBeInTheDocument()
   })
 
+  it('shows the static trust line on every event, not just graded ones', async () => {
+    mockFetch({ board: boardFixture({ graded: false, outcomes: [] }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Every prediction on this page was recorded before play began and has not been edited since/i,
+        ),
+      ).toBeInTheDocument()
+    })
+  })
+
   it('lists pinned events newest first in the picker', async () => {
     mockFetch()
     renderTrackRecord(makeClient())
@@ -230,11 +266,72 @@ describe('TrackRecord', () => {
     expect(options[1].textContent).toMatch(/The 3M/)
   })
 
-  it('defaults to the most recent event', async () => {
+  it('defaults to the most recent event when it is graded', async () => {
     mockFetch()
     renderTrackRecord(makeClient())
     await waitFor(() => {
       expect(screen.getByText('Tiger Chip')).toBeInTheDocument()
+    })
+  })
+
+  // --- default event: most recent GRADED event, not most recent pinned ------
+
+  it('skips an in-progress newest event and defaults to the most recent graded one', async () => {
+    mockFetch({
+      events: EVENTS_WITH_IN_PROGRESS_FIXTURE,
+      boardsById: {
+        4: boardFixture({ tournament_id: 4, graded: false, outcomes: [] }),
+        3: boardFixture(),
+      },
+    })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      // Event 3's board (The Open) rendered, not event 4's (the newest, ungraded).
+      expect(screen.getByText('Tiger Chip')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('combobox')).toHaveValue('3')
+  })
+
+  it('falls back to the newest pinned board when nothing is graded yet', async () => {
+    mockFetch({
+      events: EVENTS_WITH_IN_PROGRESS_FIXTURE.map((e) => ({ ...e, graded: false })),
+      boardsById: { 4: boardFixture({ tournament_id: 4, graded: false, outcomes: [] }) },
+    })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveValue('4')
+    })
+    // Ungraded, so the "not settled yet" message shows rather than a report card.
+    expect(screen.getByText(/results have not settled yet/i)).toBeInTheDocument()
+  })
+
+  it('lets an explicit ?event= selection override the graded default', async () => {
+    mockFetch({
+      events: EVENTS_WITH_IN_PROGRESS_FIXTURE,
+      boardsById: {
+        4: boardFixture({ tournament_id: 4, graded: false, outcomes: [] }),
+        3: boardFixture(),
+      },
+    })
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <MemoryRouter initialEntries={['/track-record?event=4']}>
+          <TrackRecord />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveValue('4')
+    })
+    // Event 4 is ungraded, and the explicit pick still wins over the default.
+    expect(screen.getByText(/results have not settled yet/i)).toBeInTheDocument()
+  })
+
+  it('an ungraded event stays selectable in the picker even though it is never the default', async () => {
+    mockFetch({ events: EVENTS_WITH_IN_PROGRESS_FIXTURE })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /The Genesis/i })).toBeInTheDocument()
     })
   })
 
@@ -256,15 +353,74 @@ describe('TrackRecord', () => {
     })
   })
 
-  it('attaches the chance baseline to the top-20 tile', async () => {
+  // --- Top 20 headline sentence, replacing the old tile ---------------------
+  // No adjective, no verdict: the same template must read honestly whether
+  // the week beat the baseline or fell short of it.
+
+  it('states the Top 20 result and its rounded chance baseline in one sentence', async () => {
     mockFetch()
     renderTrackRecord(makeClient())
     await waitFor(() => {
-      // 3-player field, top20Picks = min(20, 3) = 3; 2 of the 3 picks (Tiger,
-      // Rory) finished top 20, Jordan missed the cut → 2/3 hits.
-      // byChance = top20Picks * (top20Picks / field) = 3 * 3/3 = 3.0.
-      expect(screen.getByText(/2 \/ 3 · 3\.0 by chance/i)).toBeInTheDocument()
+      // 3-player field, top20Picks = min(20, 3) = 3; 2 of the 3 highest-rated
+      // (Tiger, Rory) finished top 20, Jordan missed the cut → 2 hits.
+      // byChance = top20Picks * (top20Picks / field) = 3 * 3/3 = 3.0 → "about 3".
+      expect(
+        screen.getByText(
+          /2 of the board's 3 highest-rated players finished inside the Top 20\. Random guessing would land about 3\./i,
+        ),
+      ).toBeInTheDocument()
     })
+  })
+
+  it('never claims the board "picked" players, in the headline sentence specifically', async () => {
+    // "Picks" legitimately appears elsewhere on the page (the unrelated,
+    // unchanged TopPicksTable heading), so this checks the headline
+    // sentence's own text rather than the whole document.
+    mockFetch()
+    renderTrackRecord(makeClient())
+    const headline = await screen.findByText(/highest-rated players finished inside the Top 20/i)
+    expect(headline.textContent).not.toMatch(/picks|picked/i)
+  })
+
+  it('reads without an adjective or verdict on a below-baseline week', async () => {
+    // A 156-player field where only 2 of the board's top 20 finished top 20,
+    // against a chance baseline of 20 * 20/156 ≈ 2.6 → "about 3". The result
+    // (2) is below the baseline (3), and the sentence must not editorialize
+    // about that: no "weak", "poor", "disappointing" or similar.
+    const outcomes = Array.from({ length: 156 }, (_, i) => ({
+      player_id: i + 1,
+      player_name: `P${i + 1}`,
+      win_prob: 0.3 - i * 0.001,
+      top_5_prob: 0.5 - i * 0.002,
+      top_10_prob: 0.6 - i * 0.002,
+      top_20_prob: 0.9 - i * 0.004,
+      make_cut_prob: 0.95 - i * 0.004,
+      final_position: i < 2 ? i + 1 : i < 40 ? 25 + i : null,
+      made_cut: i < 80,
+    }))
+    mockFetch({ board: boardFixture({ outcomes }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /2 of the board's 20 highest-rated players finished inside the Top 20\. Random guessing would land about 3\./i,
+        ),
+      ).toBeInTheDocument()
+    })
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/weak|poor|disappointing|strong week|solid showing|struggled/i)
+  })
+
+  it('renders no headline sentence when there is no report card to draw one from', async () => {
+    // Zero outcomes means computeReportCard returns null entirely (not a
+    // report card with a null baseline), so the headline block does not
+    // render at all rather than printing "about null" or similar.
+    mockFetch({ board: boardFixture({ outcomes: [] }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /The Open/i })).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/highest-rated players/i)).not.toBeInTheDocument()
   })
 
   it('attaches the always-guess baseline to the make-cut tile', async () => {
@@ -275,6 +431,25 @@ describe('TrackRecord', () => {
       // predicted >=50% make-cut and both made it → cutAcc = 100%.
       expect(screen.getByText(/100\.0% · 66\.7% always-guess/i)).toBeInTheDocument()
     })
+  })
+
+  it('shows the Top-20 headline sentence and Winner tile, no separate Top-20 tile', async () => {
+    mockFetch()
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Tiger Chip')).toBeInTheDocument())
+    expect(screen.queryByText('Top-20 hits')).not.toBeInTheDocument()
+  })
+
+  it('omits the make-cut tile entirely on a no-cut event, showing only Winner', async () => {
+    mockFetch({ board: boardFixture({ event_had_a_cut: false }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Tiger Chip · board #1 by win%/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Make-cut accuracy')).not.toBeInTheDocument()
+    // The headline sentence is unaffected by the cut status: Top 20 finishes
+    // come from final_position, which a no-cut event still has.
+    expect(screen.getByText(/highest-rated players finished inside the Top 20/i)).toBeInTheDocument()
   })
 
   it('shows a distinct message for an ungraded pinned board', async () => {
@@ -357,9 +532,11 @@ describe('TrackRecord', () => {
       expect(screen.getByText('Overall record')).toBeInTheDocument()
     })
     // Separate blocks, each with its own event and player count. The
-    // captured n of 2 must be visible, not pooled away.
-    expect(screen.getByText(/Predicted live · 2 events, 303 players graded/i)).toBeInTheDocument()
-    expect(screen.getByText(/Reconstructed · 7 events, 936 players graded/i)).toBeInTheDocument()
+    // captured n of 2 must be visible, not pooled away. Plain-language
+    // headings ("Recorded before play" / "Rebuilt afterwards") replaced the
+    // internal "Predicted live" / "Reconstructed" terms.
+    expect(screen.getByText(/Recorded before play · 2 events, 303 players graded/i)).toBeInTheDocument()
+    expect(screen.getByText(/Rebuilt afterwards · 7 events, 936 players graded/i)).toBeInTheDocument()
   })
 
   it('shows only Make cut and Top 20, never the other three markets', async () => {
@@ -425,8 +602,12 @@ describe('TrackRecord', () => {
     mockFetch({ trackRecord: TRACK_RECORD_FIXTURE })
     renderTrackRecord(makeClient())
     await waitFor(() => {
+      // "a number we chose, not a statistical threshold" replaced the
+      // internal phrase "rule-of-thumb sample size".
       expect(
-        screen.getByText(/About 11 more completed events to reach this page's 20-event rule-of-thumb/i),
+        screen.getByText(
+          /About 11 more completed events to reach this page's 20-event target \(a number we chose, not a statistical threshold\)/i,
+        ),
       ).toBeInTheDocument()
     })
   })

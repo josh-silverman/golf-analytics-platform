@@ -106,10 +106,11 @@ export function summarizeTrackRecord(tr: ForwardTrackRecord, markets: DisplayMar
 // it describes: the combined record reaches the target far sooner than the
 // live-capture record, which is rebuilding from a couple of events.
 //
-// Says "reach this page's N-event target" rather than "settle": the backend's
-// `_MEANINGFUL_EVENTS = 20` is a chosen rule of thumb for a sample worth
-// reading, not a calculated significance threshold, and "settle" implied a
-// statistical claim the number doesn't back.
+// Says "a target we chose, not a statistical threshold" rather than the
+// internal phrase "rule-of-thumb sample size": the backend's
+// `_MEANINGFUL_EVENTS = 20` is a chosen number worth reading, not a
+// calculated significance threshold, and this states that plainly instead
+// of naming the internal term for it.
 export function settlingFooter(tr: ForwardTrackRecord): string | null {
   const target = tr.events + tr.events_to_meaningful
   const captured = tr.events_captured ?? 0
@@ -118,12 +119,12 @@ export function settlingFooter(tr: ForwardTrackRecord): string | null {
   if (captured > 0 && liveMore > tr.events_to_meaningful) {
     return (
       `About ${tr.events_to_meaningful} more completed events to reach this page's ${target}-event ` +
-      `rule-of-thumb sample size (a chosen target, not a calculated threshold). The live-only record needs about ${liveMore} more.`
+      `target (a number we chose, not a statistical threshold). The live-only record needs about ${liveMore} more.`
     )
   }
   return (
     `About ${tr.events_to_meaningful} more completed events to reach this page's ${target}-event ` +
-    `rule-of-thumb sample size (a chosen target, not a calculated threshold).`
+    `target (a number we chose, not a statistical threshold).`
   )
 }
 
@@ -146,12 +147,12 @@ export function provenanceBlocks(tr: ForwardTrackRecord): ProvenanceBlockData[] 
     const events = tr.events_captured ?? 0
     const allEarly = captured.every((m) => !(m.ci_lower != null && m.ci_lower > 0))
     blocks.push({
-      title: 'Predicted live',
+      title: 'Recorded before play',
       events,
       players: tr.players_captured ?? 0,
       markets: captured,
       note:
-        'Recorded before play began, as the site served them.' +
+        'Written down before the event began, exactly as the site showed it.' +
         (allEarly
           ? ` ${events} event${events === 1 ? '' : 's'} is not enough to tell skill from luck. Expect these numbers to move.`
           : ''),
@@ -159,12 +160,12 @@ export function provenanceBlocks(tr: ForwardTrackRecord): ProvenanceBlockData[] 
   }
   if (backfilled.length > 0 && (tr.events_backfilled ?? 0) > 0) {
     blocks.push({
-      title: 'Reconstructed',
+      title: 'Rebuilt afterwards',
       events: tr.events_backfilled ?? 0,
       players: tr.players_backfilled ?? 0,
       markets: backfilled,
       note:
-        'Rebuilt afterwards from the data available before each event. No result information goes in, but later code produced them, so they are not a record of what the site showed those weeks.',
+        'Rebuilt after the fact from the data available before each event. No result information goes in, but later code produced them, so they are not a record of what the site showed those weeks.',
     })
   }
   if (blocks.length === 0) {
