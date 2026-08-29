@@ -54,6 +54,29 @@ function priceCoverage(lines: BettingLine[]): { real: number; total: number } {
   return { real: lines.filter(isRealPrice).length, total: lines.length }
 }
 
+// Floor for the headline callout: below this, a rounded-to-whole-point gap
+// reads as ordinary vig/rounding drift rather than a real disagreement, so
+// the callout stays silent rather than naming something meaningless.
+const BIGGEST_DISAGREEMENT_MIN_GAP = 0.05
+
+// The single player with the largest board-vs-market gap in this market, in
+// either direction. Computed from the unfiltered board (like priceCoverage
+// above), not the min-probability-filtered view: this answers a whole-market
+// question and should not change as the reader adjusts that filter below it.
+// Ties go to whichever line comes first in the board's own order (the server
+// already sorts by edge descending, so in practice this is deterministic and
+// invisible to the reader, since only one name is ever shown). Returns null
+// when no line has a real price, or the largest gap doesn't clear the floor.
+function biggestDisagreement(lines: BettingLine[]): BettingLine | null {
+  let best: BettingLine | null = null
+  for (const l of lines) {
+    if (!isRealPrice(l)) continue
+    if (best == null || Math.abs(l.edge) > Math.abs(best.edge)) best = l
+  }
+  if (best == null || Math.abs(best.edge) < BIGGEST_DISAGREEMENT_MIN_GAP) return null
+  return best
+}
+
 // Minimum model-probability filter options for the table. Default is ≥10% so the
 // view immediately surfaces meaningful divergences instead of longshot noise,
 // while "All" restores the full list.
@@ -423,6 +446,15 @@ export function BettingEdge() {
       .sort((a, b) => b.edge - a.edge)
   }, [board, minProb])
 
+  // The page's headline finding: who the board and the market disagree about
+  // most, in this market. Deliberately keyed on `board` alone, not `minProb`
+  // (see biggestDisagreement's own comment) so it doesn't move as the reader
+  // adjusts the longshot filter below it.
+  const headlineDisagreement = useMemo(
+    () => (board ? biggestDisagreement(board.lines) : null),
+    [board],
+  )
+
   // How many players the market simply does not price, stated beneath the table
   // so their absence is visible rather than silent.
   const unpricedCount = board ? board.lines.length - board.lines.filter(isRealPrice).length : 0
@@ -493,6 +525,16 @@ export function BettingEdge() {
               are also a DataGolf consensus, the divergence below is DataGolf against its own feed,
               not an independent comparison.
             </p>
+            {/* The page's headline finding, stated as a fact about the numbers:
+                who the board and the market disagree about most. No adjective,
+                no betting language, no implication the board is right. */}
+            {headlineDisagreement && (
+              <p className="text-sm text-fg">
+                Biggest disagreement: {headlineDisagreement.player_name}. The board has him{' '}
+                {Math.round(Math.abs(headlineDisagreement.edge) * 100)} points{' '}
+                {headlineDisagreement.edge > 0 ? 'above' : 'below'} the market.
+              </p>
+            )}
           </section>
 
           {/* Honest reliability caveat — this page reports a divergence between

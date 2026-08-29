@@ -324,4 +324,188 @@ describe('BettingEdge', () => {
     expect(screen.getByText('Min. board probability')).toBeInTheDocument()
     expect(screen.queryByText(/model probability/i)).not.toBeInTheDocument()
   })
+
+  // --- headline "biggest disagreement" callout -------------------------------
+  // States the fact only: which player, how many points, which direction.
+  // No adjective, no betting language, no implication the board is right.
+
+  const BIGGEST_DISAGREEMENT_FIXTURE = {
+    ...BOARD_FIXTURE,
+    lines: [
+      {
+        player_id: 1,
+        player_name: 'Reitan, Kristoffer',
+        model_prob: 0.34,
+        implied_prob: 0.12,
+        american_odds: 250,
+        edge: 0.22, // +22 points, the largest absolute gap
+        odds_source: 'datagolf',
+      },
+      {
+        player_id: 2,
+        player_name: 'Burns, Sam',
+        model_prob: 0.05,
+        implied_prob: 0.14,
+        american_odds: 400,
+        edge: -0.09, // -9 points
+        odds_source: 'datagolf',
+      },
+      {
+        player_id: 3,
+        player_name: 'Small Gap',
+        model_prob: 0.2,
+        implied_prob: 0.22,
+        american_odds: 350,
+        edge: -0.02, // under the 5-point floor, must never be picked
+        odds_source: 'datagolf',
+      },
+      {
+        player_id: 4,
+        player_name: 'Synthetic Longshot',
+        model_prob: 0.02,
+        implied_prob: 0.5, // huge gap, but not a real price and must be ignored
+        american_odds: 100,
+        edge: -0.48,
+        odds_source: 'model',
+      },
+    ],
+  }
+
+  it('names the player with the largest positive gap, board above the market', async () => {
+    mockFetch({
+      board: {
+        ...BIGGEST_DISAGREEMENT_FIXTURE,
+        lines: BIGGEST_DISAGREEMENT_FIXTURE.lines.filter((l) => l.player_id !== 2),
+      },
+    })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Biggest disagreement: Reitan, Kristoffer\. The board has him 22 points above the market\./i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('names the player with the largest negative gap, board below the market', async () => {
+    mockFetch({
+      board: {
+        ...BIGGEST_DISAGREEMENT_FIXTURE,
+        lines: [BIGGEST_DISAGREEMENT_FIXTURE.lines[1], BIGGEST_DISAGREEMENT_FIXTURE.lines[2]],
+      },
+    })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Biggest disagreement: Burns, Sam\. The board has him 9 points below the market\./i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('picks the largest absolute gap regardless of direction, ignoring synthetic rows', async () => {
+    mockFetch({ board: BIGGEST_DISAGREEMENT_FIXTURE })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      // Reitan (+22) beats both Burns (-9) and the synthetic-only Longshot
+      // row (-48, but odds_source: 'model' so it must never be considered).
+      expect(
+        screen.getByText(/Biggest disagreement: Reitan, Kristoffer\. The board has him 22 points above the market\./i),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/Synthetic Longshot/i)).not.toBeInTheDocument()
+    })
+  })
+
+  it('ignores the min-probability filter when finding the biggest disagreement', async () => {
+    // Burns has a 5% board probability, below the default >=10% table filter,
+    // so he never appears in the chart/table at the default setting. The
+    // callout must still be able to name him.
+    mockFetch({
+      board: {
+        ...BIGGEST_DISAGREEMENT_FIXTURE,
+        lines: [BIGGEST_DISAGREEMENT_FIXTURE.lines[1], BIGGEST_DISAGREEMENT_FIXTURE.lines[2]],
+      },
+    })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Biggest disagreement: Burns, Sam\./i)).toBeInTheDocument()
+    })
+    // Confirm he's genuinely filtered out of the table at the default threshold.
+    expect(screen.queryByRole('cell', { name: 'Burns, Sam' })).not.toBeInTheDocument()
+  })
+
+  it('omits the callout when the largest gap is under the 5-point floor', async () => {
+    mockFetch({
+      board: {
+        ...BIGGEST_DISAGREEMENT_FIXTURE,
+        lines: [BIGGEST_DISAGREEMENT_FIXTURE.lines[2]], // Small Gap only, -2 points
+      },
+    })
+    renderEdge(makeClient())
+    await waitFor(() => expect(screen.getAllByText('Small Gap').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/Biggest disagreement/i)).not.toBeInTheDocument()
+  })
+
+  it('omits the callout when no line in the market has a real price', async () => {
+    mockFetch({ board: ALL_SYNTHETIC_FIXTURE })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Synthetic odds/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Biggest disagreement/i)).not.toBeInTheDocument()
+  })
+
+  it('breaks a tie on absolute gap by board order', async () => {
+    mockFetch({
+      board: {
+        ...BOARD_FIXTURE,
+        lines: [
+          { player_id: 1, player_name: 'First Tied', model_prob: 0.3, implied_prob: 0.2, american_odds: 200, edge: 0.1, odds_source: 'datagolf' },
+          { player_id: 2, player_name: 'Second Tied', model_prob: 0.1, implied_prob: 0.2, american_odds: 300, edge: -0.1, odds_source: 'datagolf' },
+        ],
+      },
+    })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Biggest disagreement: First Tied\./i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Second Tied/i, { selector: 'p' })).not.toBeInTheDocument()
+  })
+
+  it('updates the callout when the market picker changes to a different market', async () => {
+    mockFetch({
+      board: {
+        ...BOARD_FIXTURE,
+        outcome_key: 'win_prob',
+        lines: [
+          { player_id: 1, player_name: 'Win Market Leader', model_prob: 0.3, implied_prob: 0.1, american_odds: 200, edge: 0.2, odds_source: 'datagolf' },
+        ],
+      },
+    })
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/Biggest disagreement: Win Market Leader\./i)).toBeInTheDocument()
+    })
+
+    mockFetch({
+      board: {
+        ...BOARD_FIXTURE,
+        outcome_key: 'make_cut_prob',
+        lines: [
+          { player_id: 2, player_name: 'Cut Market Leader', model_prob: 0.6, implied_prob: 0.3, american_odds: -150, edge: 0.3, odds_source: 'datagolf' },
+        ],
+      },
+    })
+    screen.getByText('Make Cut').click()
+    await waitFor(() => {
+      expect(screen.getByText(/Biggest disagreement: Cut Market Leader\./i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Win Market Leader/i)).not.toBeInTheDocument()
+  })
+
+  it('does not use betting, edge, or opportunity language in the callout', async () => {
+    mockFetch({ board: BIGGEST_DISAGREEMENT_FIXTURE })
+    renderEdge(makeClient())
+    const callout = await screen.findByText(/Biggest disagreement/i)
+    expect(callout.textContent).not.toMatch(/—/)
+    expect(callout.textContent).not.toMatch(/edge|bet|opportunity|value|correct|right/i)
+  })
 })
