@@ -338,11 +338,25 @@ Two consequences worth stating outright:
   workflow exits non-zero on anything other than a capture, an idempotent
   no-op, or a genuine off week.
 - **It is not the closing line, and must not be reported as one.** The
-  guard makes Thursday morning unreachable, so the cron runs Wednesday
-  evening. What is stored is the last pre-event market price. Calling it
-  a closing line in any audience-facing surface would be an overclaim
-  about closing-line value; describe it as a pre-event market price. A
-  true close needs tee-time-aware gating, which is not built.
+  guard makes Thursday morning unreachable, so the cron runs Wednesday —
+  and since 2026-08-28, *early* Wednesday (13:00/17:00/20:00 UTC) rather
+  than Wednesday evening, because Actions cron delay pushed the old
+  21:00/23:30 pair onto Thursday every time and the archive stayed empty
+  for three consecutive weeks. What is stored is a Wednesday pre-event
+  market price, and an earlier one than before. Calling it a closing line
+  in any audience-facing surface would be an overclaim about closing-line
+  value; describe it as a pre-event market price. A true close needs
+  tee-time-aware gating, which is not built.
+- **The start guard cannot see a tee-off that precedes the UTC date
+  roll.** It compares `datetime.now(UTC).date()` against DataGolf's
+  untimezoned local `start_date`, so for an event ahead of UTC the field
+  can be under way while the UTC date is still Wednesday. Baycurrent
+  Classic (Japan, JST=UTC+9): a Thu 06:30 JST first tee is Wed 21:30 UTC.
+  The retired 23:30 slot sat roughly two hours *inside* that window with
+  the guard still permitting the write; 20:00 leaves about 1.5 h of
+  margin. `_derive_status` shares the same untimezoned comparison, so
+  neither half of the guard detects this. The early schedule mitigates it
+  and does not fix it — the fix is the same unbuilt tee-time-aware gating.
 
 Raw book prices are the record. `consensus_american` and `devigged_prob`
 are derived at capture for convenience and can be recomputed from the raw
@@ -394,13 +408,17 @@ absence, not drift.
 when *no* line in a priced market carried one, because DataGolf does not
 model every player and a per-row check would fire every week.
 
-**Refuse then retry, exactly as in 2.12a.** The 21:00 run passes
-`allow_degraded=false` and refuses a snapshot that did not parse cleanly,
-writing nothing, so the 23:30 run can still capture a clean one; the 23:30
-run captures regardless, labelled. `retryable` is reported only on the strict
-run, since the permissive one is the last chance. A4b must exclude any
-snapshot where `ClosingLineSnapshot.is_clean` is false rather than treating
-its prices as a market baseline.
+**Refuse then retry, exactly as in 2.12a.** The 13:00 and 17:00 runs pass
+`allow_degraded=false` and refuse a snapshot that did not parse cleanly,
+writing nothing, so a later run can still capture a clean one; the 20:00 run
+captures regardless, labelled. `retryable` is reported only on the strict
+runs, since the permissive one is the last chance. The permissive slot must
+always be the *last* one before the window closes — putting it on the slot
+with the least margin is what made the retired 23:30 retry useless, since
+the run whose job is "take what you can get" was also the one most likely to
+be refused outright by the start guard. A4b must exclude any snapshot where
+`ClosingLineSnapshot.is_clean` is false rather than treating its prices as a
+market baseline.
 
 Pinned by the shape-drift tests in `tests/test_closing_line_archive.py` and
 `tests/test_closing_line_endpoint.py`.
@@ -614,12 +632,23 @@ week beyond board backfill:
 |---|---|---|
 | `board-capture.yml` (21:00 strict, 23:30 permissive) | the served board, plus its pinned `dg_baseline` (2.12) and `dg_fetch_status` (2.12a) | the board yes, by backfill; the baseline **no** |
 | `matchup-capture.yml` (Wed 21:00, Thu 11:00 UTC) | DataGolf's matchup line vs book prices | no |
-| `closing-line-capture.yml` (21:00 strict, 23:30 permissive) | the outright market baseline (2.11) plus its parse status (2.11a) | no |
+| `closing-line-capture.yml` (13:00 and 17:00 strict, 20:00 permissive) | the outright market baseline (2.11) plus its parse status (2.11a) | no |
 
 The practical consequence: a change that has to be live "before the
-event" is really due before **Wednesday 21:00 UTC**, not before Thursday.
-A deploy that lands Thursday morning misses the week entirely, and the
-loss is silent in every surface except the workflow's own exit status.
+event" is really due before **Wednesday 13:00 UTC**, the earliest capture
+slot, not before Thursday. A deploy that lands Thursday morning misses the
+week entirely, and the loss is silent in every surface except the
+workflow's own exit status.
+
+The closing-line row runs earlier than the other two because it has no
+forward horizon to fall back on. Board capture scans `days_ahead` upcoming
+events, so a run delayed past midnight still finds next week's event;
+closing-line capture can only take whatever single event DataGolf's
+outrights feed currently serves, so a delayed run is a lost week. That
+asymmetry is why the schedules differ, and it is deliberate. It cost three
+consecutive weeks before it was found: the 21:00/23:30 pair never captured
+anything, because Actions cron delay (observed: 48 min and 7.6 h) fired
+both runs on Thursday, where the start guard correctly refused them.
 
 ---
 

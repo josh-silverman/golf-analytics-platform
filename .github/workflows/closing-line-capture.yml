@@ -6,32 +6,66 @@ name: Capture pre-event closing lines
 # graded against: the bar a bettor actually has to clear, as opposed to the
 # field base rate, which is the easy one.
 #
-# WEDNESDAY, NOT THURSDAY MORNING, and that is a deliberate departure from the
-# roadmap's original "shortly before Thursday tee-off". The capture endpoint
-# refuses to write once an event has started, and the calendar half of that
-# guard treats the whole start date as too late, because no hour on it is
+# EARLY WEDNESDAY, NOT THURSDAY MORNING AND NOT WEDNESDAY EVENING. The capture
+# endpoint refuses to write once an event has started, and the calendar half of
+# that guard treats the whole start date as too late, because no hour on it is
 # provably pre-tee-off across time zones (an Open Championship morning wave is
-# out before 07:00 UTC). A Thursday-morning run would therefore be refused by
-# design. What gets captured is the last pre-event market price, not the close
-# in the strict CLV sense; reporting must not call it a closing line without
-# that qualification. See app/services/closing_line_archive.py.
+# out before 07:00 UTC). A Thursday-morning run is therefore refused by design.
+# What gets captured is the last pre-event market price, not the close in the
+# strict CLV sense; reporting must not call it a closing line without that
+# qualification. See app/services/closing_line_archive.py.
 #
-# Two runs, both Wednesday, mirroring board capture rather than matchup
-# capture (whose Thursday retry the guard would refuse). Capture is
-# first-write-wins, so the second run is a no-op whenever the first succeeded.
+# WHY EARLY AND NOT 21:00/23:30, which is what this ran on until it was fixed:
+# that schedule never captured anything. Three runs, three `event_already_started`
+# refusals, archive empty. GitHub Actions cron delay is unbounded under load, and
+# both scheduled runs fired on THURSDAY — 00:18 UTC (48 min late) and 04:36 UTC
+# (7.6 h late). The 23:30 slot had only 30 minutes of margin before the UTC date
+# rolls over and the calendar backstop refuses the write. The guard was right
+# every time; the schedule was the bug. 13:00 survives an 11-hour delay.
 #
-# THE TWO RUNS ARE NOT IDENTICAL, mirroring board-capture.yml and for the
-# same reason (docs/ledger.md §2.11a). A feed that parses into the wrong
-# thing — a book quoting decimal odds where American was asked for, or
-# DataGolf's baseline object changing shape — used to be captured silently:
-# a decimal 4.2 rounded to the American price +4, an implied probability of
-# 0.96 for every player, pinned forever by first-write-wins.
+# The same move also widens a timezone gap that the old schedule had backwards.
+# The guard compares a UTC date against DataGolf's untimezoned LOCAL event date,
+# so for an event ahead of UTC the real tee-off can happen while the UTC date is
+# still Wednesday. Baycurrent Classic (Japan, JST=UTC+9): a Thu 06:30 JST first
+# tee is Wed 21:30 UTC, so the old 23:30 run would have captured ~2 hours INTO
+# round one with the guard still permitting it. `_derive_status` uses the same
+# untimezoned comparison, so neither half of the guard can see this. 20:00 UTC
+# leaves ~1.5 h of margin instead of −2 h. That is mitigation, not a fix: a real
+# one needs tee-time-aware gating (docs/ledger.md §2.11, deliberately unbuilt).
 #
-#   21:00  allow_degraded=false. A snapshot whose feed did not parse cleanly
+# Three runs, all Wednesday, mirroring board capture rather than matchup capture
+# (whose Thursday retry the guard would refuse). Capture is first-write-wins, so
+# each later run is a no-op whenever an earlier one succeeded. Three rather than
+# two because the failure modes are independent: Actions delay, a feed that has
+# not rolled over to this week's event yet (§2.12a), and a feed that parses dirty.
+#
+# THE RUNS ARE NOT IDENTICAL, mirroring board-capture.yml and for the same
+# reason (docs/ledger.md §2.11a). A feed that parses into the wrong thing — a
+# book quoting decimal odds where American was asked for, or DataGolf's baseline
+# object changing shape — used to be captured silently: a decimal 4.2 rounded to
+# the American price +4, an implied probability of 0.96 for every player, pinned
+# forever by first-write-wins. The LAST attempt before the window closes is the
+# permissive one; putting it on the slot with the least margin (as 23:30 did) is
+# backwards, since the run whose job is "take what you can get" is then the one
+# most likely to be refused outright.
+#
+#   13:00  allow_degraded=false. A snapshot whose feed did not parse cleanly
 #          is refused, nothing is written, and the job exits 0 with a warning
-#          (`retryable: true`) so 23:30 can still get a clean one.
-#   23:30  allow_degraded=true. Captures regardless, with the status recorded
-#          honestly, because a stamped degraded line beats no line at all.
+#          (`retryable: true`) so a later run can still get a clean one.
+#   17:00  allow_degraded=false. Same, second clean attempt.
+#   20:00  allow_degraded=true. Last call. Captures regardless, with the status
+#          recorded honestly, because a stamped degraded line beats no line.
+#
+# An early run may find LAST week's event, since the outrights feed serves only
+# whatever DataGolf currently features and may not have rolled over (§2.12a,
+# verified live 2026-08-21). That is safe, not a corruption risk: capture keys on
+# the feed's own event name and the archive is keyed (year, slug), so such a run
+# either no-ops as `already_captured` or captures a genuinely-missed prior event
+# under its own correct name. The cost is a spent slot, which is why there are three.
+#
+# Wednesday-start events (Farmers Insurance Open) get no capture and cannot:
+# the calendar backstop is true all day and the provider reports IN_PROGRESS.
+# Same loss board capture already documents (docs/ledger.md §3.4). ~2 of 147.
 #
 # Fails loudly when the response is unhealthy — meaning the week's market
 # baseline was NOT recorded. That is not recoverable later: a line read after
@@ -42,8 +76,9 @@ name: Capture pre-event closing lines
 
 on:
   schedule:
-    - cron: "0 21 * * 3" # Wed 21:00 UTC (~17:00 ET), lines are posted and settled
-    - cron: "30 23 * * 3" # Wed 23:30 UTC retry, still comfortably pre-event
+    - cron: "0 13 * * 3" # Wed 13:00 UTC (09:00 ET), strict — 11 h of delay margin
+    - cron: "0 17 * * 3" # Wed 17:00 UTC (13:00 ET), strict — 7 h of delay margin
+    - cron: "0 20 * * 3" # Wed 20:00 UTC (16:00 ET), permissive last call — 4 h
   workflow_dispatch:
     inputs:
       allow_degraded:
@@ -60,14 +95,14 @@ jobs:
     steps:
       - name: POST /analytics/closing-lines/capture
         env:
-          # Only the 23:30 retry may pin a snapshot whose feed did not parse
+          # Only the 20:00 last call may pin a snapshot whose feed did not parse
           # cleanly. Anything else refuses, leaving the write open.
           SCHEDULE: ${{ github.event.schedule }}
           DISPATCH_ALLOW: ${{ inputs.allow_degraded }}
         run: |
           set -euo pipefail
           API=https://pga-analytics-api.onrender.com/api/v1
-          if [ "$SCHEDULE" = "30 23 * * 3" ] || [ "$DISPATCH_ALLOW" = "true" ]; then
+          if [ "$SCHEDULE" = "0 20 * * 3" ] || [ "$DISPATCH_ALLOW" = "true" ]; then
             ALLOW=true
           else
             ALLOW=false
@@ -88,8 +123,8 @@ jobs:
 
           if [ "$(jq -r '.healthy' result.json)" != "true" ]; then
             if [ "$(jq -r '.retryable' result.json)" = "true" ]; then
-              # Nothing written and nothing lost yet: 23:30 captures regardless.
-              echo "::warning::Feed did not parse cleanly ($(jq -r '.status' result.json), $(jq -r '.prices_rejected' result.json) value(s) refused as not-an-American-price), so no line was pinned. Deferring to the 23:30 retry, which captures regardless and labels the result."
+              # Nothing written and nothing lost yet: 20:00 captures regardless.
+              echo "::warning::Feed did not parse cleanly ($(jq -r '.status' result.json), $(jq -r '.prices_rejected' result.json) value(s) refused as not-an-American-price), so no line was pinned. Deferring to the 20:00 last call, which captures regardless and labels the result."
               exit 0
             fi
             echo "::error::Closing-line capture unhealthy: $(jq -r '.outcome' result.json). This week's market baseline was not recorded and cannot be captured after the fact."
