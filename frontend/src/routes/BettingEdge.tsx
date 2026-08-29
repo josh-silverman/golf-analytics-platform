@@ -9,6 +9,7 @@ import {
   useBettingEdge,
 } from '../lib/api/betting'
 import { useCurrentTournament } from '../lib/api/tournaments'
+import type { Tournament } from '../lib/api/types'
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -25,6 +26,51 @@ function formatEdge(edge: number): string {
 
 function formatAmerican(odds: number): string {
   return odds >= 0 ? `+${odds}` : `${odds}`
+}
+
+// ---------------------------------------------------------------------------
+// Event window
+// ---------------------------------------------------------------------------
+
+// Today as YYYY-MM-DD in UTC, to compare against a tournament's `start_date`.
+// Deliberately string-formatted rather than parsed into a Date: `start_date`
+// is a bare calendar date, and `new Date('2026-04-10')` is UTC midnight, so
+// comparing Date objects reintroduces an off-by-one for readers west of UTC.
+// Two YYYY-MM-DD strings sort correctly on their own.
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+// Whether a board-vs-market comparison means anything for this event yet.
+//
+// The board is built once, before the event. DataGolf's outrights feed serves
+// CURRENT prices, which during play already reflect what has happened on the
+// course. Comparing the two mid-event measures how much of the tournament has
+// happened, not where the board and the market disagree: on a live TOUR
+// Championship board that produced a 57-point "disagreement" on a player the
+// market had already written off, and a 99% top-20 price no book offers before
+// play. So the whole comparison is suppressed rather than shown degraded.
+//
+// Mirrors the closing-line archive's start guard (the `EVENT_ALREADY_STARTED`
+// check in backend/app/services/closing_line_archive.py), which exists for
+// exactly this reason and is proven: the provider's own status OR the calendar
+// backstop is enough to refuse. Either signal alone suppresses here too.
+//
+// Known limitation, inherited from that guard and documented in
+// docs/ledger.md 2.11: `start_date` is an untimezoned local date compared
+// against a UTC date, so an event in a timezone ahead of UTC can be under way
+// while the UTC date still reads as the day before. This errs the safe
+// direction anyway, since it suppresses for the whole of the start date rather
+// than at some hour within it. Closing it properly needs tee-time-aware
+// gating, which is deliberately not built.
+//
+// Once the closing-line archive has data (A5), serving archived pre-event
+// odds is the better answer and this becomes the fallback for events that
+// missed a capture. Nothing here is built toward that yet.
+function comparisonIsMeaningful(t: Tournament | null | undefined): boolean {
+  if (!t) return false
+  if (t.status !== 'upcoming') return false
+  return todayISO() < t.start_date
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +470,12 @@ export function BettingEdge() {
   const [minProb, setMinProb] = useState<number>(0.1)
 
   const { data: currentTournament, isLoading: tournamentLoading } = useCurrentTournament()
-  const tournamentId = currentTournament?.id ?? null
+
+  // Whether the comparison is worth showing at all for this event. Computed
+  // before the board is requested, so a suppressed page does not fetch lines
+  // it has already decided not to display.
+  const comparable = comparisonIsMeaningful(currentTournament)
+  const tournamentId = comparable ? (currentTournament?.id ?? null) : null
 
   const {
     data: board,
@@ -477,12 +528,19 @@ export function BettingEdge() {
             {new Date(currentTournament.start_date).toLocaleDateString()}
           </p>
         )}
-        <p className="mt-2 text-sm text-fg-secondary">
-          Board probabilities against book-implied odds for the current field.
-        </p>
-        <p className="mt-1 text-xs text-fg-tertiary">
-          Reports the disagreement only. Nothing here is graded, so none of it is a recommendation.
-        </p>
+        {/* The standing framing describes a comparison the page is not making
+            while an event is under way, so it goes with the rest of it. */}
+        {comparable && (
+          <>
+            <p className="mt-2 text-sm text-fg-secondary">
+              Board probabilities against book-implied odds for the current field.
+            </p>
+            <p className="mt-1 text-xs text-fg-tertiary">
+              Reports the disagreement only. Nothing here is graded, so none of it is a
+              recommendation.
+            </p>
+          </>
+        )}
         {board && (
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-fg-tertiary">
             <span>
@@ -495,12 +553,32 @@ export function BettingEdge() {
         )}
       </header>
 
-      {(tournamentLoading || boardLoading) && (
+      {(tournamentLoading || (comparable && boardLoading)) && (
         <p className="text-fg-secondary">Loading lines…</p>
       )}
 
       {!tournamentLoading && currentTournament == null && (
         <p className="text-fg-secondary">No active tournament found.</p>
+      )}
+
+      {/* The event has started, so there is no comparison to show. The board is
+          fixed before play and the market is not, so any divergence measured
+          now is mostly the tournament itself. Said plainly, in the same
+          bordered style as the page's other empty states, so it reads as a
+          deliberate state rather than a failure. */}
+      {!tournamentLoading && currentTournament != null && !comparable && (
+        <section className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-6 text-center">
+          <p className="text-sm font-medium text-fg">Comparison unavailable once play begins</p>
+          <p className="mx-auto mt-2 max-w-xl text-sm text-fg-secondary">
+            Pinpoint&rsquo;s probabilities are set before the tournament starts and are not updated
+            during play. Sportsbook prices move with every shot. Comparing the two while the event
+            is under way would measure how much the tournament has already happened, not where the
+            board and the market see things differently.
+          </p>
+          <p className="mt-2 text-sm text-fg-secondary">
+            The comparison returns when the next tournament begins.
+          </p>
+        </section>
       )}
 
       {isError && (

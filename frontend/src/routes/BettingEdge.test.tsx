@@ -18,16 +18,35 @@ function renderEdge(client: QueryClient) {
   )
 }
 
+// Dates are computed relative to now, not hardcoded. The page suppresses the
+// whole comparison once an event has started (`comparisonIsMeaningful`), so a
+// fixed date would silently roll into the suppressed state as real time passes
+// and fail this suite for a reason that has nothing to do with the code. The
+// suite mocks no system time, so relative dates are what keeps it honest.
+function isoDaysFromNow(days: number): string {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 const TOURNAMENT_FIXTURE = {
   id: 7,
   name: 'The Masters',
   season: 2026,
-  start_date: '2026-04-10',
-  end_date: '2026-04-13',
+  start_date: isoDaysFromNow(5),
+  end_date: isoDaysFromNow(8),
   status: 'upcoming',
   course_id: 1,
   purse: 18_000_000,
   field_strength: null,
+}
+
+// The same event, under way: play has started, so there is nothing to compare.
+const UNDERWAY_TOURNAMENT_FIXTURE = {
+  ...TOURNAMENT_FIXTURE,
+  start_date: isoDaysFromNow(-1),
+  end_date: isoDaysFromNow(2),
+  status: 'in_progress',
 }
 
 // A mixed market: Rory carries a real DataGolf book price, Tiger does not and
@@ -69,28 +88,29 @@ const ALL_SYNTHETIC_FIXTURE = {
   lines: BOARD_FIXTURE.lines.map((l) => ({ ...l, odds_source: 'model' })),
 }
 
+// Returns the stubbed fetch so a test can assert on which endpoints were
+// actually called, not just on what rendered.
 function mockFetch({
-  tournament = TOURNAMENT_FIXTURE as typeof TOURNAMENT_FIXTURE | null,
+  tournament = TOURNAMENT_FIXTURE as Record<string, unknown> | null,
   board = BOARD_FIXTURE as typeof BOARD_FIXTURE | null,
 } = {}) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockImplementation((url: string) => {
-      if (url.includes('tournaments/current')) {
-        if (tournament == null) {
-          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
-        }
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: tournament }) })
+  const fetchMock = vi.fn().mockImplementation((url: string) => {
+    if (url.includes('tournaments/current')) {
+      if (tournament == null) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
       }
-      if (url.includes('betting/edge')) {
-        if (board == null) {
-          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
-        }
-        return Promise.resolve({ ok: true, status: 200, json: async () => board })
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: tournament }) })
+    }
+    if (url.includes('betting/edge')) {
+      if (board == null) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
       }
-      return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
-    }),
-  )
+      return Promise.resolve({ ok: true, status: 200, json: async () => board })
+    }
+    return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
 }
 
 describe('BettingEdge', () => {
@@ -507,5 +527,103 @@ describe('BettingEdge', () => {
     const callout = await screen.findByText(/Biggest disagreement/i)
     expect(callout.textContent).not.toMatch(/—/)
     expect(callout.textContent).not.toMatch(/edge|bet|opportunity|value|correct|right/i)
+  })
+
+  // --- suppression once the event is under way -----------------------------
+  // The board is built once, before the event; DataGolf's outrights feed serves
+  // current prices. Comparing them mid-event measures the tournament, not a
+  // disagreement, so the whole comparison is withheld rather than degraded.
+  describe('when the event is under way', () => {
+    it('suppresses the callout, the chart, and the table', async () => {
+      mockFetch({ tournament: UNDERWAY_TOURNAMENT_FIXTURE })
+      renderEdge(makeClient())
+      await screen.findByText(/Comparison unavailable once play begins/i)
+
+      expect(screen.queryByText(/Biggest disagreement/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Largest divergences/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/All priced players/i)).not.toBeInTheDocument()
+      expect(screen.queryByText('Rory Birdie')).not.toBeInTheDocument()
+    })
+
+    it('hides the market picker and the probability filter', async () => {
+      mockFetch({ tournament: UNDERWAY_TOURNAMENT_FIXTURE })
+      renderEdge(makeClient())
+      await screen.findByText(/Comparison unavailable once play begins/i)
+
+      expect(screen.queryByText('Market')).not.toBeInTheDocument()
+      expect(screen.queryByText('Make Cut')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Min\. board probability/i)).not.toBeInTheDocument()
+    })
+
+    it('keeps the heading and the event name visible', async () => {
+      mockFetch({ tournament: UNDERWAY_TOURNAMENT_FIXTURE })
+      renderEdge(makeClient())
+      await screen.findByText(/Comparison unavailable once play begins/i)
+
+      expect(screen.getByRole('heading', { name: /Market Comparison/i })).toBeInTheDocument()
+      expect(screen.getByText(/The Masters/)).toBeInTheDocument()
+    })
+
+    it('explains why, without jargon or an em-dash', async () => {
+      mockFetch({ tournament: UNDERWAY_TOURNAMENT_FIXTURE })
+      renderEdge(makeClient())
+      const message = await screen.findByText(/set before the tournament starts/i)
+
+      expect(message.textContent).toMatch(/not updated\s+during play/i)
+      expect(message.textContent).toMatch(/move with every shot/i)
+      expect(message.textContent).not.toMatch(/—/)
+      expect(message.textContent).not.toMatch(/stale|contaminat|in-play|devig/i)
+    })
+
+    it('tells the reader when the comparison comes back, without naming an event', async () => {
+      mockFetch({ tournament: UNDERWAY_TOURNAMENT_FIXTURE })
+      renderEdge(makeClient())
+      const line = await screen.findByText(/The comparison returns when the next tournament begins/i)
+      expect(line).toBeInTheDocument()
+    })
+
+    it('does not request the board it has decided not to show', async () => {
+      const fetchMock = mockFetch({ tournament: UNDERWAY_TOURNAMENT_FIXTURE })
+      renderEdge(makeClient())
+      await screen.findByText(/Comparison unavailable once play begins/i)
+
+      const calls = fetchMock.mock.calls.map((c) => String(c[0]))
+      expect(calls.some((u) => u.includes('tournaments/current'))).toBe(true)
+      expect(calls.some((u) => u.includes('betting/edge'))).toBe(false)
+    })
+
+    it('suppresses on the start date even while the provider still says upcoming', async () => {
+      // The calendar backstop alone, with the status signal deliberately stale.
+      // This is the half that covers a provider lagging its own status flip.
+      mockFetch({
+        tournament: { ...TOURNAMENT_FIXTURE, start_date: isoDaysFromNow(0), status: 'upcoming' },
+      })
+      renderEdge(makeClient())
+      await screen.findByText(/Comparison unavailable once play begins/i)
+      expect(screen.queryByText(/Biggest disagreement/i)).not.toBeInTheDocument()
+    })
+
+    it('suppresses for a completed event', async () => {
+      mockFetch({
+        tournament: {
+          ...TOURNAMENT_FIXTURE,
+          start_date: isoDaysFromNow(-6),
+          end_date: isoDaysFromNow(-3),
+          status: 'completed',
+        },
+      })
+      renderEdge(makeClient())
+      await screen.findByText(/Comparison unavailable once play begins/i)
+    })
+  })
+
+  it('shows the comparison normally for an upcoming event', async () => {
+    mockFetch()
+    renderEdge(makeClient())
+    await waitFor(() => {
+      expect(screen.getAllByText('Rory Birdie').length).toBeGreaterThan(0)
+    })
+    expect(screen.queryByText(/Comparison unavailable once play begins/i)).not.toBeInTheDocument()
+    expect(screen.getByText('Market')).toBeInTheDocument()
   })
 })
