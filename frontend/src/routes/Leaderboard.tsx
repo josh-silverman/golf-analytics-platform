@@ -29,6 +29,12 @@ function formatFinish(o: PlayerOutcome): string {
 // so it surfaced the field's strongest player instead of a sleeper.)
 const SLEEPER_MAX_WIN = 0.05
 
+// Below this field size the Top 20 market stops being selective, so a
+// "sleeper" is just a good player: at 30 players Top 20 covers two thirds of
+// the field. Suppresses the tile across all three FedExCup playoff events
+// (30, 50 and 69 players) and fires at every standard field (144 and up).
+const SLEEPER_MIN_FIELD = 100
+
 // The highest Top 20 probability among players below SLEEPER_MAX_WIN Win —
 // someone the board thinks will contend but isn't a realistic winner.
 // Returns null when nobody clears the ceiling (every player has some real
@@ -44,6 +50,35 @@ function sleeperPick(outcomes: PlayerOutcome[]): PlayerOutcome | null {
     }
   }
   return best
+}
+
+// Whether this event has a 36-hole cut, for a board that is still live.
+//
+// The grader's own `event_has_a_cut()` is retrospective: it reads settled
+// MISSED_CUT statuses, so it cannot answer this before an event is graded.
+// A completed event has the answer pinned on its archived board
+// (`event_had_a_cut`) and uses that instead; this covers the live path,
+// which carries no cut signal at all.
+//
+// The tell is that DataGolf reports make_cut_prob of exactly 1.0 for every
+// player when no cut is being played. Checked against all seven archived
+// boards: the three no-cut events have every player at exactly 1.0, and the
+// four events that did cut have NO player at 1.0 (the highest anywhere is
+// 0.924). The separation is total.
+//
+// This is an inference, not the determination the grader makes. It fails
+// safe in the one case it can miss: served cold-start, the in-house model
+// does not know the cut was waived and predicts a normal spread, so the
+// column stays visible, which is the behaviour before this existed. It
+// cannot fail the other way, since a real cut event would need all 144-plus
+// players at exactly 1.0.
+//
+// The length guard is load-bearing: an upcoming event legitimately returns
+// an empty field until the field is set, and `every` is true for an empty
+// array, which would read as no-cut.
+function boardHasACut(outcomes: PlayerOutcome[]): boolean {
+  if (outcomes.length === 0) return true
+  return !outcomes.every((o) => o.make_cut_prob === 1)
 }
 
 type SortKey = 'win_prob' | 'top_5_prob' | 'top_10_prob' | 'top_20_prob' | 'make_cut_prob'
@@ -327,6 +362,21 @@ export function Leaderboard() {
     ? (archived?.dg_fetch_status ?? null)
     : (predictions?.dg_fetch_status ?? null)
 
+  // Does this event play a cut? A completed event has the answer pinned on
+  // its archived board, which is the determination the grader itself uses;
+  // a live board has to infer it. Defaults to true whenever there is nothing
+  // to read, so the column is never hidden on a guess.
+  const eventHasACut = isCompleted
+    ? (archived?.event_had_a_cut ?? true)
+    : boardHasACut(boardOutcomes ?? [])
+
+  // The Make Cut column is dead weight at a no-cut event: every row reads
+  // 100.0% with a full-width bar, for a question nobody asked.
+  const visibleColumns = useMemo(
+    () => (eventHasACut ? COLUMNS : COLUMNS.filter((c) => c.key !== 'make_cut_prob')),
+    [eventHasACut],
+  )
+
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const s = searchParams.get('sort') as SortKey | null
     return s && SORT_KEYS.includes(s) ? s : 'top_20_prob'
@@ -340,18 +390,29 @@ export function Leaderboard() {
     return p ? Number(p) : null
   })
 
+  // The sort key is URL-persisted, so a reader can arrive at a no-cut event
+  // with `?sort=make_cut_prob` and land on a column that is not rendered:
+  // the table would be sorted by an invisible column with no header to
+  // un-sort it. Fall back to the default rather than sorting by something
+  // the reader cannot see.
+  const effectiveSortKey: SortKey = visibleColumns.some((c) => c.key === sortKey)
+    ? sortKey
+    : 'top_20_prob'
+
   // Mirror the current view into the URL (replace, so it doesn't spam history).
+  // Writes the effective key, so a URL naming a hidden column heals itself
+  // rather than re-applying on the next render.
   useEffect(() => {
     const next = new URLSearchParams()
     if (effectiveId != null) next.set('event', String(effectiveId))
-    next.set('sort', sortKey)
+    next.set('sort', effectiveSortKey)
     next.set('dir', sortDir)
     if (selectedPlayerId != null) next.set('player', String(selectedPlayerId))
     setSearchParams(next, { replace: true })
-  }, [effectiveId, sortKey, sortDir, selectedPlayerId, setSearchParams])
+  }, [effectiveId, effectiveSortKey, sortDir, selectedPlayerId, setSearchParams])
 
   function toggleSort(key: SortKey) {
-    if (key === sortKey) {
+    if (key === effectiveSortKey) {
       setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
     } else {
       setSortKey(key)
@@ -382,20 +443,27 @@ export function Leaderboard() {
       ? boardOutcomes.filter((o) => o.player_name.toLowerCase().includes(q))
       : boardOutcomes
     return [...filtered].sort((a, b) => {
-      const diff = a[sortKey] - b[sortKey]
+      const diff = a[effectiveSortKey] - b[effectiveSortKey]
       return sortDir === 'desc' ? -diff : diff
     })
-  }, [boardOutcomes, sortKey, sortDir, query])
+  }, [boardOutcomes, effectiveSortKey, sortDir, query])
 
   const drawerOutcome = boardOutcomes?.find((o) => o.player_id === selectedPlayerId) ?? null
 
   // At-a-glance field summary for a live event. Completed events show the
   // report card in this slot instead, so this deliberately reads the live
   // board only.
+  // The Sleeper pick is withheld below SLEEPER_MIN_FIELD. In a 30-player
+  // field Top 20 covers two thirds of the board, so the rule surfaces the
+  // fourth-best player and calls him a sleeper. Omitting the tile is the
+  // same move it already makes when nobody clears the win ceiling.
   const fieldSummary = useMemo(() => {
     const o = predictions?.outcomes ?? []
     if (o.length === 0) return null
-    return { sleeper: sleeperPick(o), size: o.length }
+    return {
+      sleeper: o.length >= SLEEPER_MIN_FIELD ? sleeperPick(o) : null,
+      size: o.length,
+    }
   }, [predictions])
 
   // Report card: how the PINNED pre-event board compared to the result.
@@ -565,7 +633,17 @@ export function Leaderboard() {
             </div>
           ) : (
             fieldSummary && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              // Column count follows the number of tiles actually rendered.
+              // Two of the three are conditional, so a fixed 3-column grid
+              // leaves a hole whenever one is withheld, which the small-field
+              // Sleeper rule makes common rather than rare.
+              <div
+                className={`grid grid-cols-1 gap-3 ${
+                  1 + (fieldSummary.sleeper ? 1 : 0) + (coverage ? 1 : 0) >= 3
+                    ? 'sm:grid-cols-3'
+                    : 'sm:grid-cols-2'
+                }`}
+              >
                 <SummaryTile label="Field" value={`${fieldSummary.size} players`} />
                 {fieldSummary.sleeper && (
                   <SummaryTile
@@ -619,13 +697,13 @@ export function Leaderboard() {
                     <th className="px-4 py-3 w-12 text-right">#</th>
                     <th className="px-4 py-3">Player</th>
                     {isCompleted && <th className="px-4 py-3 text-right">Finish</th>}
-                    {COLUMNS.map((col) => (
+                    {visibleColumns.map((col) => (
                       <th key={col.key} className="px-4 py-3 text-right">
                         <button
                           type="button"
                           onClick={() => toggleSort(col.key)}
                           className={`inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-fg ${
-                            sortKey === col.key ? 'text-fg' : ''
+                            effectiveSortKey === col.key ? 'text-fg' : ''
                           }`}
                           aria-label={`Sort by ${col.label}`}
                           title={
@@ -636,7 +714,7 @@ export function Leaderboard() {
                         >
                           {col.label}
                           <span className="w-2 text-[0.6rem]">
-                            {sortKey === col.key ? (sortDir === 'desc' ? '▼' : '▲') : ''}
+                            {effectiveSortKey === col.key ? (sortDir === 'desc' ? '▼' : '▲') : ''}
                           </span>
                         </button>
                       </th>
@@ -670,7 +748,7 @@ export function Leaderboard() {
                           {formatFinish(o)}
                         </td>
                       )}
-                      {COLUMNS.map((col) => {
+                      {visibleColumns.map((col) => {
                         const value = o[col.key]
                         const max = colMax[col.key]
                         const width = max > 0 ? Math.max((value / max) * 100, 1.5) : 0
@@ -707,6 +785,7 @@ export function Leaderboard() {
           outcome={drawerOutcome}
           tournamentName={selectedTournament?.name ?? null}
           board={isCompleted ? (archived?.available ? archived : null) : (predictions ?? null)}
+          eventHasACut={eventHasACut}
           onClose={() => setSelectedPlayerId(null)}
         />
       )}

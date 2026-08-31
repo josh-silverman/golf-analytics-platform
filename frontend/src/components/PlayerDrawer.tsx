@@ -38,6 +38,10 @@ interface PlayerDrawerProps {
   // leaderboard rather than fetched here; see `sourceLabel` in
   // `lib/boardSource.ts` for what it's used for.
   board: BoardSource | null
+  // False at an event with no 36-hole cut, where the Make Cut row is the same
+  // dead 100.0% the leaderboard hides its column for. Decided by the
+  // leaderboard so the drawer and the table never disagree.
+  eventHasACut?: boolean
   onClose: () => void
 }
 
@@ -46,10 +50,16 @@ export function PlayerDrawer({
   outcome,
   tournamentName,
   board,
+  eventHasACut = true,
   onClose,
 }: PlayerDrawerProps) {
   const { data: playerEnv, isLoading } = usePlayer(playerId)
   const { data: roundsEnv } = useRecentRounds(playerId)
+
+  // Make Cut is withheld at a no-cut event, matching the leaderboard's column.
+  const visibleMarkets = eventHasACut
+    ? OUTLOOK_MARKETS
+    : OUTLOOK_MARKETS.filter((m) => m.key !== 'make_cut_prob')
 
   const player = playerEnv?.data
   // API returns most-recent first; reverse so charts read oldest → newest.
@@ -117,8 +127,8 @@ export function PlayerDrawer({
               <p className="text-xs uppercase tracking-wider text-fg-tertiary">
                 {tournamentName ? `${tournamentName} outlook` : 'Current outlook'}
               </p>
-              <div className="grid grid-cols-5 gap-2">
-                {OUTLOOK_MARKETS.map((m) => (
+              <div className={`grid gap-2 ${visibleMarkets.length === 5 ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                {visibleMarkets.map((m) => (
                   <div key={m.key} className="rounded-lg border bg-surface p-2 text-center">
                     <p className="text-[10px] uppercase tracking-wider text-fg-tertiary">{m.label}</p>
                     <p className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${m.valueClass}`}>

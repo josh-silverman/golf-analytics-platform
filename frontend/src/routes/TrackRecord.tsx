@@ -47,15 +47,25 @@ function formatEventLabel(name: string, startDate: string): string {
 // the number. "The board's N highest-rated players" rather than "picks":
 // the board scores the whole field, this describes the N it rated highest
 // for Top 20, and it never claims a selection was made.
+// Names the field size on every event, not only small ones. The baseline is
+// a function of field size at any size, so a reader comparing two weeks needs
+// it to see why the bars differ: 3 out of 20 at a 156-player field and 13 out
+// of 20 at a 30-player field are the same achievement. Keeping the shape
+// constant also means an absent field size never has to be interpreted.
 function top20HeadlineSentence(
   hits: number,
   picks: number,
   byChance: number | null,
+  fieldSize: number | null,
 ): string {
   const first = `${hits} of the board's ${picks} highest-rated players finished inside the Top 20.`
   if (byChance == null) return first
   const rounded = Math.round(byChance)
-  const second = rounded > 0 ? `Random guessing would land about ${rounded}.` : 'Random guessing would rarely land any.'
+  const where = fieldSize != null ? `In a ${fieldSize}-player field, random` : 'Random'
+  const second =
+    rounded > 0
+      ? `${where} guessing would land about ${rounded}.`
+      : `${where} guessing would rarely land any.`
   return `${first} ${second}`
 }
 
@@ -156,7 +166,12 @@ export function TrackRecord() {
           {reportCard && archived && (
             <div className="space-y-4">
               <p className="text-sm text-fg">
-                {top20HeadlineSentence(reportCard.top20Hits, reportCard.top20Picks, reportCard.top20ByChance)}
+                {top20HeadlineSentence(
+                  reportCard.top20Hits,
+                  reportCard.top20Picks,
+                  reportCard.top20ByChance,
+                  reportCard.n,
+                )}
               </p>
               <div className={`grid grid-cols-1 gap-3 ${archived.event_had_a_cut ? 'sm:grid-cols-2' : ''}`}>
                 <SummaryTile

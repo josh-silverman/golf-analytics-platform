@@ -193,4 +193,25 @@ describe('PlayerDrawer', () => {
     await waitFor(() => expect(screen.getByText('Alice Ace')).toBeInTheDocument())
     expect(screen.getByText(/Source unknown/i)).toBeInTheDocument()
   })
+
+  // At a no-cut event the Make Cut row is the same dead 100.0% the leaderboard
+  // hides its column for. The flag comes from the leaderboard so the two
+  // surfaces cannot disagree about whether the event has a cut.
+  it('omits the Make Cut row at a no-cut event', async () => {
+    mockFetch()
+    renderDrawer(makeClient(), { eventHasACut: false })
+    await waitFor(() => expect(screen.getByText('Alice Ace')).toBeInTheDocument())
+
+    expect(screen.queryByText('Make Cut')).not.toBeInTheDocument()
+    // The other four markets are untouched.
+    expect(screen.getByText('Top 20')).toBeInTheDocument()
+    expect(screen.getByText('Win')).toBeInTheDocument()
+  })
+
+  it('shows the Make Cut row by default', async () => {
+    mockFetch()
+    renderDrawer(makeClient())
+    await waitFor(() => expect(screen.getByText('Alice Ace')).toBeInTheDocument())
+    expect(screen.getByText('Make Cut')).toBeInTheDocument()
+  })
 })

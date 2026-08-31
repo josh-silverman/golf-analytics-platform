@@ -366,7 +366,7 @@ describe('TrackRecord', () => {
       // byChance = top20Picks * (top20Picks / field) = 3 * 3/3 = 3.0 → "about 3".
       expect(
         screen.getByText(
-          /2 of the board's 3 highest-rated players finished inside the Top 20\. Random guessing would land about 3\./i,
+          /2 of the board's 3 highest-rated players finished inside the Top 20\. In a 3-player field, random guessing would land about 3\./i,
         ),
       ).toBeInTheDocument()
     })
@@ -403,12 +403,88 @@ describe('TrackRecord', () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          /2 of the board's 20 highest-rated players finished inside the Top 20\. Random guessing would land about 3\./i,
+          /2 of the board's 20 highest-rated players finished inside the Top 20\. In a 156-player field, random guessing would land about 3\./i,
         ),
       ).toBeInTheDocument()
     })
     const text = document.body.textContent ?? ''
     expect(text).not.toMatch(/weak|poor|disappointing|strong week|solid showing|struggled/i)
+  })
+
+  // --- field size in the headline (FedExCup playoffs) ----------------------
+  // Top 20 stays the metric at every field size, so the same "20 highest-rated"
+  // number means very different things at 30 players and at 156. Naming the
+  // field size is what lets a reader tell those apart.
+  //
+  // Builds a field of `size` where `hits` of the board's top 20 finished
+  // inside the top 20, so each case below states an exact expected sentence.
+  function fieldOf(size: number, hits: number) {
+    return Array.from({ length: size }, (_, i) => ({
+      player_id: i + 1,
+      player_name: `P${i + 1}`,
+      win_prob: 0.3 - i * 0.001,
+      top_5_prob: 0.5 - i * 0.002,
+      top_10_prob: 0.6 - i * 0.002,
+      top_20_prob: 0.9 - i * 0.004,
+      make_cut_prob: 0.95 - i * 0.004,
+      // The board's top 20 by top_20_prob is exactly players 0..19, so the
+      // first `hits` of them finish inside the top 20 and the rest do not.
+      final_position: i < hits ? i + 1 : 21 + i,
+      made_cut: true,
+    }))
+  }
+
+  it('names the field size at a 30-player playoff field', async () => {
+    // 20 picks, each with a 20/30 chance: 20 * (20/30) = 13.3 -> "about 13".
+    mockFetch({ board: boardFixture({ outcomes: fieldOf(30, 13) }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /13 of the board's 20 highest-rated players finished inside the Top 20\. In a 30-player field, random guessing would land about 13\./i,
+        ),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('names the field size at a 50-player playoff field', async () => {
+    // 20 * (20/50) = 8.
+    mockFetch({ board: boardFixture({ outcomes: fieldOf(50, 10) }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /10 of the board's 20 highest-rated players finished inside the Top 20\. In a 50-player field, random guessing would land about 8\./i,
+        ),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('names the field size at a standard field too, not only small ones', async () => {
+    // 20 * (20/156) = 2.6 -> "about 3". The clause is present at every size so
+    // the sentence keeps one shape week to week.
+    mockFetch({ board: boardFixture({ outcomes: fieldOf(156, 7) }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /7 of the board's 20 highest-rated players finished inside the Top 20\. In a 156-player field, random guessing would land about 3\./i,
+        ),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('reads without a verdict when a small field matches chance exactly', async () => {
+    // The honesty case: at 30 players, 13 hits IS the chance baseline, so the
+    // sentence reports a week that beat nothing. It must still just state the
+    // two numbers.
+    mockFetch({ board: boardFixture({ outcomes: fieldOf(30, 13) }) })
+    renderTrackRecord(makeClient())
+    const headline = await screen.findByText(/highest-rated players finished inside the Top 20/i)
+    expect(headline.textContent).not.toMatch(
+      /weak|poor|disappointing|strong|solid|struggled|only|just|merely|barely|no better/i,
+    )
+    expect(headline.textContent).not.toMatch(/—/)
   })
 
   it('renders no headline sentence when there is no report card to draw one from', async () => {

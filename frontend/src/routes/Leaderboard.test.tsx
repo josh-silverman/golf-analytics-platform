@@ -34,6 +34,42 @@ const TOURNAMENT_FIXTURE = {
   field_strength: null,
 }
 
+// Filler players, to lift a fixture field over SLEEPER_MIN_FIELD (100) so the
+// Sleeper tile is not suppressed by field size while a test is checking the
+// pick rule itself. Every filler sits above the 5% Win ceiling so it can never
+// become the pick, and carries a make_cut_prob below 1.0 so the field never
+// reads as a no-cut event.
+type FixtureOutcome = {
+  player_id: number
+  player_name: string
+  win_prob: number
+  top_5_prob: number
+  top_10_prob: number
+  top_20_prob: number
+  make_cut_prob: number
+}
+
+function padField(outcomes: FixtureOutcome[], to: number): FixtureOutcome[] {
+  const filler = Array.from({ length: Math.max(0, to - outcomes.length) }, (_, i) => ({
+    player_id: 1000 + i,
+    player_name: `Filler ${i}`,
+    win_prob: 0.06,
+    top_5_prob: 0.1,
+    top_10_prob: 0.12,
+    top_20_prob: 0.15,
+    make_cut_prob: 0.5,
+  }))
+  return [...outcomes, ...filler]
+}
+
+// A field seed containing exactly one valid sleeper (Longshot Lou), used to
+// check that field size alone decides whether the tile appears. Padded to the
+// size each test needs.
+const SLEEPER_SEED = [
+  { player_id: 1, player_name: 'Favorite Fred', win_prob: 0.2, top_5_prob: 0.5, top_10_prob: 0.7, top_20_prob: 0.9, make_cut_prob: 0.95 },
+  { player_id: 3, player_name: 'Longshot Lou', win_prob: 0.01, top_5_prob: 0.15, top_10_prob: 0.25, top_20_prob: 0.4, make_cut_prob: 0.85 },
+]
+
 const PREDICTIONS_FIXTURE = {
   tournament_id: 3,
   tournament_name: 'The Open',
@@ -418,9 +454,15 @@ describe('Leaderboard', () => {
       { player_id: 3, player_name: 'Longshot Lou', win_prob: 0.01, top_5_prob: 0.15, top_10_prob: 0.25, top_20_prob: 0.4, make_cut_prob: 0.85 },
     ],
   }
+  // Padded past the small-field floor, so this exercises the pick rule rather
+  // than the suppression rule.
+  const SLEEPER_FIELD_FIXTURE_FULL = {
+    ...SLEEPER_FIELD_FIXTURE,
+    outcomes: padField(SLEEPER_FIELD_FIXTURE.outcomes, 100),
+  }
 
   it('picks the highest Top 20 probability among players under the Win ceiling', async () => {
-    mockFetch({ predictions: SLEEPER_FIELD_FIXTURE })
+    mockFetch({ predictions: SLEEPER_FIELD_FIXTURE_FULL })
     renderLeaderboard(makeClient())
     await waitFor(() => expect(screen.getAllByText(/Favorite Fred/).length).toBeGreaterThan(0))
     // Favorite Fred has the largest gap (90 - 20 = 70 pts) but 20% win equity,
@@ -432,14 +474,19 @@ describe('Leaderboard', () => {
   })
 
   it('omits the sleeper tile when nobody clears the Win ceiling', async () => {
-    mockFetch()
+    // Padded past the small-field floor so the omission can only be the Win
+    // ceiling: every player here, filler included, has win_prob >= 5%.
+    mockFetch({
+      predictions: {
+        ...PREDICTIONS_FIXTURE,
+        outcomes: padField(PREDICTIONS_FIXTURE.outcomes, 100),
+      },
+    })
     renderLeaderboard(makeClient())
     await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
-    // Both fixture players have win_prob >= 5% (12% and 7%), so neither is a
-    // realistic sleeper and the tile should not render.
     expect(screen.queryByText(/Sleeper/i)).not.toBeInTheDocument()
     // Field tile still renders.
-    expect(screen.getByText('2 players')).toBeInTheDocument()
+    expect(screen.getByText('100 players')).toBeInTheDocument()
   })
 
   // --- report card reads the pinned board, not a recomputation (audit F4) ---
@@ -706,5 +753,107 @@ describe('Leaderboard', () => {
       expect(screen.getByText(/In-house model, all players/i)).toBeInTheDocument()
     })
     expect(screen.queryByText(/priced by DataGolf/i)).not.toBeInTheDocument()
+  })
+
+  // --- small and no-cut fields (FedExCup playoffs) --------------------------
+  // Playoff fields are 69, 50 and 30 players with no cut. Two things that are
+  // fine at a 156-player field stop being fine there: the Make Cut column
+  // reads 100.0% on every row, and "Top 20" stops being selective.
+  describe('at a no-cut event', () => {
+    // Every player at exactly 1.0 make_cut_prob is how DataGolf reports a
+    // field with no 36-hole cut. Verified against all three archived playoff
+    // boards; no event that did cut has any player at 1.0.
+    const NO_CUT_FIXTURE = {
+      ...PREDICTIONS_FIXTURE,
+      outcomes: padField(PREDICTIONS_FIXTURE.outcomes, 30).map((o) => ({
+        ...o,
+        make_cut_prob: 1,
+      })),
+    }
+
+    it('hides the Make Cut column', async () => {
+      mockFetch({ predictions: NO_CUT_FIXTURE })
+      renderLeaderboard(makeClient())
+      await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
+
+      expect(screen.queryByRole('button', { name: /Sort by Make Cut/i })).not.toBeInTheDocument()
+      // The other four markets still have their headers.
+      expect(screen.getByRole('button', { name: /Sort by Top 20/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Sort by Win/i })).toBeInTheDocument()
+    })
+
+    it('keeps the Make Cut column at an event that does have a cut', async () => {
+      mockFetch()
+      renderLeaderboard(makeClient())
+      await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
+      expect(screen.getByRole('button', { name: /Sort by Make Cut/i })).toBeInTheDocument()
+    })
+
+    it('shows the empty-field state rather than inferring a no-cut event', async () => {
+      // `every` is true for an empty array, so without the length guard an
+      // upcoming event whose field is not published yet would read as no-cut.
+      // No table renders at all in that state, so the guard's job is to keep
+      // `eventHasACut` true for everything downstream of it (the drawer).
+      mockFetch({ predictions: { ...PREDICTIONS_FIXTURE, outcomes: [] } })
+      renderLeaderboard(makeClient())
+      await waitFor(() =>
+        expect(screen.getByText(/No field published for this event yet/i)).toBeInTheDocument(),
+      )
+      expect(screen.queryByRole('button', { name: /Sort by Top 20/i })).not.toBeInTheDocument()
+    })
+
+    it('falls back to Top 20 when the URL sorts by the hidden column', async () => {
+      mockFetch({ predictions: NO_CUT_FIXTURE })
+      render(
+        <QueryClientProvider client={makeClient()}>
+          <MemoryRouter initialEntries={['/leaderboard?sort=make_cut_prob']}>
+            <Leaderboard />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      await waitFor(() => expect(screen.getAllByText(/Rory Birdie/).length).toBeGreaterThan(0))
+
+      // The Top 20 header carries the active-sort caret, so the table is not
+      // sorted by a column the reader cannot see or un-sort.
+      const top20 = screen.getByRole('button', { name: /Sort by Top 20/i })
+      expect(top20.textContent).toMatch(/[▼▲]/)
+    })
+
+    it('suppresses the Sleeper tile and drops the grid to two tiles', async () => {
+      mockFetch({ predictions: NO_CUT_FIXTURE })
+      renderLeaderboard(makeClient())
+      await waitFor(() => expect(screen.getByText('30 players')).toBeInTheDocument())
+
+      expect(screen.queryByText(/Sleeper/i)).not.toBeInTheDocument()
+      // Field tile survives, so the reader still sees why: it is a 30-man field.
+      expect(screen.getByText('Field')).toBeInTheDocument()
+    })
+  })
+
+  it('suppresses the Sleeper tile at a 50-player field', async () => {
+    mockFetch({
+      predictions: { ...PREDICTIONS_FIXTURE, outcomes: padField(SLEEPER_SEED, 50) },
+    })
+    renderLeaderboard(makeClient())
+    await waitFor(() => expect(screen.getByText('50 players')).toBeInTheDocument())
+    expect(screen.queryByText(/Sleeper/i)).not.toBeInTheDocument()
+  })
+
+  it('suppresses the Sleeper tile at a 69-player playoff field', async () => {
+    mockFetch({
+      predictions: { ...PREDICTIONS_FIXTURE, outcomes: padField(SLEEPER_SEED, 69) },
+    })
+    renderLeaderboard(makeClient())
+    await waitFor(() => expect(screen.getByText('69 players')).toBeInTheDocument())
+    expect(screen.queryByText(/Sleeper/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the Sleeper tile at a standard 144-player field', async () => {
+    mockFetch({
+      predictions: { ...PREDICTIONS_FIXTURE, outcomes: padField(SLEEPER_SEED, 144) },
+    })
+    renderLeaderboard(makeClient())
+    await waitFor(() => expect(screen.getByText('144 players')).toBeInTheDocument())
+    expect(screen.getByText(/Longshot Lou · 40% Top 20 · 1% Win/i)).toBeInTheDocument()
   })
 })
