@@ -560,6 +560,19 @@ describe('Leaderboard', () => {
     expect(screen.queryByText(/Predicted live/i)).not.toBeInTheDocument()
   })
 
+  // ProvenanceNote gained a `compact` prop for Track Record's use (see
+  // TrackRecord.test.tsx). The Leaderboard's call site passes nothing, so
+  // its report card must render the full, unabridged text exactly as before.
+  it('renders the full ProvenanceNote text on the report card, unaffected by the compact mode added for Track Record', async () => {
+    mockFetch({ tournament: COMPLETED_TOURNAMENT_FIXTURE })
+    renderLeaderboard(makeClient())
+
+    await waitFor(() => expect(screen.getByText(/Predicted live/i)).toBeInTheDocument())
+    expect(
+      screen.getByText(/scored against the board recorded before play began, exactly as the site served it/i),
+    ).toBeInTheDocument()
+  })
+
   it('states the absence instead of falling back to a recomputation', async () => {
     mockFetch({
       tournament: COMPLETED_TOURNAMENT_FIXTURE,

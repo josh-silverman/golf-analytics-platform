@@ -158,19 +158,46 @@ function downloadBoardCsv(filename: string, rows: PlayerOutcome[]): void {
 // reader on the card itself rather than only in the aggregate widget.
 // Exported for reuse by the Track Record page, which shows the same
 // captured-vs-reconstructed + out-of-sample caveat for one standalone week.
-export function ProvenanceNote({ board, n }: { board: ArchivedBoard; n: number }) {
+export function ProvenanceNote({
+  board,
+  n,
+  // Track Record already states the live-recorded trust claim once, in plain
+  // language, above this component. `compact` drops the label and the
+  // sentence that restate it (`captured`/`Reconstructed` and "scored
+  // against..."), keeping only the two facts the trust line doesn't carry
+  // (player count, pin date) and the reconstructed caveat when it applies.
+  // The Leaderboard's own call site passes nothing, so its report card is
+  // unchanged.
+  compact = false,
+}: {
+  board: ArchivedBoard
+  n: number
+  compact?: boolean
+}) {
   const captured = board.source === 'captured'
   const when = board.captured_at ? new Date(board.captured_at).toLocaleDateString() : null
   return (
     <div className="space-y-1 text-xs text-fg-tertiary">
       <p>
-        <span className="font-medium text-fg-secondary">
-          {captured ? 'Predicted live' : 'Reconstructed'} · {n} players on the board
-          {when ? ` · pinned ${when}` : ''}:
-        </span>{' '}
-        {captured
-          ? 'scored against the board recorded before play began, exactly as the site served it.'
-          : 'this board was rebuilt after the event from the data available beforehand. No result information goes in, but later code produced it, so it is not a record of what the site showed that week.'}
+        {compact ? (
+          <>
+            <span className="font-medium text-fg-secondary">
+              {n} players on the board{when ? ` · pinned ${when}` : ''}.
+            </span>
+            {!captured &&
+              ' Rebuilt after the event from the data available beforehand, not a record of what the site showed that week.'}
+          </>
+        ) : (
+          <>
+            <span className="font-medium text-fg-secondary">
+              {captured ? 'Predicted live' : 'Reconstructed'} · {n} players on the board
+              {when ? ` · pinned ${when}` : ''}:
+            </span>{' '}
+            {captured
+              ? 'scored against the board recorded before play began, exactly as the site served it.'
+              : 'this board was rebuilt after the event from the data available beforehand. No result information goes in, but later code produced it, so it is not a record of what the site showed that week.'}
+          </>
+        )}
       </p>
       {!board.out_of_sample && (
         <p className="italic">

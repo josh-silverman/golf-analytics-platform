@@ -173,7 +173,16 @@ export function TrackRecord() {
                   reportCard.n,
                 )}
               </p>
-              <div className={`grid grid-cols-1 gap-3 ${archived.event_had_a_cut ? 'sm:grid-cols-2' : ''}`}>
+              {/* A no-cut event leaves only the Winner tile. Bare `grid-cols-1`
+                  is one column at full container width, not a bounded card,
+                  so a single SummaryTile would stretch and read as broken.
+                  Capping the container's width instead of adding a column
+                  keeps it sized like a normal tile. */}
+              <div
+                className={`grid grid-cols-1 gap-3 ${
+                  archived.event_had_a_cut ? 'sm:grid-cols-2' : 'sm:max-w-xs'
+                }`}
+              >
                 <SummaryTile
                   label="Winner"
                   value={
@@ -195,7 +204,7 @@ export function TrackRecord() {
                   />
                 )}
               </div>
-              <ProvenanceNote board={archived} n={reportCard.n} />
+              <ProvenanceNote board={archived} n={reportCard.n} compact />
               <TopPicksTable board={archived} />
             </div>
           )}

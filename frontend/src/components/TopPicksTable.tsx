@@ -35,7 +35,7 @@ export function TopPicksTable({ board }: { board: ArchivedBoard }) {
     <section className="space-y-3">
       <div>
         <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-          Top {picks.length} Picks · Top 20 Probability
+          Board&rsquo;s Top {picks.length} by Top 20 Probability
         </p>
         <p className="mt-0.5 text-xs text-fg-tertiary">
           The board's highest Top-20 probabilities for the week, next to where each player
@@ -58,8 +58,21 @@ export function TopPicksTable({ board }: { board: ArchivedBoard }) {
               <tr key={o.player_id} className="bg-surface">
                 <td className="px-4 py-2 text-right font-mono text-fg-tertiary">{idx + 1}</td>
                 <td className="px-4 py-2 font-medium text-fg">{o.player_name}</td>
-                <td className="px-4 py-2 text-right font-mono tabular-nums text-fg">
-                  {formatPct(o.top_20_prob)}
+                <td className="px-4 py-2">
+                  {/* Light fill behind the number, driven only by top_20_prob.
+                      Never reads formatFinish/final_position/made_cut, so a
+                      34% pick that missed and a 34% pick that hit render an
+                      identical bar: the HARD RULE above still holds, this is
+                      just a second, quieter reading of the same number. */}
+                  <div className="relative flex items-center justify-end">
+                    <div
+                      className="pointer-events-none absolute inset-y-[3px] right-0 rounded-sm bg-accent/20"
+                      style={{ width: `${Math.max(o.top_20_prob * 100, 1.5).toFixed(2)}%` }}
+                    />
+                    <span className="relative font-mono tabular-nums text-fg">
+                      {formatPct(o.top_20_prob)}
+                    </span>
+                  </div>
                 </td>
                 <td className="px-4 py-2 text-right font-mono tabular-nums text-fg-secondary">
                   {formatFinish(o)}

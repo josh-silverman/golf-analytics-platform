@@ -526,6 +526,13 @@ describe('TrackRecord', () => {
     // The headline sentence is unaffected by the cut status: Top 20 finishes
     // come from final_position, which a no-cut event still has.
     expect(screen.getByText(/highest-rated players finished inside the Top 20/i)).toBeInTheDocument()
+
+    // The lone Winner tile must not stretch full width: bare `grid-cols-1`
+    // is one column at 100% width, not a bounded card. The container caps
+    // its own width instead of gaining a second column.
+    const winnerTile = screen.getByText('Winner').closest('div.grid') as HTMLElement
+    expect(winnerTile.className).toMatch(/sm:max-w-xs/)
+    expect(winnerTile.className).not.toMatch(/sm:grid-cols-2/)
   })
 
   it('shows a distinct message for an ungraded pinned board', async () => {
@@ -537,11 +544,26 @@ describe('TrackRecord', () => {
   })
 
   it('carries the reconstruction caveat on a backfilled board', async () => {
+    // Track Record renders ProvenanceNote in compact mode, which drops the
+    // "Reconstructed" label (the top trust line already carries that claim)
+    // but must still carry the one thing the compact form cannot drop: that
+    // this board was rebuilt after the fact, not recorded live.
     mockFetch({ board: boardFixture({ source: 'backfilled' }) })
     renderTrackRecord(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Reconstructed/i)).toBeInTheDocument()
+      expect(screen.getByText(/Rebuilt after the event/i)).toBeInTheDocument()
     })
+    expect(screen.queryByText(/Reconstructed/i)).not.toBeInTheDocument()
+  })
+
+  it('shows only player count and pin date on a captured board, no restated trust claim', async () => {
+    mockFetch({ board: boardFixture({ source: 'captured' }) })
+    renderTrackRecord(makeClient())
+    await waitFor(() => {
+      expect(screen.getByText(/players on the board/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Predicted live/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/scored against the board recorded before play began/i)).not.toBeInTheDocument()
   })
 
   // --- top picks visual ------------------------------------------------------
@@ -550,7 +572,7 @@ describe('TrackRecord', () => {
     mockFetch()
     renderTrackRecord(makeClient())
     await waitFor(() => {
-      expect(screen.getByText(/Top 3 Picks/i)).toBeInTheDocument()
+      expect(screen.getByText(/Top 3 by Top 20 Probability/i)).toBeInTheDocument()
     })
     // Tiger: 81.0% top-20 prob, finished 1st.
     const row = Array.from(document.querySelectorAll('tbody tr')).find((r) =>
@@ -564,7 +586,7 @@ describe('TrackRecord', () => {
   it('ranks picks by Top 20 probability, not win probability', async () => {
     mockFetch()
     renderTrackRecord(makeClient())
-    await waitFor(() => expect(screen.getByText(/Top 3 Picks/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Top 3 by Top 20 Probability/i)).toBeInTheDocument())
     const names = Array.from(document.querySelectorAll('tbody tr')).map(
       (r) => r.querySelectorAll('td')[1]?.textContent,
     )
@@ -581,7 +603,7 @@ describe('TrackRecord', () => {
   it('never marks an individual pick as right or wrong', async () => {
     mockFetch()
     renderTrackRecord(makeClient())
-    await waitFor(() => expect(screen.getByText(/Top 3 Picks/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Top 3 by Top 20 Probability/i)).toBeInTheDocument())
 
     // Jordan Fade missed the cut despite the lowest probability on the board,
     // and Tiger Chip won outright — the two most different outcomes possible.
@@ -596,6 +618,65 @@ describe('TrackRecord', () => {
       expect(row.querySelector('[class*="negative"]')).toBeNull()
       expect(row.textContent).not.toMatch(/[✓✔✗✘×]/)
     }
+  })
+
+  it('encodes the probability bar from top_20_prob alone, identical for a hit and a miss at the same probability', async () => {
+    // Two players at the SAME top_20_prob with OPPOSITE outcomes: one won,
+    // one missed the cut. The bar must not be able to tell them apart.
+    mockFetch({
+      board: boardFixture({
+        outcomes: [
+          {
+            player_id: 1,
+            player_name: 'Hit Player',
+            win_prob: 0.1,
+            top_5_prob: 0.2,
+            top_10_prob: 0.3,
+            top_20_prob: 0.34,
+            make_cut_prob: 0.8,
+            final_position: 1,
+            made_cut: true,
+          },
+          {
+            player_id: 2,
+            player_name: 'Miss Player',
+            win_prob: 0.1,
+            top_5_prob: 0.2,
+            top_10_prob: 0.3,
+            top_20_prob: 0.34,
+            make_cut_prob: 0.8,
+            final_position: null,
+            made_cut: false,
+          },
+        ],
+      }),
+    })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('Hit Player')).toBeInTheDocument())
+
+    const rows = Array.from(document.querySelectorAll('tbody tr'))
+    const bars = rows.map((row) => row.querySelector('td div div') as HTMLElement)
+    expect(bars).toHaveLength(2)
+    // Same probability, so the same inline width, regardless of who hit.
+    expect(bars[0].style.width).toBe(bars[1].style.width)
+    expect(bars[0].style.width).toBe('34%')
+  })
+
+  it('scales the bar width monotonically with top_20_prob', async () => {
+    mockFetch({
+      board: boardFixture({
+        outcomes: [
+          { player_id: 1, player_name: 'High', win_prob: 0.2, top_5_prob: 0.4, top_10_prob: 0.6, top_20_prob: 0.8, make_cut_prob: 0.9, final_position: 5, made_cut: true },
+          { player_id: 2, player_name: 'Low', win_prob: 0.05, top_5_prob: 0.1, top_10_prob: 0.15, top_20_prob: 0.2, make_cut_prob: 0.5, final_position: 40, made_cut: true },
+        ],
+      }),
+    })
+    renderTrackRecord(makeClient())
+    await waitFor(() => expect(screen.getByText('High')).toBeInTheDocument())
+
+    const rows = Array.from(document.querySelectorAll('tbody tr'))
+    const bars = rows.map((row) => row.querySelector('td div div') as HTMLElement)
+    expect(parseFloat(bars[0].style.width)).toBeGreaterThan(parseFloat(bars[1].style.width))
   })
 
   // --- overall record (aggregate forward track record) ----------------------
