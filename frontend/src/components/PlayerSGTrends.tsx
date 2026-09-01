@@ -8,6 +8,7 @@
  * newest) so the charts read left → right.
  */
 
+import { chart } from '../lib/chartTheme'
 import type { Round } from '../lib/api/types'
 
 // ---------------------------------------------------------------------------
@@ -80,7 +81,7 @@ function Sparkline({ values, label, color, avg }: SparklineProps) {
             y1={toY(0)}
             x2={W - PAD.right}
             y2={toY(0)}
-            stroke="#232B40"
+            stroke={chart.grid}
             strokeWidth={1}
             strokeDasharray="3 3"
           />
@@ -139,11 +140,11 @@ interface SgCategory {
 }
 
 const SG_CATEGORIES: SgCategory[] = [
-  { key: 'sg_total', label: 'Total', color: '#34A65F', description: 'Strokes gained vs field across all phases' },
-  { key: 'sg_ott', label: 'OTT', color: '#3b82f6', description: 'Off the tee' },
-  { key: 'sg_app', label: 'APP', color: '#8b5cf6', description: 'Approach' },
-  { key: 'sg_arg', label: 'ARG', color: '#f59e0b', description: 'Around the green' },
-  { key: 'sg_putt', label: 'PUTT', color: '#10b981', description: 'Putting' },
+  { key: 'sg_total', label: 'Total', color: chart.total, description: 'Strokes gained vs field across all phases' },
+  { key: 'sg_ott', label: 'OTT', color: chart.ott, description: 'Off the tee' },
+  { key: 'sg_app', label: 'APP', color: chart.app, description: 'Approach' },
+  { key: 'sg_arg', label: 'ARG', color: chart.arg, description: 'Around the green' },
+  { key: 'sg_putt', label: 'PUTT', color: chart.putt, description: 'Putting' },
 ]
 
 function mean(xs: number[]): number {

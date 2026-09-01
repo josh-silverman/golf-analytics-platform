@@ -67,7 +67,7 @@ export function PlayerDetail() {
       </Link>
 
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">{player.full_name}</h1>
+        <h1 className="text-title font-semibold">{player.full_name}</h1>
         <div className="mt-1 flex flex-wrap gap-4 text-sm text-fg-secondary">
           <span>
             Country: <span className="font-mono text-fg">{player.country}</span>

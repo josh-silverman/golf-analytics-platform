@@ -109,7 +109,7 @@ export function TrackRecord() {
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
       <header className="space-y-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Track Record</h1>
+        <h1 className="text-title font-semibold">Track Record</h1>
         <p className="max-w-2xl text-sm text-fg-secondary">
           Every prediction on this page was recorded before play began and has not been edited
           since.

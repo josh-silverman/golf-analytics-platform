@@ -5,6 +5,8 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router'
 
 import App from './App'
+import '@fontsource-variable/geist'
+import '@fontsource-variable/geist-mono'
 import './index.css'
 
 // Sentry is only initialised when VITE_SENTRY_DSN is set at build time.

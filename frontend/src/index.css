@@ -5,9 +5,63 @@
 @layer base {
   html {
     color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scrollbar-color: theme('colors.border-strong') transparent;
   }
+
   body {
     @apply bg-background text-fg antialiased;
     font-family: theme('fontFamily.sans');
+    font-feature-settings: 'cv01', 'ss01';
+  }
+
+  /* Headings read tighter than body and never leave a lone word on the last
+     line. */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  /* One focus ring for the whole app: the mouse never sees it, the keyboard
+     always does. Replaces the scattered `focus:border-accent` rules. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-fg/70 ring-offset-1 ring-offset-background;
+  }
+
+  ::selection {
+    background-color: theme('colors.accent / 30%');
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: theme('colors.border-strong');
+    border-radius: 9999px;
+    border: 2px solid theme('colors.background');
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* Each route's <main> rises in once on mount, so a navigation lands with a
+     small settle instead of a hard cut. Honors reduced-motion by collapsing
+     to nothing. */
+  main {
+    @apply animate-rise;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main,
+  .animate-rise,
+  .animate-fade-in,
+  .animate-shimmer {
+    animation: none !important;
   }
 }

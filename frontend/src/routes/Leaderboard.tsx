@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { PlayerDrawer } from '../components/PlayerDrawer'
+import { SkeletonTable } from '../components/Skeleton'
 import { type ArchivedBoard, useArchivedBoard } from '../lib/api/archivedBoard'
 import { type Status, useStatus } from '../lib/api/health'
 import { useForwardTrackRecord } from '../lib/api/forwardTrackRecord'
@@ -510,7 +511,7 @@ export function Leaderboard() {
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
       <header className="space-y-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h1 className="text-2xl font-semibold tracking-tight">Leaderboard</h1>
+          <h1 className="text-title font-semibold">Leaderboard</h1>
           {selectedTournament && (
             <span
               className={`rounded-full px-2 py-0.5 text-[0.65rem] font-medium uppercase tracking-wider ${
@@ -567,16 +568,18 @@ export function Leaderboard() {
       </header>
 
       {(currentLoading || boardLoading) && (
-        <div className="space-y-1">
-          <p className="text-fg-secondary">
-            {isCompleted ? 'Loading the pinned board…' : 'Loading predictions…'}
-          </p>
+        <div className="space-y-3">
           {!isCompleted && (
             <p className="text-xs text-fg-tertiary">
               The first load after a while warms live tour data from DataGolf and can take a
               minute. It&rsquo;s fast afterwards.
             </p>
           )}
+          <SkeletonTable
+            rows={12}
+            cols={5}
+            caption={isCompleted ? 'Loading the pinned board…' : 'Loading predictions…'}
+          />
         </div>
       )}
 

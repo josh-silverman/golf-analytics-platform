@@ -8,7 +8,9 @@ import {
   type OutcomeKey,
   useBettingEdge,
 } from '../lib/api/betting'
+import { SkeletonTable } from '../components/Skeleton'
 import { useCurrentTournament } from '../lib/api/tournaments'
+import { chart, semantic } from '../lib/chartTheme'
 import type { Tournament } from '../lib/api/types'
 
 // ---------------------------------------------------------------------------
@@ -172,7 +174,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
         y1={PADDING.top - 8}
         x2={zeroX}
         y2={PADDING.top + visible.length * CHART_ROW_HEIGHT}
-        stroke="#232B40"
+        stroke={chart.grid}
         strokeWidth={1}
       />
 
@@ -204,7 +206,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
         // colour and weight carry no ranking beyond that — brightening a subset
         // as "actionable" is the recommendation this page no longer makes.
         const above = line.edge >= 0.005
-        const fill = above ? '#34A65F' : '#EF4444'
+        const fill = above ? semantic.accent : semantic.negative
         const opacity = above ? 0.85 : 0.45
 
         return (
@@ -255,7 +257,7 @@ function EdgeBarChart({ lines, maxEdge }: { lines: BettingLine[]; maxEdge: numbe
             y1={PADDING.top + visible.length * CHART_ROW_HEIGHT}
             x2={x}
             y2={PADDING.top + visible.length * CHART_ROW_HEIGHT + 4}
-            stroke="#232B40"
+            stroke={chart.grid}
             strokeWidth={1}
           />
         )
@@ -521,7 +523,7 @@ export function BettingEdge() {
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Market Comparison</h1>
+        <h1 className="text-title font-semibold">Market Comparison</h1>
         {currentTournament && (
           <p className="mt-1 text-sm text-fg-secondary">
             {currentTournament.name} ·{' '}
@@ -554,7 +556,7 @@ export function BettingEdge() {
       </header>
 
       {(tournamentLoading || (comparable && boardLoading)) && (
-        <p className="text-fg-secondary">Loading lines…</p>
+        <SkeletonTable rows={8} cols={5} caption="Loading lines…" />
       )}
 
       {!tournamentLoading && currentTournament == null && (
